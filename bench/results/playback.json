@@ -1,0 +1,307 @@
+{
+  "ids": [
+    "aqz-KE-bpKQ",
+    "5C_HPTJg5ek",
+    "kJQP7kiw5Fk"
+  ],
+  "window_s": 15.0,
+  "runs": 2,
+  "notes": {
+    "core": "decodes and renders every frame to RAM; no window (the apps add presentation)",
+    "mpvdirect": "mpv --hwdec=vaapi --vo=gpu-next fed by NativeTube's resolver; window on NT-BENCH",
+    "mpv": "mpv with --hwdec=vaapi --vo=gpu-next, window on NT-BENCH; yt-dlp runs per video",
+    "web": "Helium ships uBlock Origin, so no pre-roll ads: a best case for YouTube"
+  },
+  "results": {
+    "core": [
+      {
+        "ok": true,
+        "ms": 438.1,
+        "size": "1280x720",
+        "error": null,
+        "id": "aqz-KE-bpKQ",
+        "cold": true,
+        "cpu_percent": 62.75482830897325,
+        "pss_mb": 128.1943359375,
+        "processes": 1,
+        "played_s": 15.02,
+        "run": 1
+      },
+      {
+        "ok": true,
+        "ms": 230.2,
+        "size": "1280x720",
+        "error": null,
+        "id": "5C_HPTJg5ek",
+        "cold": false,
+        "cpu_percent": 31.9026506867949,
+        "pss_mb": 141.3564453125,
+        "processes": 1,
+        "played_s": 15.01,
+        "run": 1
+      },
+      {
+        "ok": true,
+        "ms": 190.8,
+        "size": "1280x720",
+        "error": null,
+        "id": "kJQP7kiw5Fk",
+        "cold": false,
+        "cpu_percent": 25.43538053816277,
+        "pss_mb": 144.25,
+        "processes": 1,
+        "played_s": 15.02,
+        "run": 1
+      },
+      {
+        "ok": true,
+        "ms": 464.1,
+        "size": "1280x720",
+        "error": null,
+        "id": "aqz-KE-bpKQ",
+        "cold": true,
+        "cpu_percent": 59.555488228080264,
+        "pss_mb": 129.939453125,
+        "processes": 1,
+        "played_s": 15.01,
+        "run": 2
+      },
+      {
+        "ok": true,
+        "ms": 239.4,
+        "size": "1280x720",
+        "error": null,
+        "id": "5C_HPTJg5ek",
+        "cold": false,
+        "cpu_percent": 31.699052602110957,
+        "pss_mb": 141.39453125,
+        "processes": 1,
+        "played_s": 15.01,
+        "run": 2
+      },
+      {
+        "ok": true,
+        "ms": 206.4,
+        "size": "1280x720",
+        "error": null,
+        "id": "kJQP7kiw5Fk",
+        "cold": false,
+        "cpu_percent": 24.26815972621538,
+        "pss_mb": 147.2646484375,
+        "processes": 1,
+        "played_s": 15.059999999999999,
+        "run": 2
+      }
+    ],
+    "mpvdirect": [
+      {
+        "ok": true,
+        "ms": 1505.848695000168,
+        "id": "aqz-KE-bpKQ",
+        "cold": true,
+        "cpu_percent": 31.028317571288678,
+        "pss_mb": 367.421875,
+        "processes": 1,
+        "played_s": 14.999999999999998,
+        "run": 1
+      },
+      {
+        "ok": true,
+        "ms": 551.9371609989321,
+        "id": "5C_HPTJg5ek",
+        "cold": false,
+        "cpu_percent": 13.786587522557634,
+        "pss_mb": 392.62109375,
+        "processes": 1,
+        "played_s": 15.015,
+        "run": 1
+      },
+      {
+        "ok": true,
+        "ms": 510.4176439999719,
+        "id": "kJQP7kiw5Fk",
+        "cold": false,
+        "cpu_percent": 16.7786754332852,
+        "pss_mb": 404.5234375,
+        "processes": 1,
+        "played_s": 15.015,
+        "run": 1
+      },
+      {
+        "ok": true,
+        "ms": 1575.792351999553,
+        "id": "aqz-KE-bpKQ",
+        "cold": true,
+        "cpu_percent": 31.297314149581045,
+        "pss_mb": 377.7060546875,
+        "processes": 1,
+        "played_s": 15.016667000000002,
+        "run": 2
+      },
+      {
+        "ok": true,
+        "ms": 562.9019690022687,
+        "id": "5C_HPTJg5ek",
+        "cold": false,
+        "cpu_percent": 13.782566992417841,
+        "pss_mb": 393.7626953125,
+        "processes": 1,
+        "played_s": 15.015,
+        "run": 2
+      },
+      {
+        "ok": true,
+        "ms": 613.0975049964036,
+        "id": "kJQP7kiw5Fk",
+        "cold": false,
+        "cpu_percent": 15.98170324582108,
+        "pss_mb": 409.2509765625,
+        "processes": 1,
+        "played_s": 15.015,
+        "run": 2
+      }
+    ],
+    "mpv": [
+      {
+        "ok": true,
+        "ms": 5616.063556000881,
+        "size": "1280x720",
+        "id": "aqz-KE-bpKQ",
+        "cold": true,
+        "cpu_percent": 29.298006584141767,
+        "pss_mb": 365.580078125,
+        "processes": 1,
+        "played_s": 15.0,
+        "run": 1
+      },
+      {
+        "ok": false,
+        "id": "5C_HPTJg5ek",
+        "cold": false,
+        "run": 1
+      },
+      {
+        "ok": false,
+        "id": "kJQP7kiw5Fk",
+        "cold": false,
+        "run": 1
+      },
+      {
+        "ok": true,
+        "ms": 5785.1559780028765,
+        "size": "1280x720",
+        "id": "aqz-KE-bpKQ",
+        "cold": true,
+        "cpu_percent": 31.442779295870483,
+        "pss_mb": 364.7431640625,
+        "processes": 1,
+        "played_s": 15.0,
+        "run": 2
+      },
+      {
+        "ok": false,
+        "id": "5C_HPTJg5ek",
+        "cold": false,
+        "run": 2
+      },
+      {
+        "ok": false,
+        "id": "kJQP7kiw5Fk",
+        "cold": false,
+        "run": 2
+      }
+    ],
+    "web": [
+      {
+        "ok": true,
+        "ms": 2024.9000000059605,
+        "size": "854x480",
+        "ad_seen": false,
+        "first_any_frame_ms": 2024.9000000059605,
+        "full_reload": false,
+        "id": "aqz-KE-bpKQ",
+        "cold": true,
+        "cpu_percent": 72.56483675539536,
+        "pss_mb": 966.3955078125,
+        "processes": 13,
+        "played_s": 15.023711,
+        "run": 1
+      },
+      {
+        "ok": true,
+        "ms": 2323.89999999851,
+        "size": "1280x720",
+        "ad_seen": false,
+        "first_any_frame_ms": 2323.89999999851,
+        "full_reload": false,
+        "id": "5C_HPTJg5ek",
+        "cold": false,
+        "cpu_percent": 53.87997770479473,
+        "pss_mb": 983.9912109375,
+        "processes": 13,
+        "played_s": 15.019593,
+        "run": 1
+      },
+      {
+        "ok": true,
+        "ms": 1670,
+        "size": "1280x720",
+        "ad_seen": false,
+        "first_any_frame_ms": 1670,
+        "full_reload": false,
+        "id": "kJQP7kiw5Fk",
+        "cold": false,
+        "cpu_percent": 86.1760497926901,
+        "pss_mb": 1062.796875,
+        "processes": 13,
+        "played_s": 15.021092000000001,
+        "run": 1
+      },
+      {
+        "ok": true,
+        "ms": 6316,
+        "size": "854x480",
+        "ad_seen": false,
+        "first_any_frame_ms": 6316,
+        "full_reload": false,
+        "id": "aqz-KE-bpKQ",
+        "cold": true,
+        "cpu_percent": 55.0530750336922,
+        "pss_mb": 989.6240234375,
+        "processes": 14,
+        "played_s": 15.018917,
+        "run": 2
+      },
+      {
+        "ok": true,
+        "ms": 5445.60000000149,
+        "size": "1280x720",
+        "ad_seen": false,
+        "first_any_frame_ms": 5445.60000000149,
+        "full_reload": false,
+        "id": "5C_HPTJg5ek",
+        "cold": false,
+        "cpu_percent": 47.20166777996429,
+        "pss_mb": 984.1044921875,
+        "processes": 14,
+        "played_s": 15.026594000000001,
+        "run": 2
+      },
+      {
+        "ok": true,
+        "ms": 5549.20000000298,
+        "size": "1280x720",
+        "ad_seen": false,
+        "first_any_frame_ms": 5549.20000000298,
+        "full_reload": false,
+        "id": "kJQP7kiw5Fk",
+        "cold": false,
+        "cpu_percent": 80.32049262920516,
+        "pss_mb": 1209.8330078125,
+        "processes": 14,
+        "played_s": 15.023495,
+        "run": 2
+      }
+    ]
+  }
+}

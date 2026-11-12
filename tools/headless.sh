@@ -14,14 +14,14 @@
 # Apps must set their app_id to "nt-<fw>".
 set -euo pipefail
 
-declare -A POS=([iced]=10000 [gpui]=12000 [rune]=14000)
+declare -A POS=([iced]=10000 [gpui]=12000 [rune]=14000 [bench]=16000)
 STATE="${XDG_RUNTIME_DIR:-/tmp}/native-tube-headless"
 mkdir -p "$STATE"
 
 out_name() { echo "NT-${1^^}"; }
 
 need_fw() {
-  [[ -n "${POS[$1]:-}" ]] || { echo "unknown framework '$1' (iced, gpui, rune)" >&2; exit 2; }
+  [[ -n "${POS[$1]:-}" ]] || { echo "unknown target '$1' (iced, gpui, rune, bench)" >&2; exit 2; }
 }
 
 setup_one() {

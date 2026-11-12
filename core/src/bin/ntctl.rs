@@ -77,6 +77,9 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             let s = runtime().block_on(resolve::resolve(&arg(1)))?;
             println!("video: {}  audio: {}  live: {}", s.video_desc, s.audio_desc, s.is_live);
             println!("visitor id {:.0} ms, /player {:.0} ms", s.visitor_ms, s.player_ms);
+            if arg(2) == "--json" {
+                println!("{}", serde_json::json!({ "video": s.video, "audio": s.audio, "user_agent": resolve::USER_AGENT }));
+            }
         }
         "serve" => {
             // A benchmark driver: reads "open <id>" lines on stdin, prints JSON events on stdout.

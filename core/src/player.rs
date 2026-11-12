@@ -223,6 +223,9 @@ struct Shared {
     /// Signalled by mpv's render update callback, a resize, or shutdown.
     render_signal: (Mutex<bool>, Condvar),
     shutdown: AtomicBool,
+    /// False between a `load`/`stop` and the new file being loaded, so a picture of the
+    /// previous video that mpv renders late is never published as the new one's.
+    accept_frames: AtomicBool,
     /// Bumped by every `load` and `stop`; a resolve that finishes for an older ticket is dropped.
     load_ticket: AtomicU64,
     /// Held while issuing a command from a worker, so `Drop` can't free mpv underneath it.
@@ -388,6 +391,7 @@ impl Player {
             waker: Mutex::new(Some(Arc::new(waker))),
             render_signal: (Mutex::new(false), Condvar::new()),
             shutdown: AtomicBool::new(false),
+            accept_frames: AtomicBool::new(false),
             load_ticket: AtomicU64::new(0),
             worker_cmd: Mutex::new(()),
             target: Mutex::new((1280, 720)),
@@ -468,6 +472,7 @@ impl Player {
     /// take the network out of the measurement).
     pub fn load(&self, video_id: &str) -> Result<()> {
         let ticket = self.shared.load_ticket.fetch_add(1, Ordering::AcqRel) + 1;
+        self.shared.accept_frames.store(false, Ordering::Release);
         {
             let mut s = self.shared.lock_state();
             let (volume, muted) = (s.volume, s.muted);
@@ -513,6 +518,7 @@ impl Player {
     /// Stop and unload; frees the decoder and the stream.
     pub fn stop(&self) {
         self.shared.load_ticket.fetch_add(1, Ordering::AcqRel);
+        self.shared.accept_frames.store(false, Ordering::Release);
         let _ = self.command(&["stop"]);
         *self.shared.frame.lock().unwrap_or_else(|e| e.into_inner()) = None;
         *self.shared.lock_state() = PlaybackState { volume: self.state().volume, ..Default::default() };
@@ -627,10 +633,15 @@ fn event_loop(mpv: Arc<Handle>, shared: Arc<Shared>) {
         match ev.event_id {
             ffi::EVENT_SHUTDOWN => return,
             ffi::EVENT_START_FILE => {
+                shared.accept_frames.store(false, Ordering::Release);
+                *shared.frame.lock().unwrap_or_else(|e| e.into_inner()) = None;
                 shared.lock_state().status = Status::Loading;
                 wake = true;
             }
             ffi::EVENT_FILE_LOADED | ffi::EVENT_PLAYBACK_RESTART => {
+                if ev.event_id == ffi::EVENT_FILE_LOADED {
+                    shared.accept_frames.store(true, Ordering::Release);
+                }
                 let mut s = shared.lock_state();
                 if matches!(s.status, Status::Loading | Status::Ended) {
                     s.status = Status::Ready;
@@ -771,7 +782,7 @@ fn render_loop(ctx: RenderCtx, shared: Arc<Shared>, format: PixelFormat) {
         ];
         // SAFETY: the buffer holds at least stride * h bytes and is 64-byte aligned; params end with INVALID.
         let rc = unsafe { ffi::mpv_render_context_render(ctx.0, params.as_mut_ptr()) };
-        if rc < 0 {
+        if rc < 0 || !shared.accept_frames.load(Ordering::Acquire) {
             pool.push(frame);
             continue;
         }
