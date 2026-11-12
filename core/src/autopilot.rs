@@ -70,7 +70,13 @@ pub enum Step {
         #[serde(rename = "do")]
         command: Command,
     },
-    Do(Command),
+    /// `{ "do": { "cmd": … } }`
+    Do {
+        #[serde(rename = "do")]
+        command: Command,
+    },
+    /// A bare `{ "cmd": … }`.
+    Bare(Command),
 }
 
 type Waker = Box<dyn Fn() + Send + Sync>;
@@ -160,7 +166,7 @@ fn run(steps: Vec<Step>, tx: mpsc::UnboundedSender<Command>) {
                     std::thread::sleep(Duration::from_secs_f64(every));
                 }
             }
-            Step::Do(command) => {
+            Step::Do { command } | Step::Bare(command) => {
                 after = metrics::mark_seq();
                 send(&tx, command);
             }
@@ -194,5 +200,20 @@ fn take_snapshot(name: &str) {
     let status = std::process::Command::new("grim").arg("-o").arg(&output).arg(&file).status();
     if !matches!(status, Ok(s) if s.success()) {
         eprintln!("NT_AUTOPILOT: snapshot {name} failed");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The benchmark scenario must parse, step for step.
+    #[test]
+    fn scenario_parses() {
+        let steps: Vec<Step> = serde_json::from_str(include_str!("../../bench/scenario.json")).unwrap();
+        assert!(steps.iter().any(|s| matches!(s, Step::Do { command: Command::Search { .. } })));
+        assert!(steps.iter().any(|s| matches!(s, Step::Repeat { .. })));
+        let bare: Vec<Step> = serde_json::from_str(r#"[{"cmd":"back"}]"#).unwrap();
+        assert!(matches!(bare[0], Step::Bare(Command::Back)));
     }
 }
