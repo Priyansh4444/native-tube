@@ -317,7 +317,10 @@ impl Player {
         let volume = crate::library::library().volume();
         let options = [
             ("vo", "libmpv".to_string()),
-            ("hwdec", "auto-copy".to_string()),
+            // VA-API first: on hybrid laptops it decodes on the GPU that drives the display; "auto"
+            // picked NVDEC here, which wakes the discrete GPU and took ~950 ms to start instead
+            // of ~210 ms. Falls back to whatever else works.
+            ("hwdec", "vaapi-copy,auto-copy".to_string()),
             // No scripting of any kind: no built-in Lua scripts (ytdl_hook, osc, ...), no yt-dlp.
             ("ytdl", "no".to_string()),
             ("load-scripts", "no".to_string()),

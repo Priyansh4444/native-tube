@@ -78,6 +78,46 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             println!("video: {}  audio: {}  live: {}", s.video_desc, s.audio_desc, s.is_live);
             println!("visitor id {:.0} ms, /player {:.0} ms", s.visitor_ms, s.player_ms);
         }
+        "serve" => {
+            // A benchmark driver: reads "open <id>" lines on stdin, prints JSON events on stdout.
+            // The first `open` creates the player (as an app does on its first video).
+            use std::io::BufRead;
+            let epoch = || std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64() * 1000.0).unwrap_or(0.0);
+            let mut player: Option<Player> = None;
+            println!("{{\"event\":\"ready\",\"epoch_ms\":{:.1}}}", epoch());
+            for line in std::io::stdin().lock().lines() {
+                let line = line?;
+                let mut parts = line.split_whitespace();
+                match (parts.next(), parts.next()) {
+                    (Some("open"), Some(id)) => {
+                        let t0 = Instant::now();
+                        let cold = player.is_none();
+                        let p = match &player { Some(p) => p, None => player.insert(Player::new(PixelFormat::Rgba, || {})?) };
+                        p.load(id)?;
+                        let deadline = Instant::now() + Duration::from_secs(45);
+                        let mut failed = None;
+                        while p.frame().is_none() && Instant::now() < deadline {
+                            if let Status::Failed(e) = p.state().status { failed = Some(e); break; }
+                            std::thread::sleep(Duration::from_millis(2));
+                        }
+                        let ms = t0.elapsed().as_secs_f64() * 1000.0;
+                        let f = p.frame();
+                        println!("{{\"event\":\"first_frame\",\"id\":\"{id}\",\"cold\":{cold},\"ms\":{ms:.1},\"ok\":{},\"error\":{:?},\"size\":\"{}\",\"epoch_ms\":{:.1}}}",
+                            f.is_some() && failed.is_none(), failed.unwrap_or_default(), f.map(|f| format!("{}x{}", f.width, f.height)).unwrap_or_default(), epoch());
+                    }
+                    (Some("stats"), _) => {
+                        let st = player.as_ref().map(|p| p.render_stats()).unwrap_or_default();
+                        let s = player.as_ref().map(|p| p.state()).unwrap_or_default();
+                        println!("{{\"event\":\"stats\",\"frames\":{},\"render_ms_total\":{:.1},\"position\":{:.2},\"muted\":{},\"buffering\":{}}}", st.frames, st.total_render_ms, s.position, s.muted, s.buffering);
+                    }
+                    (Some("stop"), _) => { if let Some(p) = &player { p.stop(); } println!("{{\"event\":\"stopped\"}}"); }
+                    (Some("quit"), _) => break,
+                    _ => {}
+                }
+                use std::io::Write;
+                std::io::stdout().flush()?;
+            }
+        }
         "suggest" => println!("{:?}", c.suggestions(&arg(1)).wait()?),
         "subs" => {
             let subs = library().subscriptions();
