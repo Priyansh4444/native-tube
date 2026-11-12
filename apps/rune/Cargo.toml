@@ -1,0 +1,26 @@
+[package]
+name = "nt-rune"
+version = "0.1.0"
+edition = "2024"
+description = "NativeTube, the Rune frontend."
+
+[[bin]]
+name = "nt-rune"
+path = "src/main.rs"
+
+[dependencies]
+nt-core = { path = "../../core" }
+rune = { git = "https://github.com/anomalyco/rune", rev = "4fbd2d6ac4dd12595dd8ed0b7849b28a309c7c00" }
+rune-kit = { git = "https://github.com/anomalyco/rune", rev = "4fbd2d6ac4dd12595dd8ed0b7849b28a309c7c00" }
+
+# Rune's README: an app that builds Rune applies its [patch.crates-io] too (a dependency's
+# [patch] doesn't reach the workspace that depends on it). Same repository and rev.
+[patch.crates-io]
+wgpu-hal = { git = "https://github.com/anomalyco/rune", rev = "4fbd2d6ac4dd12595dd8ed0b7849b28a309c7c00" }
+winit = { git = "https://github.com/anomalyco/rune", rev = "4fbd2d6ac4dd12595dd8ed0b7849b28a309c7c00" }
+
+[profile.release]
+codegen-units = 16
+incremental = true
+
+[workspace]

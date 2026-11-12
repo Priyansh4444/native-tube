@@ -1,0 +1,269 @@
+[
+ {
+  "phase": "startup"
+ },
+ {
+  "wait_mark": "home_loaded",
+  "timeout": 30
+ },
+ {
+  "sleep": 2.0
+ },
+ {
+  "snapshot": "01-home"
+ },
+ {
+  "phase": "idle_home"
+ },
+ {
+  "sleep": 5.0
+ },
+ {
+  "phase": "wheel_scroll_home"
+ },
+ {
+  "repeat": 60,
+  "every": 0.07,
+  "do": {
+   "cmd": "scroll",
+   "ticks": 1
+  }
+ },
+ {
+  "sleep": 1.0
+ },
+ {
+  "snapshot": "02-home-scrolled"
+ },
+ {
+  "repeat": 30,
+  "every": 0.035,
+  "do": {
+   "cmd": "scroll",
+   "ticks": -1
+  }
+ },
+ {
+  "sleep": 1.0
+ },
+ {
+  "phase": "fling_home"
+ },
+ {
+  "cmd": "fling",
+  "velocity": 6000
+ },
+ {
+  "sleep": 2.5
+ },
+ {
+  "cmd": "fling",
+  "velocity": -4000
+ },
+ {
+  "sleep": 2.5
+ },
+ {
+  "phase": "touchpad_scroll_home"
+ },
+ {
+  "repeat": 120,
+  "every": 0.008,
+  "do": {
+   "cmd": "scroll_pixels",
+   "px": 18
+  }
+ },
+ {
+  "cmd": "fling",
+  "velocity": 2500
+ },
+ {
+  "sleep": 2.0
+ },
+ {
+  "phase": "infinite_scroll"
+ },
+ {
+  "repeat": 160,
+  "every": 0.05,
+  "do": {
+   "cmd": "scroll",
+   "ticks": 3
+  }
+ },
+ {
+  "sleep": 1.5
+ },
+ {
+  "snapshot": "03-deep-scroll"
+ },
+ {
+  "cmd": "scroll_to_top"
+ },
+ {
+  "sleep": 1.0
+ },
+ {
+  "phase": "search"
+ },
+ {
+  "cmd": "search",
+  "query": "rust programming"
+ },
+ {
+  "wait_mark": "search_loaded",
+  "timeout": 20
+ },
+ {
+  "sleep": 1.5
+ },
+ {
+  "snapshot": "04-search"
+ },
+ {
+  "repeat": 20,
+  "every": 0.08,
+  "do": {
+   "cmd": "scroll",
+   "ticks": 1
+  }
+ },
+ {
+  "sleep": 1.0
+ },
+ {
+  "cmd": "scroll_to_top"
+ },
+ {
+  "sleep": 0.5
+ },
+ {
+  "phase": "open_video"
+ },
+ {
+  "cmd": "open_video",
+  "index": 1
+ },
+ {
+  "wait_mark": "watch_loaded",
+  "timeout": 20
+ },
+ {
+  "wait_mark": "playback_started",
+  "timeout": 40
+ },
+ {
+  "phase": "playback"
+ },
+ {
+  "sleep": 10.0
+ },
+ {
+  "snapshot": "05-watch"
+ },
+ {
+  "phase": "scroll_while_playing"
+ },
+ {
+  "repeat": 25,
+  "every": 0.08,
+  "do": {
+   "cmd": "scroll",
+   "ticks": 1
+  }
+ },
+ {
+  "cmd": "load_more_comments"
+ },
+ {
+  "wait_mark": "comments_loaded",
+  "timeout": 20
+ },
+ {
+  "sleep": 1.0
+ },
+ {
+  "snapshot": "06-comments"
+ },
+ {
+  "repeat": 25,
+  "every": 0.08,
+  "do": {
+   "cmd": "scroll",
+   "ticks": -1
+  }
+ },
+ {
+  "sleep": 1.0
+ },
+ {
+  "phase": "paused"
+ },
+ {
+  "cmd": "toggle_pause"
+ },
+ {
+  "sleep": 4.0
+ },
+ {
+  "phase": "channel"
+ },
+ {
+  "cmd": "open_channel"
+ },
+ {
+  "wait_mark": "channel_loaded",
+  "timeout": 20
+ },
+ {
+  "sleep": 1.5
+ },
+ {
+  "snapshot": "07-channel"
+ },
+ {
+  "repeat": 30,
+  "every": 0.07,
+  "do": {
+   "cmd": "scroll",
+   "ticks": 1
+  }
+ },
+ {
+  "sleep": 1.0
+ },
+ {
+  "phase": "back_navigation"
+ },
+ {
+  "cmd": "back"
+ },
+ {
+  "sleep": 1.0
+ },
+ {
+  "cmd": "back"
+ },
+ {
+  "sleep": 1.0
+ },
+ {
+  "cmd": "back"
+ },
+ {
+  "sleep": 1.5
+ },
+ {
+  "snapshot": "08-back-home"
+ },
+ {
+  "phase": "idle_end"
+ },
+ {
+  "sleep": 5.0
+ },
+ {
+  "phase": ""
+ }
+]

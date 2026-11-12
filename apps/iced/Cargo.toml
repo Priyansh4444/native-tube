@@ -1,0 +1,27 @@
+[package]
+name = "nt-iced"
+version = "0.1.0"
+edition = "2024"
+description = "NativeTube, the iced frontend."
+
+[[bin]]
+name = "nt-iced"
+path = "src/main.rs"
+
+[dependencies]
+nt-core = { path = "../../core" }
+iced = { version = "0.14", default-features = false, features = [
+    "wgpu",
+    "wayland",
+    "advanced",
+    "image-without-codecs",
+    "crisp",
+    "tokio",
+] }
+serde_json = "1"
+tokio = { version = "1", features = ["time", "sync"] }
+
+[profile.release]
+debug = false
+
+[workspace]
