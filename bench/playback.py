@@ -184,7 +184,7 @@ class Mpv:
         self.sock = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "nt-bench-mpv.sock"
         self.sock.unlink(missing_ok=True)
         self.args = ["mpv", "--no-config", "--idle=yes", "--force-window=yes", "--mute=yes",
-                     "--hwdec=vaapi", "--vo=gpu-next", "--wayland-app-id=nt-bench", "--keep-open=yes",
+                     "--hwdec=vaapi", "--vo=gpu-next", "--wayland-app-id=nttest-bench", "--keep-open=yes",
                      f"--ytdl-format={YTDL_FORMAT}", f"--input-ipc-server={self.sock}",
                      "--msg-level=all=v", "--msg-time", "--terminal=yes", "--input-terminal=no", "--really-quiet=no"]
         self.t_launch = None
@@ -284,7 +284,7 @@ class Web:
             self.profile.mkdir(parents=True)
         subprocess.run([str(ROOT / "tools/headless.sh"), "setup"], capture_output=True)
         self.browser = subprocess.Popen(
-            ["helium-browser", "--class=nt-bench", f"--user-data-dir={self.profile}", "--no-first-run",
+            ["helium-browser", "--class=nttest-bench", f"--user-data-dir={self.profile}", "--no-first-run",
              "--no-default-browser-check", "--mute-audio", "--autoplay-policy=no-user-gesture-required",
              f"--remote-debugging-port={self.port}", "--window-size=1280,800", "--ozone-platform=wayland",
              "about:blank"],

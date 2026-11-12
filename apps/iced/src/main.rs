@@ -83,7 +83,7 @@ fn main() -> iced::Result {
         min_size: Some(Size::new(640.0, 480.0)),
         resizable: true,
         platform_specific: window::settings::PlatformSpecific {
-            application_id: "nt-iced".to_string(),
+            application_id: std::env::var("NT_APP_ID").unwrap_or_else(|_| "nt-iced".to_string()),
             ..Default::default()
         },
         ..Default::default()

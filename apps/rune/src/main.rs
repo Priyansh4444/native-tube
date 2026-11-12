@@ -21,7 +21,7 @@ fn on_key(s: &mut app::App, ev: &KeyEvent, tx: &mut Tx) -> bool {
 fn main() {
     nt_core::metrics::init("rune");
     nt_core::autopilot::start();
-    rune::set_app_id("nt-rune");
+    rune::set_app_id(Box::leak(std::env::var("NT_APP_ID").unwrap_or_else(|_| "nt-rune".to_string()).into_boxed_str()));
     let spec = AppSpec {
         min_size: Some((640.0, 480.0)),
         poll: Some(poll),

@@ -101,7 +101,7 @@ fn main() {
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(Bounds { origin: point(px(0.0), px(0.0)), size: size(px(1280.0), px(800.0)) })),
             titlebar: Some(TitlebarOptions { title: Some("NativeTube".into()), ..Default::default() }),
-            app_id: Some("nt-gpui".into()),
+            app_id: Some(std::env::var("NT_APP_ID").unwrap_or_else(|_| "nt-gpui".to_string())),
             window_min_size: Some(size(px(640.0), px(480.0))),
             focus: false,
             // The window is never focused on its headless output, and an idle app draws

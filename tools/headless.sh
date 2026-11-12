@@ -9,9 +9,10 @@
 #
 # <fw> is iced, gpui or rune. Each gets its own 1280x800 @60 headless output far
 # to the right of the real screens, its own workspace, and a window rule that
-# sends windows whose Wayland app_id is "nt-<fw>" there without focusing them,
+# sends windows whose Wayland app_id is "nttest-<fw>" there without focusing them,
 # so a test run never moves the user's focus or covers their screen.
-# Apps must set their app_id to "nt-<fw>".
+# `run` sets NT_APP_ID=nttest-<fw>, which the apps use as their app_id; launched normally they
+# are "nt-<fw>" and open on the real screen like any app.
 set -euo pipefail
 
 declare -A POS=([iced]=10000 [gpui]=12000 [rune]=14000 [bench]=16000)
@@ -34,8 +35,8 @@ setup_one() {
   hyprctl eval "hl.monitor({ output = \"$out\", mode = \"1280x800@60\", position = \"${pos}x0\", scale = 1 })" >/dev/null
   # Whatever workspace Hyprland gave the output is the one its app goes to.
   ws=$(hyprctl -j monitors | jq -r --arg o "$out" '.[] | select(.name == $o) | .activeWorkspace.id')
-  hyprctl eval "hl.window_rule({ match = { class = \"^nt-$fw\$\" }, workspace = \"$ws silent\" })" >/dev/null
-  hyprctl eval "hl.window_rule({ match = { class = \"^nt-$fw\$\" }, no_initial_focus = true })" >/dev/null 2>&1 || true
+  hyprctl eval "hl.window_rule({ match = { class = \"^nttest-$fw\$\" }, workspace = \"$ws silent\" })" >/dev/null
+  hyprctl eval "hl.window_rule({ match = { class = \"^nttest-$fw\$\" }, no_initial_focus = true })" >/dev/null 2>&1 || true
 }
 
 case "${1:-}" in
@@ -53,7 +54,7 @@ case "${1:-}" in
     # - the player plays a locally generated test clip instead of the YouTube video.
     # Set NT_LIVE=1 to talk to YouTube and play real videos (still muted).
     root=$(cd "$(dirname "$0")/.." && pwd)
-    export NT_MUTE="${NT_MUTE:-1}"
+    export NT_MUTE="${NT_MUTE:-1}" NT_APP_ID="nttest-$fw"
     if [[ "${NT_LIVE:-0}" != 1 ]]; then
       export NT_FIXTURES="${NT_FIXTURES:-$root/.cache/fixtures}" NT_FIXTURE_MODE="${NT_FIXTURE_MODE:-auto}"
       export NT_VIDEO_OVERRIDE="${NT_VIDEO_OVERRIDE:-$root/.cache/test-clip-720p30.mp4}"

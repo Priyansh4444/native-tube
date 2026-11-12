@@ -152,7 +152,7 @@ fn main() {
     }
     let fw = args[0].to_ascii_uppercase();
     let output_name = format!("NT-{fw}");
-    let class = format!("nt-{}", args[0]);
+    let class = format!("nttest-{}", args[0]);
     let num = |i: usize, default: f64| args.get(i).and_then(|s| s.parse::<f64>().ok()).unwrap_or(default);
 
     // Several agents may drive their apps at once; the cursor is shared, so take turns.
