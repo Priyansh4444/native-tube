@@ -1,0 +1,21 @@
+[package]
+name = "nt-core"
+version = "0.1.0"
+edition = "2024"
+description = "Shared, UI-framework-agnostic backend for the NativeTube clients: YouTube data, image cache, local library, libmpv playback, autopilot and metrics."
+
+[dependencies]
+bytes = "1"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+libc = "0.2"
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "gzip", "brotli", "json"] }
+roxmltree = "0.21"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+
+[[bin]]
+name = "ntctl"
+path = "src/bin/ntctl.rs"
+
+[workspace]
