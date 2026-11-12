@@ -521,7 +521,12 @@ impl Player {
         self.shared.accept_frames.store(false, Ordering::Release);
         let _ = self.command(&["stop"]);
         *self.shared.frame.lock().unwrap_or_else(|e| e.into_inner()) = None;
-        *self.shared.lock_state() = PlaybackState { volume: self.state().volume, ..Default::default() };
+        {
+            // Volume and mute are mpv's settings, not the file's: they survive a stop.
+            let mut st = self.shared.lock_state();
+            let (volume, muted) = (st.volume, st.muted);
+            *st = PlaybackState { volume, muted, ..Default::default() };
+        }
         self.shared.wake();
     }
 
