@@ -119,9 +119,16 @@ impl Client {
         {
             return Ok(hit);
         }
+        // Static image CDNs aren't YouTube's API; everything else waits its turn at the gate.
+        let is_cdn = ["ytimg.com/", "ggpht.com/", "googleusercontent.com/"].iter().any(|h| url.contains(h));
+        let _turn = if is_cdn { None } else { Some(crate::polite::turn().await?) };
         let resp = self.http.get(url).send().await?;
-        if !resp.status().is_success() {
-            return Err(Error::Network(format!("{} for {url}", resp.status())));
+        if is_cdn {
+            if !resp.status().is_success() {
+                return Err(Error::Network(format!("{} for {url}", resp.status())));
+            }
+        } else {
+            crate::polite::check_status(resp.status(), resp.headers().get(reqwest::header::RETRY_AFTER))?;
         }
         let body = resp.bytes().await?;
         if let Some(f) = &self.fixtures {
@@ -140,6 +147,7 @@ impl Client {
         }
         body["context"] = innertube::context();
         let url = format!("https://www.youtube.com/youtubei/v1/{endpoint}?prettyPrint=false");
+        let _turn = crate::polite::turn().await?;
         let resp = self
             .http
             .post(url)
@@ -149,9 +157,7 @@ impl Client {
             .json(&body)
             .send()
             .await?;
-        if !resp.status().is_success() {
-            return Err(Error::Network(format!("{} from /{endpoint}", resp.status())));
-        }
+        crate::polite::check_status(resp.status(), resp.headers().get(reqwest::header::RETRY_AFTER))?;
         let raw = resp.bytes().await?;
         if let Some(f) = &self.fixtures {
             f.store(&key, &raw);

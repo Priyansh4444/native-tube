@@ -47,8 +47,22 @@ case "${1:-}" in
     fw=${2:-}; need_fw "$fw"; shift 2
     setup_one "$fw"
     log="$STATE/$fw.log"
+    # Test runs are silent and stay off YouTube's servers as much as possible:
+    # - muted;
+    # - YouTube answers are recorded once into .cache/fixtures and replayed after that;
+    # - the player plays a locally generated test clip instead of the YouTube video.
+    # Set NT_LIVE=1 to talk to YouTube and play real videos (still muted).
+    root=$(cd "$(dirname "$0")/.." && pwd)
+    export NT_MUTE="${NT_MUTE:-1}"
+    if [[ "${NT_LIVE:-0}" != 1 ]]; then
+      export NT_FIXTURES="${NT_FIXTURES:-$root/.cache/fixtures}" NT_FIXTURE_MODE="${NT_FIXTURE_MODE:-auto}"
+      export NT_VIDEO_OVERRIDE="${NT_VIDEO_OVERRIDE:-$root/.cache/test-clip-720p30.mp4}"
+      echo "headless.sh: muted; YouTube data replayed from .cache/fixtures; the player plays the local test clip (set NT_LIVE=1 for real videos)" > "$log"
+    else
+      echo "headless.sh: muted; live YouTube data and real videos" > "$log"
+    fi
     # The window rule above puts the window on the headless output, unfocused.
-    setsid "$@" > "$log" 2>&1 < /dev/null &
+    setsid "$@" >> "$log" 2>&1 < /dev/null &
     echo $! > "$STATE/$fw.pid"
     cat "$STATE/$fw.pid"
     ;;

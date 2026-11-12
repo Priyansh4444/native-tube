@@ -2,7 +2,7 @@
 //!
 //! ntctl home [topic] | search <query> | more <search query> | watch <id> | comments <id>
 //!      | channel <id> | suggest <prefix> | subs | image <url> <out.png> [width]
-//!      | play <id> <out.png> [seconds]
+//!      | resolve <id> | play <id> <out.png> [seconds] [seek-to-seconds]
 
 use nt_core::*;
 use std::time::{Duration, Instant};
@@ -22,6 +22,11 @@ fn print_videos(page: &Page<Video>) {
 }
 
 fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    // A command-line test tool never makes sound unless asked to (NT_MUTE=0).
+    if std::env::var_os("NT_MUTE").is_none() {
+        // SAFETY: set before any other thread exists.
+        unsafe { std::env::set_var("NT_MUTE", "1") };
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     let arg = |i: usize| args.get(i).cloned().unwrap_or_default();
     let c = client();
@@ -68,6 +73,11 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                 print_videos(&c.more_videos(next).wait()?);
             }
         }
+        "resolve" => {
+            let s = runtime().block_on(resolve::resolve(&arg(1)))?;
+            println!("video: {}  audio: {}  live: {}", s.video_desc, s.audio_desc, s.is_live);
+            println!("visitor id {:.0} ms, /player {:.0} ms", s.visitor_ms, s.player_ms);
+        }
         "suggest" => println!("{:?}", c.suggestions(&arg(1)).wait()?),
         "subs" => {
             let subs = library().subscriptions();
@@ -84,8 +94,10 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         }
         "play" => {
             let secs: f64 = arg(3).parse().unwrap_or(6.0);
+            let seek: Option<f64> = args.get(4).and_then(|s| s.parse().ok());
             let player = Player::new(PixelFormat::Rgba, || {})?;
             player.load(&arg(1))?;
+            let mut seeked = seek.is_none();
             let deadline = Instant::now() + Duration::from_secs_f64(secs + 30.0);
             let mut started = None;
             while Instant::now() < deadline {
@@ -97,6 +109,18 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                     started = Some(Instant::now());
                     println!("first frame after {:.2}s: {:?}", t.elapsed().as_secs_f64(), player.frame());
                 }
+                if !seeked && started.is_some() && let Some(to) = seek {
+                    let at = Instant::now();
+                    player.seek(to);
+                    let before = player.frame_generation();
+                    while player.state().position < to - 1.0 || player.frame_generation() <= before + 2 {
+                        std::thread::sleep(Duration::from_millis(20));
+                        if at.elapsed() > Duration::from_secs(20) { break; }
+                    }
+                    println!("seek to {to:.0}s took {:.2}s (now at {:.1}s)", at.elapsed().as_secs_f64(), player.state().position);
+                    seeked = true;
+                    started = Some(Instant::now());
+                }
                 if let Some(at) = started
                     && at.elapsed().as_secs_f64() >= secs
                 {
@@ -105,7 +129,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                 std::thread::sleep(Duration::from_millis(50));
             }
             let s = player.state();
-            println!("state: {:?} pos={:.1}/{:.1} paused={} size={:?} buffered={:.1}s", s.status, s.position, s.duration, s.paused, s.video_size, s.buffered_ahead);
+            println!("state: {:?} pos={:.1}/{:.1} paused={} muted={} size={:?} buffered={:.1}s", s.status, s.position, s.duration, s.paused, s.muted, s.video_size, s.buffered_ahead);
             let st = player.render_stats();
             println!("rendered {} frames, avg {:.2} ms, max {:.2} ms", st.frames, st.total_render_ms / st.frames.max(1) as f64, st.max_render_ms);
             let f = player.frame().ok_or("no frame")?;

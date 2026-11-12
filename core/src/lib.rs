@@ -19,6 +19,8 @@ mod library;
 pub mod metrics;
 mod model;
 pub mod player;
+mod polite;
+pub mod resolve;
 pub mod scroll;
 
 pub use client::{Client, Job, client, runtime};

@@ -1,7 +1,8 @@
 //! Video playback through libmpv, shared by every frontend.
 //!
-//! mpv (with its built-in yt-dlp hook) opens the YouTube page, decodes (using the
-//! GPU decoder where it can, copied back), plays the sound itself, and renders
+//! [`crate::resolve`] finds the stream URLs in Rust, the way YouTube's native apps
+//! do. libmpv (with all scripting off: no Lua, no yt-dlp) fetches and decodes them
+//! (using the GPU decoder where it can, copied back), plays the sound itself, and renders
 //! each picture with its software renderer into a CPU buffer on a thread of its
 //! own. Frontends read the newest frame with [`Player::frame`] and upload it
 //! however their toolkit draws images. Every frontend gets the same frames from
@@ -222,6 +223,10 @@ struct Shared {
     /// Signalled by mpv's render update callback, a resize, or shutdown.
     render_signal: (Mutex<bool>, Condvar),
     shutdown: AtomicBool,
+    /// Bumped by every `load` and `stop`; a resolve that finishes for an older ticket is dropped.
+    load_ticket: AtomicU64,
+    /// Held while issuing a command from a worker, so `Drop` can't free mpv underneath it.
+    worker_cmd: Mutex<()>,
     /// Largest picture to render, in physical pixels. Default 1280x720.
     target: Mutex<(u32, u32)>,
     stats: Mutex<RenderStats>,
@@ -309,13 +314,32 @@ impl Player {
             return Err(Error::Player("mpv_create failed".into()));
         }
         let mpv = Arc::new(Handle(raw));
-        let max_h = std::env::var("NT_MAX_HEIGHT").ok().and_then(|s| s.parse::<u32>().ok()).unwrap_or(720);
         let volume = crate::library::library().volume();
         let options = [
             ("vo", "libmpv".to_string()),
             ("hwdec", "auto-copy".to_string()),
-            ("ytdl", "yes".to_string()),
-            ("ytdl-format", format!("bestvideo[height<=?{max_h}][vcodec!^=av01]+bestaudio/best[height<=?{max_h}]/best")),
+            // No scripting of any kind: no built-in Lua scripts (ytdl_hook, osc, ...), no yt-dlp.
+            ("ytdl", "no".to_string()),
+            ("load-scripts", "no".to_string()),
+            ("load-auto-profiles", "no".to_string()),
+            ("load-commands", "no".to_string()),
+            ("load-console", "no".to_string()),
+            ("load-context-menu", "no".to_string()),
+            ("load-positioning", "no".to_string()),
+            ("load-select", "no".to_string()),
+            ("load-stats-overlay", "no".to_string()),
+            ("osc", "no".to_string()),
+            ("input-builtin-bindings", "no".to_string()),
+            // Buffer about as far ahead as YouTube's own player does, not mpv's default 1000 s.
+            ("cache-secs", "60".to_string()),
+            // NT_MUTE=1 starts muted (all test and benchmark runs set it).
+            ("mute", if std::env::var("NT_MUTE").is_ok_and(|v| v != "0") { "yes" } else { "no" }.to_string()),
+            // Stream requests carry the same identity the streams were issued to.
+            ("user-agent", crate::resolve::USER_AGENT.to_string()),
+            // Fetch in bounded chunks, as YouTube's own players do: googlevideo trickles an
+            // open-ended `Range: bytes=0-` (~12 KB/s) but serves bounded ranges at full speed.
+            // Measured on a 14 h video: first picture 16.6 s -> 0.7 s.
+            ("stream-lavf-o", "request_size=10485760,initial_request_size=1048576".to_string()),
             ("keep-open", "yes".to_string()),
             ("idle", "yes".to_string()),
             ("cache", "yes".to_string()),
@@ -361,6 +385,8 @@ impl Player {
             waker: Mutex::new(Some(Arc::new(waker))),
             render_signal: (Mutex::new(false), Condvar::new()),
             shutdown: AtomicBool::new(false),
+            load_ticket: AtomicU64::new(0),
+            worker_cmd: Mutex::new(()),
             target: Mutex::new((1280, 720)),
             stats: Mutex::new(RenderStats::default()),
         });
@@ -416,12 +442,7 @@ impl Player {
     }
 
     fn command(&self, args: &[&str]) -> Result<()> {
-        let owned: Vec<CString> = args.iter().map(|a| cstr(a)).collect();
-        let mut ptrs: Vec<*const c_char> = owned.iter().map(|c| c.as_ptr()).collect();
-        ptrs.push(std::ptr::null());
-        // SAFETY: valid handle; a NULL-terminated array of NUL-terminated strings that outlive the call.
-        let rc = unsafe { ffi::mpv_command(self.mpv.0, ptrs.as_mut_ptr()) };
-        if rc < 0 { Err(Error::Player(format!("{}: {}", args[0], mpv_err(rc)))) } else { Ok(()) }
+        command(&self.mpv, args)
     }
 
     fn set_flag(&self, name: &str, on: bool) {
@@ -438,13 +459,12 @@ impl Player {
         unsafe { ffi::mpv_set_property(self.mpv.0, n.as_ptr(), ffi::FORMAT_DOUBLE, (&raw mut v).cast()) };
     }
 
-    /// Open a YouTube video by id and start playing. `NT_VIDEO_OVERRIDE=<file>` plays that file instead
-    /// (benchmarks use it to take the network out of the measurement).
+    /// Open a YouTube video by id and start playing. Returns at once: the streams are found on a
+    /// core worker ([`crate::resolve`]) while the state says `Loading`; a failure becomes
+    /// `Status::Failed`. `NT_VIDEO_OVERRIDE=<file>` plays that file instead (benchmarks use it to
+    /// take the network out of the measurement).
     pub fn load(&self, video_id: &str) -> Result<()> {
-        let url = match std::env::var("NT_VIDEO_OVERRIDE") {
-            Ok(path) if !path.is_empty() => path,
-            _ => format!("https://www.youtube.com/watch?v={video_id}"),
-        };
+        let ticket = self.shared.load_ticket.fetch_add(1, Ordering::AcqRel) + 1;
         {
             let mut s = self.shared.lock_state();
             let (volume, muted) = (s.volume, s.muted);
@@ -452,13 +472,44 @@ impl Player {
         }
         *self.shared.frame.lock().unwrap_or_else(|e| e.into_inner()) = None;
         self.set_flag("pause", false);
-        self.command(&["loadfile", &url, "replace"])?;
+        // Unload whatever played before, so its last picture and sound stop while we resolve.
+        let _ = self.command(&["stop"]);
         self.shared.wake();
+        if let Ok(path) = std::env::var("NT_VIDEO_OVERRIDE")
+            && !path.is_empty()
+        {
+            return self.command(&["loadfile", &path, "replace"]);
+        }
+        let (mpv, shared, id) = (self.mpv.clone(), self.shared.clone(), video_id.to_string());
+        crate::client::runtime().spawn(async move {
+            let found = crate::resolve::resolve(&id).await;
+            let _guard = shared.worker_cmd.lock().unwrap_or_else(|e| e.into_inner());
+            if shared.shutdown.load(Ordering::Acquire) || shared.load_ticket.load(Ordering::Acquire) != ticket {
+                return; // the player is gone, or another video was asked for meanwhile
+            }
+            let result = found.and_then(|s| {
+                let mut args = vec!["loadfile".to_string(), s.video, "replace".into(), "-1".into()];
+                if let Some(audio) = s.audio {
+                    // %N% quotes a value of N bytes, so commas and '=' in the URL are safe.
+                    args.push(format!("audio-file=%{}%{}", audio.len(), audio));
+                }
+                command(&mpv, &args.iter().map(String::as_str).collect::<Vec<_>>())
+            });
+            if let Err(e) = result {
+                let message = match e {
+                    Error::Player(m) => m,
+                    other => other.to_string(),
+                };
+                shared.lock_state().status = Status::Failed(message);
+                shared.wake();
+            }
+        });
         Ok(())
     }
 
     /// Stop and unload; frees the decoder and the stream.
     pub fn stop(&self) {
+        self.shared.load_ticket.fetch_add(1, Ordering::AcqRel);
         let _ = self.command(&["stop"]);
         *self.shared.frame.lock().unwrap_or_else(|e| e.into_inner()) = None;
         *self.shared.lock_state() = PlaybackState { volume: self.state().volume, ..Default::default() };
@@ -534,7 +585,11 @@ impl Player {
 
 impl Drop for Player {
     fn drop(&mut self) {
-        self.shared.shutdown.store(true, Ordering::Release);
+        {
+            // Wait out a worker that is mid-command, then make sure no other one starts.
+            let _guard = self.shared.worker_cmd.lock().unwrap_or_else(|e| e.into_inner());
+            self.shared.shutdown.store(true, Ordering::Release);
+        }
         self.shared.signal_render();
         if let Some(t) = self.render_thread.take() {
             let _ = t.join();
@@ -549,6 +604,16 @@ impl Drop for Player {
         // SAFETY: both threads have exited; this is the last use of the handle.
         unsafe { ffi::mpv_terminate_destroy(self.mpv.0) };
     }
+}
+
+fn command(mpv: &Handle, args: &[&str]) -> Result<()> {
+    let owned: Vec<CString> = args.iter().map(|a| cstr(a)).collect();
+    let mut ptrs: Vec<*const c_char> = owned.iter().map(|c| c.as_ptr()).collect();
+    ptrs.push(std::ptr::null());
+    // SAFETY: valid handle (Drop waits for `worker_cmd` before destroying it); a NULL-terminated
+    // array of NUL-terminated strings that outlive the call.
+    let rc = unsafe { ffi::mpv_command(mpv.0, ptrs.as_mut_ptr()) };
+    if rc < 0 { Err(Error::Player(format!("{}: {}", args[0], mpv_err(rc)))) } else { Ok(()) }
 }
 
 fn event_loop(mpv: Arc<Handle>, shared: Arc<Shared>) {
