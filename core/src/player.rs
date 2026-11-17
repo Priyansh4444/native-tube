@@ -267,6 +267,12 @@ pub struct RenderStats {
 }
 
 impl Shared {
+    /// Close the frame gate and drop the current picture, atomically with respect to the render thread.
+    fn clear_frame(&self) {
+        let mut slot = self.frame.lock().unwrap_or_else(|e| e.into_inner());
+        self.accept_frames.store(false, Ordering::Release);
+        *slot = None;
+    }
     fn lock_state(&self) -> MutexGuard<'_, PlaybackState> {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
@@ -314,6 +320,10 @@ const OBSERVED: &[(&str, c_int)] = &[
     ("demuxer-cache-duration", ffi::FORMAT_DOUBLE),
     ("eof-reached", ffi::FORMAT_FLAG),
 ];
+
+fn force_muted() -> bool {
+    std::env::var("NT_MUTE").is_ok_and(|v| v != "0")
+}
 
 fn cstr(s: &str) -> CString {
     CString::new(s.replace('\0', "")).unwrap_or_default()
@@ -364,15 +374,7 @@ impl Player {
             // Buffer about as far ahead as YouTube's own player does, not mpv's default 1000 s.
             ("cache-secs", "60".to_string()),
             // NT_MUTE=1 starts muted (all test and benchmark runs set it).
-            (
-                "mute",
-                if std::env::var("NT_MUTE").is_ok_and(|v| v != "0") {
-                    "yes"
-                } else {
-                    "no"
-                }
-                .to_string(),
-            ),
+            ("mute", if force_muted() { "yes" } else { "no" }.to_string()),
             // Stream requests carry the same identity the streams were issued to.
             ("user-agent", crate::resolve::USER_AGENT.to_string()),
             // Fetch in bounded chunks, as YouTube's own players do: googlevideo trickles an
@@ -546,7 +548,7 @@ impl Player {
     /// take the network out of the measurement).
     pub fn load(&self, video_id: &str) -> Result<()> {
         let ticket = self.shared.load_ticket.fetch_add(1, Ordering::AcqRel) + 1;
-        self.shared.accept_frames.store(false, Ordering::Release);
+        self.shared.clear_frame();
         {
             let mut s = self.shared.lock_state();
             let (volume, muted) = (s.volume, s.muted);
@@ -558,7 +560,6 @@ impl Player {
                 ..Default::default()
             };
         }
-        *self.shared.frame.lock().unwrap_or_else(|e| e.into_inner()) = None;
         self.set_flag("pause", false);
         // Unload whatever played before, so its last picture and sound stop while we resolve.
         let _ = self.command(&["stop"]);
@@ -605,9 +606,8 @@ impl Player {
     /// Stop and unload; frees the decoder and the stream.
     pub fn stop(&self) {
         self.shared.load_ticket.fetch_add(1, Ordering::AcqRel);
-        self.shared.accept_frames.store(false, Ordering::Release);
+        self.shared.clear_frame();
         let _ = self.command(&["stop"]);
-        *self.shared.frame.lock().unwrap_or_else(|e| e.into_inner()) = None;
         {
             // Volume and mute are mpv's settings, not the file's: they survive a stop.
             let mut st = self.shared.lock_state();
@@ -657,8 +657,9 @@ impl Player {
         crate::library::library().set_volume(v);
     }
 
+    /// With `NT_MUTE` set (every test and benchmark run) the player cannot be unmuted.
     pub fn set_muted(&self, muted: bool) {
-        self.set_flag("mute", muted);
+        self.set_flag("mute", muted || force_muted());
     }
 
     /// The largest picture worth rendering, in physical pixels (the size the video is drawn at).
@@ -745,8 +746,7 @@ fn event_loop(mpv: Arc<Handle>, shared: Arc<Shared>) {
         match ev.event_id {
             ffi::EVENT_SHUTDOWN => return,
             ffi::EVENT_START_FILE => {
-                shared.accept_frames.store(false, Ordering::Release);
-                *shared.frame.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                shared.clear_frame();
                 shared.lock_state().status = Status::Loading;
                 wake = true;
             }
@@ -950,7 +950,7 @@ fn render_loop(ctx: RenderCtx, shared: Arc<Shared>, format: PixelFormat) {
         ];
         // SAFETY: the buffer holds at least stride * h bytes and is 64-byte aligned; params end with INVALID.
         let rc = unsafe { ffi::mpv_render_context_render(ctx.0, params.as_mut_ptr()) };
-        if rc < 0 || !shared.accept_frames.load(Ordering::Acquire) {
+        if rc < 0 {
             pool.push(frame);
             continue;
         }
@@ -967,12 +967,18 @@ fn render_loop(ctx: RenderCtx, shared: Arc<Shared>, format: PixelFormat) {
             st.max_render_ms = st.max_render_ms.max(ms);
         }
         // The previous frame stays in the pool (it was pushed when it was rendered).
-        shared
-            .frame
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .replace(frame.clone());
-        shared.generation.fetch_add(1, Ordering::AcqRel);
+        // `load`/`stop` clear the slot and close the gate under this same lock, so a picture of
+        // the previous video that finished rendering late can never land after they ran.
+        {
+            let mut slot = shared.frame.lock().unwrap_or_else(|e| e.into_inner());
+            if !shared.accept_frames.load(Ordering::Acquire) {
+                drop(slot);
+                pool.push(frame);
+                continue;
+            }
+            slot.replace(frame.clone());
+            shared.generation.fetch_add(1, Ordering::AcqRel);
+        }
         pool.push(frame);
         while pool.len() > 4 {
             match pool.iter().position(|f| Arc::strong_count(f) == 1) {

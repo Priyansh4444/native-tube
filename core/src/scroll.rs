@@ -849,6 +849,9 @@ impl ScrollAnimator {
     /// Sets the scroll range: content extent minus viewport extent. Negative
     /// values mean "nothing to scroll". Shrinking it clamps the offset.
     pub fn set_max_offset(&mut self, max: f64) {
+        if !max.is_finite() {
+            return;
+        }
         self.max_offset = if max.is_finite() { max.max(0.0) } else { 0.0 };
         let clamped = self.clamp(self.offset);
         if clamped != self.offset {
@@ -864,6 +867,9 @@ impl ScrollAnimator {
     /// distance at 3 viewports (`PhysicsBasedFlingCurve` bounding size). Until
     /// it is set, neither cap applies.
     pub fn set_viewport(&mut self, viewport: f64) {
+        if !viewport.is_finite() {
+            return;
+        }
         self.viewport = if viewport.is_finite() && viewport > 0.0 {
             viewport
         } else {
@@ -964,6 +970,9 @@ impl ScrollAnimator {
     /// `kMouseWheel` curve: 100-200 ms ease-in-out, retargeted in flight with
     /// velocity matching.
     pub fn wheel_ticks(&mut self, ticks: f64, now: f64) {
+        if !ticks.is_finite() || !now.is_finite() {
+            return;
+        }
         let now = self.input_time(now);
         self.end_touchpad_scroll();
         // A wheel frame is still a pointer scroll frame for Wayland's fling
@@ -1003,6 +1012,9 @@ impl ScrollAnimator {
     /// animated (`cc::InputHandler::ShouldAnimateScroll` is false for
     /// `kScrollByPrecisePixel`), and recorded for fling velocity.
     pub fn wheel_pixels(&mut self, delta_px: f64, now: f64) {
+        if !delta_px.is_finite() || !now.is_finite() {
+            return;
+        }
         let now = self.input_time(now);
         // `WaylandEventSource::ProcessPointerScrollData`: a finger scroll while
         // a fling is active first sends `kScrollFlingCancel`.
@@ -1042,6 +1054,9 @@ impl ScrollAnimator {
     /// Starts a fling with a known velocity in px/s (positive toward the end),
     /// through the same path as [`fling_start`](Self::fling_start).
     pub fn fling(&mut self, velocity_px_per_s: f64, now: f64) {
+        if !velocity_px_per_s.is_finite() || !now.is_finite() {
+            return;
+        }
         let now = self.input_time(now);
         self.start_fling(velocity_px_per_s, now);
     }
@@ -1061,6 +1076,9 @@ impl ScrollAnimator {
     /// Chrome's `kKeyboard` curve, a constant 150 ms ease-in-out that is
     /// retargeted from the pending target, so held keys accumulate.
     pub fn scroll_by(&mut self, delta_px: f64, now: f64) {
+        if !delta_px.is_finite() || !now.is_finite() {
+            return;
+        }
         let now = self.input_time(now);
         self.end_touchpad_scroll();
         // `InputRouterImpl::SendKeyboardEvent` stops any fling.
@@ -1105,6 +1123,9 @@ impl ScrollAnimator {
     /// cubic-bezier(0.4, 0, 0, 1). Like Blink's `ProgrammaticScrollAnimator`,
     /// each call starts a fresh curve from the current offset.
     pub fn scroll_to(&mut self, offset: f64, now: f64) {
+        if !offset.is_finite() || !now.is_finite() {
+            return;
+        }
         let now = self.input_time(now);
         self.end_touchpad_scroll();
         self.stop_fling(now);
@@ -1132,6 +1153,9 @@ impl ScrollAnimator {
     /// motion. Thumb drags in Chrome are `kScrollByPrecisePixel`, so they are
     /// never animated.
     pub fn jump_to(&mut self, offset: f64) {
+        if !offset.is_finite() {
+            return;
+        }
         self.end_touchpad_scroll();
         if matches!(self.motion, Motion::Fling(_)) {
             self.booster.reset();
@@ -1147,6 +1171,9 @@ impl ScrollAnimator {
     /// offset to draw. Cheap, allocation-free, and a pure function of time
     /// for running motion.
     pub fn tick(&mut self, now: f64) -> f64 {
+        if !now.is_finite() {
+            return self.offset();
+        }
         let now = if now > self.last_tick {
             now
         } else {
@@ -1811,5 +1838,22 @@ mod tests {
         let Motion::Curve(c) = a.motion else { panic!() };
         assert_eq!(c.initial_value, 120.0);
         assert_eq!(c.start_time, 0.5);
+    }
+
+    #[test]
+    fn non_finite_input_is_ignored() {
+        let mut a = ScrollAnimator::new();
+        a.set_viewport(800.0);
+        a.set_max_offset(5000.0);
+        a.wheel_ticks(f64::NAN, 0.0);
+        a.wheel_pixels(f64::INFINITY, 0.0);
+        a.scroll_to(f64::NAN, 0.0);
+        a.jump_to(f64::NAN);
+        a.set_max_offset(f64::NAN);
+        assert_eq!(a.tick(f64::INFINITY), 0.0);
+        a.wheel_ticks(1.0, 1.0);
+        let end = a.tick(10.0);
+        assert!(end.is_finite() && end > 0.0);
+        assert!(!a.needs_frame());
     }
 }

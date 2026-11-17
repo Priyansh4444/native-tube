@@ -55,6 +55,8 @@ case "${1:-}" in
     # Set NT_LIVE=1 to talk to YouTube and play real videos (still muted).
     root=$(cd "$(dirname "$0")/.." && pwd)
     export NT_MUTE="${NT_MUTE:-1}" NT_APP_ID="nttest-$fw"
+    # Test runs get their own library, never the owner's (~/.local/share/native-tube).
+    export NT_DATA_DIR="${NT_DATA_DIR:-$root/.cache/test-data/$fw}"
     if [[ "${NT_LIVE:-0}" != 1 ]]; then
       export NT_FIXTURES="${NT_FIXTURES:-$root/.cache/fixtures}" NT_FIXTURE_MODE="${NT_FIXTURE_MODE:-auto}"
       export NT_VIDEO_OVERRIDE="${NT_VIDEO_OVERRIDE:-$root/.cache/test-clip-720p30.mp4}"

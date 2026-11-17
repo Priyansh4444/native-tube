@@ -4,7 +4,8 @@
 set -euo pipefail
 fw=$1; root=$(cd "$(dirname "$0")/.." && pwd); out=${2:-$root/bench/results/$fw}
 mkdir -p "$out"; rm -f "$out/report.json" "$out"/*.png
-NT_AUTOPILOT="$root/bench/scenario.json" NT_REPORT="$out/report.json" \
+# Benchmarks answer only from recorded data: a missing recording is an error, not a live request.
+NT_FIXTURE_MODE="${NT_FIXTURE_MODE:-replay}" NT_AUTOPILOT="$root/bench/scenario.json" NT_REPORT="$out/report.json" \
 NT_SNAPSHOT_OUTPUT="NT-${fw^^}" NT_SNAPSHOT_DIR="$out" NT_DATA_DIR="$out/data" \
   "$root/tools/headless.sh" run "$fw" "$root/apps/$fw/target/release/nt-$fw" >/dev/null
 for _ in $(seq 240); do [[ -s "$out/report.json" ]] && break; sleep 1; done

@@ -60,7 +60,7 @@ pub enum Command {
 
 /// One scenario step.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(untagged)]
+#[serde(untagged, deny_unknown_fields)]
 pub enum Step {
     /// Start a named measurement phase.
     Phase {
@@ -120,8 +120,9 @@ pub fn start() {
         {
             Ok(s) => s,
             Err(e) => {
+                // A benchmark must never run "successfully" without its scenario.
                 eprintln!("NT_AUTOPILOT: can't read {}: {e}", path.to_string_lossy());
-                return None;
+                std::process::exit(2);
             }
         };
         let (tx, rx) = mpsc::unbounded_channel();
@@ -158,6 +159,7 @@ pub fn try_next() -> Option<Command> {
 }
 
 fn send(tx: &mpsc::UnboundedSender<Command>, cmd: Command) {
+    metrics::command(&serde_json::to_string(&cmd).unwrap_or_default());
     let _ = tx.send(cmd);
     if let Some(p) = PILOT.get().and_then(Option::as_ref)
         && let Some(w) = p.waker.lock().unwrap_or_else(|e| e.into_inner()).as_ref()
@@ -262,5 +264,8 @@ mod tests {
         assert!(steps.iter().any(|s| matches!(s, Step::Repeat { .. })));
         let bare: Vec<Step> = serde_json::from_str(r#"[{"cmd":"back"}]"#).unwrap();
         assert!(matches!(bare[0], Step::Bare(Command::Back)));
+        // A step that mixes keys, or misspells one, is an error rather than a silently different step.
+        assert!(serde_json::from_str::<Vec<Step>>(r#"[{"do":{"cmd":"back"},"sleep":1}]"#).is_err());
+        assert!(serde_json::from_str::<Vec<Step>>(r#"[{"wait_mark":"x","timout":3}]"#).is_err());
     }
 }

@@ -153,7 +153,7 @@ impl Client {
 
     async fn post(&self, endpoint: &str, mut body: Value) -> Result<Value> {
         // The key leaves out the context so a client-version bump doesn't invalidate recordings.
-        let key = format!("POST {endpoint} {body}");
+        let key = format!("POST {endpoint} {}", canonical_json(&body));
         if let Some(f) = &self.fixtures
             && let Some(hit) = f.lookup(&key)?
         {
@@ -413,4 +413,43 @@ pub(crate) fn urlencode(s: &str) -> String {
         }
     }
     out
+}
+
+/// JSON text with object keys sorted, so it is the same whether or not some dependency turned on
+/// serde_json's `preserve_order` feature (GPUI's tree does; a fixture key must not depend on it).
+pub(crate) fn canonical_json(v: &Value) -> String {
+    match v {
+        Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            let fields: Vec<String> = keys
+                .into_iter()
+                .map(|k| format!("{}:{}", Value::String(k.clone()), canonical_json(&map[k])))
+                .collect();
+            format!("{{{}}}", fields.join(","))
+        }
+        Value::Array(items) => {
+            let items: Vec<String> = items.iter().map(canonical_json).collect();
+            format!("[{}]", items.join(","))
+        }
+        other => other.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn canonical_json_ignores_insertion_order() {
+        let a: Value =
+            serde_json::from_str(r#"{"query":"x","params":"p","n":[{"b":1,"a":2}]}"#).unwrap();
+        let b: Value =
+            serde_json::from_str(r#"{"params":"p","n":[{"a":2,"b":1}],"query":"x"}"#).unwrap();
+        assert_eq!(canonical_json(&a), canonical_json(&b));
+        assert_eq!(
+            canonical_json(&a),
+            r#"{"n":[{"a":2,"b":1}],"params":"p","query":"x"}"#
+        );
+    }
 }

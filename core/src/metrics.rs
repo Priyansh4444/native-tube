@@ -49,6 +49,8 @@ struct State {
     app: String,
     frames: Vec<f64>,
     marks: Vec<(String, f64, u64)>,
+    /// (t, command as JSON) for every autopilot command, to compute input-to-result latency.
+    commands: Vec<(f64, String)>,
     phases: Vec<Phase>,
     /// (t, cpu seconds, rss bytes)
     samples: Vec<(f64, f64, u64)>,
@@ -72,6 +74,7 @@ fn metrics() -> &'static Metrics {
             app: String::new(),
             frames: Vec::with_capacity(16_384),
             marks: Vec::new(),
+            commands: Vec::new(),
             phases: Vec::new(),
             samples: Vec::new(),
             rss_peak: 0,
@@ -162,6 +165,12 @@ fn trace(name: &str, t: f64) {
     }
 }
 
+/// Record that the autopilot sent a command now.
+pub(crate) fn command(json: &str) {
+    let t = now();
+    lock().commands.push((t, json.to_string()));
+}
+
 /// The sequence number of the newest mark; [`wait_mark`] waits for marks after a given one.
 pub fn mark_seq() -> u64 {
     metrics().seq.load(Ordering::Acquire)
@@ -239,7 +248,7 @@ pub fn report() -> Value {
             let mut gaps: Vec<f64> = ts.windows(2).map(|w| (w[1] - w[0]) * 1000.0).collect();
             gaps.sort_by(f64::total_cmp);
             // A "long frame" is one that took more than 1.5 refreshes at 60 Hz while frames were flowing.
-            let long = gaps.iter().filter(|g| **g > 25.0 && **g < 250.0).count();
+            let long = gaps.iter().filter(|g| **g > 25.0).count();
             json!({
                 "name": p.name,
                 "seconds": dur,
@@ -268,6 +277,10 @@ pub fn report() -> Value {
         "marks_ms": first_marks,
         "phases": phases,
         "frames_total": frames.len(),
+        // Raw data, so smoothness can be computed over motion only, outside the app.
+        "frame_times_ms": frames.iter().map(|t| (t * 10000.0).round() / 10.0).collect::<Vec<_>>(),
+        "commands": s.commands.iter().map(|(t, c)| json!([(t * 10000.0).round() / 10.0, c])).collect::<Vec<_>>(),
+        "all_marks": s.marks.iter().map(|(n, t, _)| json!([(t * 10000.0).round() / 10.0, n])).collect::<Vec<_>>(),
         "rss_mb_peak": s.rss_peak as f64 / 1048576.0,
         "rss_mb_now": rss_bytes() as f64 / 1048576.0,
         "cpu_seconds_total": cpu_seconds(),

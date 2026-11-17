@@ -48,13 +48,23 @@ pub fn library() -> &'static Library {
     static L: OnceLock<Library> = OnceLock::new();
     L.get_or_init(|| {
         let path = data_dir().join("library.json");
-        let data = std::fs::read(&path)
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or(LibraryData {
-                volume: default_volume(),
-                ..Default::default()
-            });
+        let fresh = || LibraryData {
+            volume: default_volume(),
+            ..Default::default()
+        };
+        let data = match std::fs::read(&path) {
+            Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|e| {
+                // Never let an unreadable library be replaced by an empty one: keep it aside.
+                let kept = path.with_extension(format!("json.unreadable-{}", std::process::id()));
+                let _ = std::fs::rename(&path, &kept);
+                eprintln!(
+                    "nt-core: library.json could not be read ({e}); kept as {}",
+                    kept.display()
+                );
+                fresh()
+            }),
+            Err(_) => fresh(),
+        };
         Library {
             data: Mutex::new(data),
             path,
@@ -160,7 +170,10 @@ impl Library {
             if let Some(dir) = path.parent() {
                 let _ = std::fs::create_dir_all(dir);
             }
-            let tmp = path.with_extension("json.tmp");
+            // One writer at a time, each with its own temp file: the last save wins whole.
+            static SAVING: Mutex<()> = Mutex::new(());
+            let _one = SAVING.lock().unwrap_or_else(|e| e.into_inner());
+            let tmp = path.with_extension(format!("json.tmp-{}", std::process::id()));
             if std::fs::write(&tmp, json).is_ok() {
                 let _ = std::fs::rename(&tmp, &path);
             }
