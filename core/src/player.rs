@@ -71,47 +71,97 @@ mod ffi {
         pub data: *mut c_void,
     }
 
-    #[link(name = "mpv")]
-    unsafe extern "C" {
-        pub fn mpv_create() -> *mut mpv_handle;
-        pub fn mpv_initialize(ctx: *mut mpv_handle) -> c_int;
-        pub fn mpv_terminate_destroy(ctx: *mut mpv_handle);
-        pub fn mpv_set_option_string(
-            ctx: *mut mpv_handle,
-            name: *const c_char,
-            data: *const c_char,
-        ) -> c_int;
-        pub fn mpv_command(ctx: *mut mpv_handle, args: *mut *const c_char) -> c_int;
-        pub fn mpv_set_property(
-            ctx: *mut mpv_handle,
-            name: *const c_char,
-            format: c_int,
-            data: *mut c_void,
-        ) -> c_int;
-        pub fn mpv_observe_property(
-            ctx: *mut mpv_handle,
-            id: u64,
-            name: *const c_char,
-            format: c_int,
-        ) -> c_int;
-        pub fn mpv_wait_event(ctx: *mut mpv_handle, timeout: f64) -> *mut mpv_event;
-        pub fn mpv_error_string(error: c_int) -> *const c_char;
-        pub fn mpv_render_context_create(
-            res: *mut *mut mpv_render_context,
-            mpv: *mut mpv_handle,
-            params: *mut mpv_render_param,
-        ) -> c_int;
-        pub fn mpv_render_context_set_update_callback(
-            ctx: *mut mpv_render_context,
-            callback: Option<unsafe extern "C" fn(*mut c_void)>,
-            callback_ctx: *mut c_void,
-        );
-        pub fn mpv_render_context_update(ctx: *mut mpv_render_context) -> u64;
-        pub fn mpv_render_context_render(
-            ctx: *mut mpv_render_context,
-            params: *mut mpv_render_param,
-        ) -> c_int;
-        pub fn mpv_render_context_free(ctx: *mut mpv_render_context);
+    /// libmpv is opened on first use (`load`), not linked: linking it made the dynamic loader
+    /// resolve its ~200 shared libraries before `main` in every app, about 70 ms of every launch
+    /// whether or not a video is ever played.
+    macro_rules! mpv_api {
+        ($( fn $name:ident($($arg:ident: $ty:ty),*) $(-> $ret:ty)?; )*) => {
+            #[allow(non_snake_case)]
+            struct Api {
+                $( $name: unsafe extern "C" fn($($ty),*) $(-> $ret)?, )*
+            }
+
+            static API: std::sync::OnceLock<Result<Api, String>> = std::sync::OnceLock::new();
+
+            /// Open libmpv and look up every function. Cheap after the first call.
+            pub fn load() -> Result<(), String> {
+                API.get_or_init(open).as_ref().map(|_| ()).map_err(Clone::clone)
+            }
+
+            fn open() -> Result<Api, String> {
+                let lib = open_library()?;
+                Ok(Api {
+                    $( $name: {
+                        let sym = symbol(lib, concat!(stringify!($name), "\0"))?;
+                        // SAFETY: the symbol is libmpv's exported function of this name, whose C
+                        // signature the declaration above mirrors (mpv/client.h, mpv/render.h).
+                        unsafe { std::mem::transmute::<*mut c_void, unsafe extern "C" fn($($ty),*) $(-> $ret)?>(sym) }
+                    }, )*
+                })
+            }
+
+            $(
+                /// # Safety
+                /// As the libmpv C function of the same name. Only called after `load` succeeded.
+                pub unsafe fn $name($($arg: $ty),*) $(-> $ret)? {
+                    let api = API
+                        .get()
+                        .and_then(|r| r.as_ref().ok())
+                        .expect("libmpv used before Player::new loaded it");
+                    // SAFETY: forwarded to the caller's contract.
+                    unsafe { (api.$name)($($arg),*) }
+                }
+            )*
+        };
+    }
+
+    fn open_library() -> Result<*mut c_void, String> {
+        let names: &[&str] = if cfg!(target_os = "macos") {
+            &[
+                "libmpv.2.dylib",
+                "libmpv.dylib",
+                "/opt/homebrew/lib/libmpv.dylib",
+                "/usr/local/lib/libmpv.dylib",
+            ]
+        } else {
+            &["libmpv.so.2", "libmpv.so"]
+        };
+        for name in names {
+            let c = std::ffi::CString::new(*name).map_err(|e| e.to_string())?;
+            // SAFETY: a NUL-terminated name; the handle is never closed (libmpv stays loaded).
+            let h = unsafe { libc::dlopen(c.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL) };
+            if !h.is_null() {
+                return Ok(h);
+            }
+        }
+        Err("libmpv is not installed (looked for libmpv.so.2 / libmpv.dylib)".to_string())
+    }
+
+    fn symbol(lib: *mut c_void, name: &str) -> Result<*mut c_void, String> {
+        // SAFETY: `lib` is a live handle from dlopen and `name` ends with a NUL.
+        let p = unsafe { libc::dlsym(lib, name.as_ptr().cast()) };
+        if p.is_null() {
+            Err(format!("libmpv lacks {}", name.trim_end_matches('\0')))
+        } else {
+            Ok(p)
+        }
+    }
+
+    mpv_api! {
+        fn mpv_create() -> *mut mpv_handle;
+        fn mpv_initialize(ctx: *mut mpv_handle) -> c_int;
+        fn mpv_terminate_destroy(ctx: *mut mpv_handle);
+        fn mpv_set_option_string(ctx: *mut mpv_handle, name: *const c_char, data: *const c_char) -> c_int;
+        fn mpv_command(ctx: *mut mpv_handle, args: *mut *const c_char) -> c_int;
+        fn mpv_set_property(ctx: *mut mpv_handle, name: *const c_char, format: c_int, data: *mut c_void) -> c_int;
+        fn mpv_observe_property(ctx: *mut mpv_handle, id: u64, name: *const c_char, format: c_int) -> c_int;
+        fn mpv_wait_event(ctx: *mut mpv_handle, timeout: f64) -> *mut mpv_event;
+        fn mpv_error_string(error: c_int) -> *const c_char;
+        fn mpv_render_context_create(res: *mut *mut mpv_render_context, mpv: *mut mpv_handle, params: *mut mpv_render_param) -> c_int;
+        fn mpv_render_context_set_update_callback(ctx: *mut mpv_render_context, callback: Option<unsafe extern "C" fn(*mut c_void)>, callback_ctx: *mut c_void);
+        fn mpv_render_context_update(ctx: *mut mpv_render_context) -> u64;
+        fn mpv_render_context_render(ctx: *mut mpv_render_context, params: *mut mpv_render_param) -> c_int;
+        fn mpv_render_context_free(ctx: *mut mpv_render_context);
     }
 }
 
@@ -359,6 +409,7 @@ impl Player {
     /// Start mpv. Frames come in `format`; `waker` runs (on a player thread) whenever a new
     /// frame or a state change is ready, so the UI can schedule a redraw.
     pub fn new(format: PixelFormat, waker: impl Fn() + Send + Sync + 'static) -> Result<Player> {
+        ffi::load().map_err(Error::Player)?;
         // SAFETY: plain constructor; null on failure.
         let raw = unsafe { ffi::mpv_create() };
         if raw.is_null() {
