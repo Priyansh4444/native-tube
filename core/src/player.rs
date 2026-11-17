@@ -642,12 +642,12 @@ impl Player {
 
     /// Seek to an absolute position in seconds.
     pub fn seek(&self, seconds: f64) {
-        let _ = self.command(&["seek", &format!("{:.3}", seconds.max(0.0)), "absolute"]);
+        let _ = self.command(&["seek", &format!("{:.3}", seconds.max(0.0)), "absolute+exact"]);
     }
 
     /// Seek by a relative amount in seconds.
     pub fn seek_by(&self, seconds: f64) {
-        let _ = self.command(&["seek", &format!("{seconds:.3}"), "relative"]);
+        let _ = self.command(&["seek", &format!("{seconds:.3}"), "relative+exact"]);
     }
 
     /// 0-100. Remembered across launches.
