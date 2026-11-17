@@ -270,9 +270,34 @@ impl Client {
     // ---- public API -------------------------------------------------------------------------
 
     /// The home feed for a topic id from [`TOPICS`] (unknown ids fall back to "all").
+    ///
+    /// The last answer per topic is kept on disk for [`HOME_CACHE_SECS`], so a relaunch shows the
+    /// feed at once and switching back to a topic doesn't ask YouTube again. Recorded test data
+    /// (`NT_FIXTURES`) bypasses this cache, so benchmarks stay deterministic.
     pub fn home(&self, topic: &str) -> Job<Page<Video>> {
         let (this, topic) = (self.clone(), topic.to_string());
-        Job::spawn(async move { this.home_raw(topic).await })
+        Job::spawn(async move {
+            let cached = this.fixtures.is_none().then(|| home_cache_path(&topic));
+            if let Some(path) = &cached
+                && let Some(page) = read_fresh(path, HOME_CACHE_SECS)
+            {
+                return Ok(page);
+            }
+            let page = this.home_raw(topic).await?;
+            if let Some(path) = cached
+                && let Ok(json) = serde_json::to_vec(&page)
+            {
+                // A ~100 KB file, written before returning so a short-lived caller keeps it too.
+                if let Some(dir) = path.parent() {
+                    let _ = std::fs::create_dir_all(dir);
+                }
+                let tmp = path.with_extension(format!("tmp-{}", std::process::id()));
+                if std::fs::write(&tmp, json).is_ok() {
+                    let _ = std::fs::rename(&tmp, &path);
+                }
+            }
+            Ok(page)
+        })
     }
 
     /// Video search results.
@@ -373,6 +398,34 @@ impl Client {
             Ok(all.into_iter().map(|(_, v)| v).take(120).collect())
         })
     }
+}
+
+/// How long a home feed is reused from disk.
+pub const HOME_CACHE_SECS: u64 = 5 * 60;
+
+fn home_cache_path(topic: &str) -> std::path::PathBuf {
+    let safe: String = topic
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .collect();
+    crate::library::data_dir().join("cache").join(format!(
+        "home-{}.json",
+        if safe.is_empty() { "all" } else { &safe }
+    ))
+}
+
+/// A cached page if the file is younger than `max_age_secs` and still parses.
+fn read_fresh(path: &std::path::Path, max_age_secs: u64) -> Option<Page<Video>> {
+    let age = std::fs::metadata(path)
+        .ok()?
+        .modified()
+        .ok()?
+        .elapsed()
+        .ok()?;
+    if age.as_secs() >= max_age_secs {
+        return None;
+    }
+    serde_json::from_slice(&std::fs::read(path).ok()?).ok()
 }
 
 /// Deal items from several pages out in turn, skipping duplicates. Continuations become one "multi" cursor.

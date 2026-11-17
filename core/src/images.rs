@@ -7,7 +7,7 @@ use crate::error::{Error, Result};
 use crate::model::RgbaImage;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, OnceLock};
-use tokio::sync::{OnceCell, Semaphore};
+use tokio::sync::OnceCell;
 
 /// Decoded pixels kept across all images. Thumbnails at 320x180 are 230 KB each, so ~400 of them.
 const BUDGET_BYTES: usize = 96 * 1024 * 1024;
@@ -33,9 +33,51 @@ fn cache() -> &'static Mutex<Cache> {
     })
 }
 
-fn fetch_gate() -> &'static Semaphore {
-    static S: OnceLock<Semaphore> = OnceLock::new();
-    S.get_or_init(|| Semaphore::new(PARALLEL_FETCHES))
+/// At most [`PARALLEL_FETCHES`] downloads at once, and when they queue, the **newest** request
+/// goes first: after a fast scroll the thumbnails now on screen are the last ones asked for, so
+/// they must not wait behind dozens the viewer has already scrolled past.
+struct LifoGate {
+    state: Mutex<(usize, Vec<tokio::sync::oneshot::Sender<()>>)>,
+}
+
+struct GateTurn;
+
+impl LifoGate {
+    async fn acquire(&'static self) -> GateTurn {
+        let rx = {
+            let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            if st.0 < PARALLEL_FETCHES {
+                st.0 += 1;
+                return GateTurn;
+            }
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            st.1.push(tx);
+            rx
+        };
+        // The turn is handed over by a finishing fetch; the count stays the same.
+        let _ = rx.await;
+        GateTurn
+    }
+}
+
+impl Drop for GateTurn {
+    fn drop(&mut self) {
+        let gate = fetch_gate();
+        let mut st = gate.state.lock().unwrap_or_else(|e| e.into_inner());
+        while let Some(next) = st.1.pop() {
+            if next.send(()).is_ok() {
+                return;
+            }
+        }
+        st.0 = st.0.saturating_sub(1);
+    }
+}
+
+fn fetch_gate() -> &'static LifoGate {
+    static G: OnceLock<LifoGate> = OnceLock::new();
+    G.get_or_init(|| LifoGate {
+        state: Mutex::new((0, Vec::new())),
+    })
 }
 
 /// An image decoded to RGBA and downscaled so it is at most `max_width` pixels wide
@@ -60,23 +102,37 @@ pub fn image(url: &str, max_width: u32) -> Job<Arc<RgbaImage>> {
     if let Some(done) = slot.get() {
         return Job::ready(done.clone());
     }
-    let (url, max_width) = key.clone();
     let (tx, rx_job) = job_pair();
     crate::client::runtime().spawn(async move {
+        let (url, max_width) = key.clone();
+        let mine = slot.clone();
+        let own_key = key.clone();
         let result = slot
             .get_or_init(|| async move {
                 let bytes = {
-                    let _permit = fetch_gate().acquire().await.map_err(|_| Error::Cancelled)?;
+                    let _turn = fetch_gate().acquire().await;
                     client().get_bytes(&url).await?
                 };
-                tokio::task::spawn_blocking(move || decode(&bytes, max_width))
+                let img = tokio::task::spawn_blocking(move || decode(&bytes, max_width))
                     .await
                     .map_err(|_| Error::Cancelled)?
-                    .map(Arc::new)
+                    .map(Arc::new)?;
+                // Counted exactly once, by the job that decoded it, and only if this slot is
+                // still the one in the cache (it can be evicted or replaced while in flight).
+                admit(&key, &mine, img.pixels.len());
+                Ok(img)
             })
             .await
             .clone();
-        account(&key, &result);
+        if result.is_err() {
+            // Failures aren't cached, so a flaky network is retried next time. Remove only our
+            // own slot: a newer request for the same image may already sit under the key.
+            let mut c = cache().lock().unwrap_or_else(|e| e.into_inner());
+            if c.slots.get(&own_key).is_some_and(|s| Arc::ptr_eq(s, &slot)) {
+                c.slots.remove(&own_key);
+                c.order.retain(|o| *o != own_key);
+            }
+        }
         let _ = tx.send(result);
     });
     rx_job
@@ -87,27 +143,31 @@ fn job_pair<T: Send + 'static>() -> (tokio::sync::oneshot::Sender<Result<T>>, Jo
     (tx, Job::from_receiver(rx))
 }
 
-/// Count a finished image against the budget, evicting the least recently used. Failures aren't
-/// cached, so a flaky network gets retried next time the image is asked for.
-fn account(key: &(String, u32), result: &Result<Arc<RgbaImage>>) {
+/// Count a decoded image against the budget, then evict least recently used *finished* images
+/// until the cache fits. Images still loading are never evicted: their bytes aren't counted yet.
+fn admit(key: &(String, u32), slot: &Slot, len: usize) {
     let mut c = cache().lock().unwrap_or_else(|e| e.into_inner());
-    match result {
-        Ok(img) => {
-            c.bytes += img.pixels.len();
-            while c.bytes > BUDGET_BYTES && c.order.len() > 1 {
-                let Some(old) = c.order.pop_front() else {
-                    break;
-                };
-                if let Some(slot) = c.slots.remove(&old)
-                    && let Some(Ok(img)) = slot.get()
-                {
+    if !c.slots.get(key).is_some_and(|s| Arc::ptr_eq(s, slot)) {
+        return;
+    }
+    c.bytes += len;
+    let mut i = 0;
+    while c.bytes > BUDGET_BYTES && i < c.order.len() {
+        let k = c.order[i].clone();
+        if k == *key {
+            i += 1;
+            continue;
+        }
+        let finished = c.slots.get(&k).and_then(|s| s.get().cloned());
+        match finished {
+            Some(done) => {
+                c.order.remove(i);
+                c.slots.remove(&k);
+                if let Ok(img) = done {
                     c.bytes = c.bytes.saturating_sub(img.pixels.len());
                 }
             }
-        }
-        Err(_) => {
-            c.slots.remove(key);
-            c.order.retain(|k| k != key);
+            None => i += 1, // still loading
         }
     }
 }
@@ -142,5 +202,47 @@ impl RgbaImage {
             px.swap(0, 2);
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn done(len: usize) -> Slot {
+        let img = RgbaImage {
+            width: 1,
+            height: 1,
+            pixels: bytes::Bytes::from(vec![0u8; len]),
+        };
+        Arc::new(OnceCell::new_with(Some(Ok(Arc::new(img)))))
+    }
+
+    /// One decode is counted once; a slot that was evicted or replaced while loading is not
+    /// counted; loading slots are never evicted. (Uses the global cache with private keys.)
+    #[test]
+    fn accounting() {
+        let before = cached_bytes();
+        let k = |n: &str| (format!("test://{n}"), 0u32);
+        let a = done(1000);
+        {
+            let mut c = cache().lock().unwrap();
+            c.slots.insert(k("a"), a.clone());
+            c.order.push_back(k("a"));
+        }
+        admit(&k("a"), &a, 1000);
+        assert_eq!(cached_bytes() - before, 1000);
+        // A slot no longer in the cache isn't counted.
+        let gone = done(5000);
+        admit(&k("gone"), &gone, 5000);
+        assert_eq!(cached_bytes() - before, 1000);
+        // A replaced slot isn't counted either.
+        let other = done(7000);
+        admit(&k("a"), &other, 7000);
+        assert_eq!(cached_bytes() - before, 1000);
+        let mut c = cache().lock().unwrap();
+        c.slots.remove(&k("a"));
+        c.order.retain(|o| *o != k("a"));
+        c.bytes -= 1000;
     }
 }
