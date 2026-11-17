@@ -158,6 +158,14 @@ pub struct PlaybackState {
     pub buffered_ahead: f64,
     /// The video id or path last passed to `load`.
     pub source: Option<String>,
+    /// Playback speed, 1.0 normal.
+    pub speed: f64,
+    /// A live stream: no duration, no seeking backwards beyond the window.
+    pub is_live: bool,
+    /// Height of the stream being played (0 until known, and for live streams).
+    pub height: u32,
+    /// Heights this video offers, ascending, for a quality menu.
+    pub heights: Vec<u32>,
 }
 
 impl PlaybackState {
@@ -249,6 +257,10 @@ struct Shared {
     /// False between a `load`/`stop` and the new file being loaded, so a picture of the
     /// previous video that mpv renders late is never published as the new one's.
     accept_frames: AtomicBool,
+    /// The viewer's quality choice: `None` is Auto (from the drawn size), `Some(h)` a fixed height.
+    quality: Mutex<Option<u32>>,
+    /// Automatic recoveries used for the current video (expired link, dropped connection).
+    recoveries: AtomicU64,
     /// Bumped by every `load` and `stop`; a resolve that finishes for an older ticket is dropped.
     load_ticket: AtomicU64,
     /// Held while issuing a command from a worker, so `Drop` can't free mpv underneath it.
@@ -319,6 +331,7 @@ const OBSERVED: &[(&str, c_int)] = &[
     ("dheight", ffi::FORMAT_INT64),
     ("demuxer-cache-duration", ffi::FORMAT_DOUBLE),
     ("eof-reached", ffi::FORMAT_FLAG),
+    ("speed", ffi::FORMAT_DOUBLE),
 ];
 
 fn force_muted() -> bool {
@@ -430,6 +443,7 @@ impl Player {
 
         let shared = Arc::new(Shared {
             state: Mutex::new(PlaybackState {
+                speed: 1.0,
                 volume,
                 ..Default::default()
             }),
@@ -439,6 +453,8 @@ impl Player {
             render_signal: (Mutex::new(false), Condvar::new()),
             shutdown: AtomicBool::new(false),
             accept_frames: AtomicBool::new(false),
+            quality: Mutex::new(None),
+            recoveries: AtomicU64::new(0),
             load_ticket: AtomicU64::new(0),
             worker_cmd: Mutex::new(()),
             target: Mutex::new((1280, 720)),
@@ -569,37 +585,8 @@ impl Player {
         {
             return self.command(&["loadfile", &path, "replace"]);
         }
-        let (mpv, shared, id) = (self.mpv.clone(), self.shared.clone(), video_id.to_string());
-        crate::client::runtime().spawn(async move {
-            let found = crate::resolve::resolve(&id).await;
-            let _guard = shared.worker_cmd.lock().unwrap_or_else(|e| e.into_inner());
-            if shared.shutdown.load(Ordering::Acquire)
-                || shared.load_ticket.load(Ordering::Acquire) != ticket
-            {
-                return; // the player is gone, or another video was asked for meanwhile
-            }
-            let result = found.and_then(|s| {
-                let mut args = vec![
-                    "loadfile".to_string(),
-                    s.video,
-                    "replace".into(),
-                    "-1".into(),
-                ];
-                if let Some(audio) = s.audio {
-                    // %N% quotes a value of N bytes, so commas and '=' in the URL are safe.
-                    args.push(format!("audio-file=%{}%{}", audio.len(), audio));
-                }
-                command(&mpv, &args.iter().map(String::as_str).collect::<Vec<_>>())
-            });
-            if let Err(e) = result {
-                let message = match e {
-                    Error::Player(m) => m,
-                    other => other.to_string(),
-                };
-                shared.lock_state().status = Status::Failed(message);
-                shared.wake();
-            }
-        });
+        self.shared.recoveries.store(0, Ordering::Release);
+        begin_load(&self.mpv, &self.shared, video_id, None, ticket);
         Ok(())
     }
 
@@ -642,12 +629,53 @@ impl Player {
 
     /// Seek to an absolute position in seconds.
     pub fn seek(&self, seconds: f64) {
-        let _ = self.command(&["seek", &format!("{:.3}", seconds.max(0.0)), "absolute+exact"]);
+        let _ = self.command(&[
+            "seek",
+            &format!("{:.3}", seconds.max(0.0)),
+            "absolute+exact",
+        ]);
     }
 
     /// Seek by a relative amount in seconds.
     pub fn seek_by(&self, seconds: f64) {
         let _ = self.command(&["seek", &format!("{seconds:.3}"), "relative+exact"]);
+    }
+
+    /// Playback speed, 0.25 to 2.0.
+    pub fn set_speed(&self, speed: f64) {
+        self.set_double("speed", speed.clamp(0.25, 2.0));
+    }
+
+    /// The viewer's quality choice: `None` for Auto (picked from the size the video is drawn at),
+    /// or a height from [`PlaybackState::heights`]. Changing it re-opens the current video at the
+    /// same position.
+    pub fn set_quality(&self, height: Option<u32>) {
+        {
+            let mut q = self
+                .shared
+                .quality
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if *q == height {
+                return;
+            }
+            *q = height;
+        }
+        let st = self.state();
+        if let Some(id) = st.source.filter(|_| !matches!(st.status, Status::Idle))
+            && std::env::var("NT_VIDEO_OVERRIDE").map_or(true, |p| p.is_empty())
+        {
+            let ticket = self.shared.load_ticket.fetch_add(1, Ordering::AcqRel) + 1;
+            begin_load(&self.mpv, &self.shared, &id, Some(st.position), ticket);
+        }
+    }
+
+    pub fn quality(&self) -> Option<u32> {
+        *self
+            .shared
+            .quality
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
     }
 
     /// 0-100. Remembered across launches.
@@ -738,6 +766,74 @@ fn command(mpv: &Handle, args: &[&str]) -> Result<()> {
     }
 }
 
+/// The height to ask for: the viewer's choice, or for Auto the smallest step of the ladder that
+/// covers the size the video is drawn at.
+fn wanted_height(shared: &Shared) -> u32 {
+    let cap = crate::resolve::default_max_height();
+    if let Some(h) = *shared.quality.lock().unwrap_or_else(|e| e.into_inner()) {
+        return h;
+    }
+    let drawn = shared.target.lock().unwrap_or_else(|e| e.into_inner()).1;
+    crate::resolve::HEIGHTS
+        .iter()
+        .copied()
+        .find(|h| *h >= drawn)
+        .unwrap_or(cap)
+        .min(cap)
+}
+
+/// Find the streams on a core worker and hand them to mpv, starting at `start` seconds if given.
+/// The answer is dropped if another load or a stop happened meanwhile (`ticket`).
+fn begin_load(
+    mpv: &Arc<Handle>,
+    shared: &Arc<Shared>,
+    video_id: &str,
+    start: Option<f64>,
+    ticket: u64,
+) {
+    let (mpv, shared, id) = (mpv.clone(), shared.clone(), video_id.to_string());
+    let height = wanted_height(&shared);
+    crate::client::runtime().spawn(async move {
+        let found = crate::resolve::resolve(&id, height).await;
+        let _guard = shared.worker_cmd.lock().unwrap_or_else(|e| e.into_inner());
+        if shared.shutdown.load(Ordering::Acquire)
+            || shared.load_ticket.load(Ordering::Acquire) != ticket
+        {
+            return; // the player is gone, or another video was asked for meanwhile
+        }
+        let result = found.and_then(|s| {
+            {
+                let mut st = shared.lock_state();
+                st.is_live = s.is_live;
+                st.height = s.height;
+                st.heights = s.heights.clone();
+            }
+            // %N% quotes a value of N bytes, so commas and '=' in a URL are safe.
+            let mut options = Vec::new();
+            if let Some(audio) = &s.audio {
+                options.push(format!("audio-file=%{}%{}", audio.len(), audio));
+            }
+            if let Some(t) = start.filter(|t| *t > 0.5 && !s.is_live) {
+                options.push(format!("start={t:.3}"));
+            }
+            let options = options.join(",");
+            let mut args = vec!["loadfile", s.video.as_str(), "replace", "-1"];
+            if !options.is_empty() {
+                args.push(&options);
+            }
+            command(&mpv, &args)
+        });
+        if let Err(e) = result {
+            let message = match e {
+                Error::Player(m) => m,
+                other => other.to_string(),
+            };
+            shared.lock_state().status = Status::Failed(message);
+        }
+        shared.wake();
+    });
+}
+
 fn event_loop(mpv: Arc<Handle>, shared: Arc<Shared>) {
     loop {
         // SAFETY: valid handle until `Player::drop` destroys it after joining this thread.
@@ -764,6 +860,23 @@ fn event_loop(mpv: Arc<Handle>, shared: Arc<Shared>) {
                 // SAFETY: END_FILE carries an mpv_event_end_file.
                 let end = unsafe { &*(ev.data as *const ffi::mpv_event_end_file) };
                 let mut s = shared.lock_state();
+                // A stream link that expired or a connection that dropped ends the file with an
+                // error part-way through. That is not the end of the video: find fresh links and
+                // carry on from the same place, up to three times per video.
+                let resume = (end.reason == ffi::END_FILE_REASON_ERROR
+                    && s.position > 1.0
+                    && shared.recoveries.fetch_add(1, Ordering::AcqRel) < 3
+                    && std::env::var("NT_VIDEO_OVERRIDE").map_or(true, |p| p.is_empty()))
+                .then(|| (s.source.clone(), s.position));
+                if let Some((Some(id), at)) = resume {
+                    s.status = Status::Loading;
+                    s.buffering = true;
+                    drop(s);
+                    let ticket = shared.load_ticket.fetch_add(1, Ordering::AcqRel) + 1;
+                    begin_load(&mpv, &shared, &id, Some(at), ticket);
+                    shared.wake();
+                    continue;
+                }
                 match end.reason {
                     ffi::END_FILE_REASON_ERROR => {
                         s.status = Status::Failed(format!(
@@ -820,7 +933,9 @@ fn apply_property(shared: &Shared, index: usize, prop: &ffi::mpv_event_property)
         s.status.clone(),
     );
     match *name {
-        "time-pos" => s.position = double.unwrap_or(0.0),
+        // Keep the last known position when mpv has none (between files, after an error): the
+        // recovery path resumes from it.
+        "time-pos" => s.position = double.unwrap_or(s.position),
         "duration" => s.duration = double.unwrap_or(0.0),
         "pause" => s.paused = flag.unwrap_or(false),
         "paused-for-cache" => s.buffering = flag.unwrap_or(false),
@@ -838,6 +953,7 @@ fn apply_property(shared: &Shared, index: usize, prop: &ffi::mpv_event_property)
             s.video_size = (w > 0 || h > 0).then_some((w, h));
         }
         "demuxer-cache-duration" => s.buffered_ahead = double.unwrap_or(0.0),
+        "speed" => s.speed = double.unwrap_or(1.0),
         "eof-reached" => {
             if flag == Some(true) && s.status == Status::Ready {
                 s.status = Status::Ended;

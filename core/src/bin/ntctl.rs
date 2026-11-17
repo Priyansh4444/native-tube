@@ -112,7 +112,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             }
         }
         "resolve" => {
-            let s = runtime().block_on(resolve::resolve(&arg(1)))?;
+            let s = runtime().block_on(resolve::resolve(&arg(1), resolve::default_max_height()))?;
             println!(
                 "video: {}  audio: {}  live: {}",
                 s.video_desc, s.audio_desc, s.is_live

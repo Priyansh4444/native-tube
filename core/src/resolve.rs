@@ -38,6 +38,10 @@ pub struct Streams {
     /// Separate audio track URL; `None` for HLS.
     pub audio: Option<String>,
     pub is_live: bool,
+    /// Height of the chosen video stream (0 for HLS, where the manifest decides).
+    pub height: u32,
+    /// The heights this video offers, ascending, for a quality menu.
+    pub heights: Vec<u32>,
     /// e.g. "720p30 avc1 1.2 Mb/s"
     pub video_desc: String,
     /// e.g. "mp4a 129 kb/s"
@@ -93,15 +97,21 @@ async fn visitor_data() -> Result<(String, f64)> {
     Ok((visitor, started.elapsed().as_secs_f64() * 1000.0))
 }
 
-fn max_height() -> u64 {
+/// The quality ladder offered to the viewer. Capped at 1080p: above that YouTube only serves
+/// VP9/AV1, which most laptops decode in software.
+pub const HEIGHTS: [u32; 6] = [144, 240, 360, 480, 720, 1080];
+
+/// The default cap when the caller has no opinion (`NT_MAX_HEIGHT` overrides it).
+pub fn default_max_height() -> u32 {
     std::env::var("NT_MAX_HEIGHT")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(720)
+        .unwrap_or(1080)
 }
 
 /// Find the streams for a video.
-pub async fn resolve(video_id: &str) -> Result<Streams> {
+/// `max_height` caps the video stream (see [`HEIGHTS`]).
+pub async fn resolve(video_id: &str, max_height: u32) -> Result<Streams> {
     let (visitor, visitor_ms) = visitor_data().await?;
     let started = Instant::now();
     let _turn = crate::polite::turn().await?;
@@ -136,14 +146,14 @@ pub async fn resolve(video_id: &str) -> Result<Streams> {
     )?;
     let v: Value = resp.json().await?;
     let player_ms = started.elapsed().as_secs_f64() * 1000.0;
-    let mut streams = pick(&v)?;
+    let mut streams = pick(&v, max_height)?;
     streams.visitor_ms = visitor_ms;
     streams.player_ms = player_ms;
     Ok(streams)
 }
 
 /// Choose streams from a `/player` answer. Pure, so it is testable.
-pub(crate) fn pick(v: &Value) -> Result<Streams> {
+pub(crate) fn pick(v: &Value, max_height: u32) -> Result<Streams> {
     let status = v
         .pointer("/playabilityStatus/status")
         .and_then(Value::as_str)
@@ -183,6 +193,8 @@ pub(crate) fn pick(v: &Value) -> Result<Streams> {
             video: hls.to_string(),
             audio: None,
             is_live: true,
+            height: 0,
+            heights: Vec::new(),
             video_desc: "live HLS".into(),
             audio_desc: "in HLS".into(),
             visitor_ms: 0.0,
@@ -205,30 +217,64 @@ pub(crate) fn pick(v: &Value) -> Result<Streams> {
             .to_string()
     };
     let num = |f: &Value, k: &str| f.get(k).and_then(Value::as_u64).unwrap_or(0);
-    let max_h = max_height();
+    let max_h = u64::from(max_height);
 
     // Video: H.264 first (hardware decoders everywhere), then VP9. AV1 decodes in software on
     // most machines, so it is never chosen. Highest resolution within the cap, then frame rate.
-    let video = ["avc1", "vp9", "vp09"]
+    // Video: the highest resolution within the cap, then frame rate; at equal quality H.264
+    // first (hardware decoders everywhere), then VP9. AV1 decodes in software on most machines,
+    // so it is never chosen.
+    let playable = |f: &&&Value| {
+        let m = mime(f);
+        m.starts_with("video/") && (m.contains("avc1") || m.contains("vp9") || m.contains("vp09"))
+    };
+    let video = formats
         .iter()
-        .find_map(|codec| {
+        .filter(playable)
+        .filter(|f| num(f, "height") <= max_h)
+        .max_by_key(|f| {
+            (
+                num(f, "height"),
+                num(f, "fps"),
+                mime(f).contains("avc1"),
+                num(f, "bitrate"),
+            )
+        })
+        // Nothing under the cap (e.g. a 144p cap on a 240p-minimum video): take the smallest.
+        .or_else(|| {
             formats
                 .iter()
-                .filter(|f| {
-                    mime(f).starts_with("video/")
-                        && mime(f).contains(codec)
-                        && num(f, "height") <= max_h
-                })
-                .max_by_key(|f| (num(f, "height"), num(f, "fps"), num(f, "bitrate")))
+                .filter(playable)
+                .min_by_key(|f| num(f, "height"))
         })
         .ok_or_else(|| Error::Player("No playable video stream".into()))?;
-    // Audio: AAC in MP4 first, then Opus; highest bitrate.
-    let audio = ["audio/mp4", "audio/webm"].iter().find_map(|kind| {
-        formats
-            .iter()
-            .filter(|f| mime(f).starts_with(kind))
-            .max_by_key(|f| num(f, "bitrate"))
-    });
+    let mut heights: Vec<u32> = formats
+        .iter()
+        .filter(playable)
+        .map(|f| num(f, "height") as u32)
+        .filter(|h| HEIGHTS.contains(h))
+        .collect();
+    heights.sort_unstable();
+    heights.dedup();
+    // Audio: the original language, not a dub, and not the loudness-compressed variant; then AAC
+    // in MP4 before Opus; then the highest bitrate.
+    let is_original = |f: &Value| {
+        f.pointer("/audioTrack/audioIsDefault")
+            .and_then(Value::as_bool)
+            .unwrap_or(true)
+    };
+    let is_drc = |f: &Value| f.get("isDrc").and_then(Value::as_bool).unwrap_or(false);
+    let audio = formats
+        .iter()
+        .filter(|f| mime(f).starts_with("audio/"))
+        .max_by_key(|f| {
+            (
+                is_original(f),
+                !is_drc(f),
+                mime(f).starts_with("audio/mp4"),
+                num(f, "bitrate"),
+            )
+        });
 
     let codec = |m: &str| {
         m.split("codecs=\"")
@@ -257,6 +303,8 @@ pub(crate) fn pick(v: &Value) -> Result<Streams> {
             .and_then(|a| a.get("url").and_then(Value::as_str))
             .map(str::to_string),
         is_live,
+        height: num(video, "height") as u32,
+        heights,
         video_desc,
         audio_desc,
         visitor_ms: 0.0,
@@ -281,7 +329,7 @@ mod tests {
                 {"url": "opus", "mimeType": "audio/webm; codecs=\"opus\"", "bitrate": 160000}
             ]}
         });
-        let s = pick(&v).unwrap();
+        let s = pick(&v, 720).unwrap();
         assert_eq!(s.video, "v720");
         assert_eq!(s.audio.as_deref(), Some("a128"));
         assert_eq!(s.video_desc, "720p30 avc1 1.5 Mb/s");
@@ -291,7 +339,7 @@ mod tests {
     fn unplayable_reports_reason() {
         let v = json!({"playabilityStatus": {"status": "LOGIN_REQUIRED", "reason": "Sign in to confirm your age"}});
         assert_eq!(
-            pick(&v),
+            pick(&v, 720),
             Err(Error::Player("Sign in to confirm your age".into()))
         );
     }
@@ -303,7 +351,26 @@ mod tests {
             "videoDetails": {"isLive": true},
             "streamingData": {"hlsManifestUrl": "https://m/x.m3u8", "adaptiveFormats": []}
         });
-        let s = pick(&v).unwrap();
+        let s = pick(&v, 720).unwrap();
         assert!(s.is_live && s.audio.is_none() && s.video == "https://m/x.m3u8");
+    }
+
+    #[test]
+    fn prefers_resolution_then_original_audio() {
+        let v = json!({
+            "playabilityStatus": {"status": "OK"},
+            "streamingData": {"adaptiveFormats": [
+                {"url": "avc720", "mimeType": "video/mp4; codecs=\"avc1.4d401f\"", "height": 720, "fps": 30, "bitrate": 1500000},
+                {"url": "vp9_1080", "mimeType": "video/webm; codecs=\"vp9\"", "height": 1080, "fps": 30, "bitrate": 2500000},
+                {"url": "dub", "mimeType": "audio/mp4; codecs=\"mp4a.40.2\"", "bitrate": 190000, "audioTrack": {"audioIsDefault": false}},
+                {"url": "drc", "mimeType": "audio/mp4; codecs=\"mp4a.40.2\"", "bitrate": 150000, "isDrc": true, "audioTrack": {"audioIsDefault": true}},
+                {"url": "orig", "mimeType": "audio/mp4; codecs=\"mp4a.40.2\"", "bitrate": 130000, "audioTrack": {"audioIsDefault": true}}
+            ]}
+        });
+        let s = pick(&v, 1080).unwrap();
+        assert_eq!((s.video.as_str(), s.height), ("vp9_1080", 1080));
+        assert_eq!(s.audio.as_deref(), Some("orig"));
+        assert_eq!(s.heights, vec![720, 1080]);
+        assert_eq!(pick(&v, 720).unwrap().video, "avc720");
     }
 }
