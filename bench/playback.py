@@ -147,7 +147,7 @@ class Core:
     name = "NativeTube core"
 
     def start(self):
-        env = dict(os.environ, NT_MUTE="1", NT_DATA_DIR=str(SCRATCH / "ntdata"))
+        env = dict(os.environ, NT_MUTE="1", NT_NO_MPRIS="1", NT_DATA_DIR=str(SCRATCH / "ntdata"))
         env.pop("NT_VIDEO_OVERRIDE", None)
         env.pop("NT_FIXTURES", None)
         self.p = LineProc([str(ROOT / "core/target/release/ntctl"), "serve"], env=env)

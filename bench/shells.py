@@ -162,7 +162,7 @@ def threads(pids):
 
 def one_run(name, path, watcher, idle, data_dir):
     extra = {"WGPU_POWER_PREF": "low", "WGPU_BACKEND": "vulkan"} if name.endswith("-lowpower") else {}
-    env = dict(os.environ, **extra, NT_APP_ID=APP_ID, NT_MUTE="1", NT_TRACE="1",
+    env = dict(os.environ, **extra, NT_APP_ID=APP_ID, NT_MUTE="1", NT_NO_MPRIS="1", NT_TRACE="1",
                NT_FIXTURES=str(ROOT / ".cache/fixtures"), NT_FIXTURE_MODE="replay",
                NT_DATA_DIR=str(data_dir))
     content = {}

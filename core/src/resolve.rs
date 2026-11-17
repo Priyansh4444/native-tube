@@ -38,6 +38,9 @@ pub struct Streams {
     /// Separate audio track URL; `None` for HLS.
     pub audio: Option<String>,
     pub is_live: bool,
+    /// The video's title and channel, from the same answer (for "now playing").
+    pub title: String,
+    pub author: String,
     /// Height of the chosen video stream (0 for HLS, where the manifest decides).
     pub height: u32,
     /// The heights this video offers, ascending, for a quality menu.
@@ -152,6 +155,13 @@ pub async fn resolve(video_id: &str, max_height: u32) -> Result<Streams> {
     Ok(streams)
 }
 
+fn detail(v: &Value, pointer: &str) -> String {
+    v.pointer(pointer)
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string()
+}
+
 /// Choose streams from a `/player` answer. Pure, so it is testable.
 pub(crate) fn pick(v: &Value, max_height: u32) -> Result<Streams> {
     let status = v
@@ -193,6 +203,8 @@ pub(crate) fn pick(v: &Value, max_height: u32) -> Result<Streams> {
             video: hls.to_string(),
             audio: None,
             is_live: true,
+            title: detail(v, "/videoDetails/title"),
+            author: detail(v, "/videoDetails/author"),
             height: 0,
             heights: Vec::new(),
             video_desc: "live HLS".into(),
@@ -303,6 +315,8 @@ pub(crate) fn pick(v: &Value, max_height: u32) -> Result<Streams> {
             .and_then(|a| a.get("url").and_then(Value::as_str))
             .map(str::to_string),
         is_live,
+        title: detail(v, "/videoDetails/title"),
+        author: detail(v, "/videoDetails/author"),
         height: num(video, "height") as u32,
         heights,
         video_desc,

@@ -14,6 +14,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# MPRIS: media keys, "now playing", and idle inhibit for desktops that tie it to playing players.
+zbus = { version = "6", default-features = false, features = ["tokio", "service"] }
+
 [[bin]]
 name = "ntctl"
 path = "src/bin/ntctl.rs"

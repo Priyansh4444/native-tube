@@ -33,6 +33,10 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         // SAFETY: set before any other thread exists.
         unsafe { std::env::set_var("NT_MUTE", "1") };
     }
+    if std::env::var_os("NT_NO_MPRIS").is_none() {
+        // SAFETY: as above. A test tool stays out of the desktop's media controls.
+        unsafe { std::env::set_var("NT_NO_MPRIS", "1") };
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     let arg = |i: usize| args.get(i).cloned().unwrap_or_default();
     let c = client();

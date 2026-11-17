@@ -216,6 +216,9 @@ pub struct PlaybackState {
     pub height: u32,
     /// Heights this video offers, ascending, for a quality menu.
     pub heights: Vec<u32>,
+    /// Title and channel of what is playing, once the stream is found (empty for local files).
+    pub title: String,
+    pub channel: String,
 }
 
 impl PlaybackState {
@@ -318,6 +321,8 @@ struct Shared {
     /// Largest picture to render, in physical pixels. Default 1280x720.
     target: Mutex<(u32, u32)>,
     stats: Mutex<RenderStats>,
+    /// Pinged on every state change the desktop (MPRIS) may care about.
+    pub(crate) changed: tokio::sync::Notify,
 }
 
 /// Counters for the benchmark report.
@@ -339,6 +344,7 @@ impl Shared {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
     fn wake(&self) {
+        self.changed.notify_one();
         let waker = self.waker.lock().unwrap_or_else(|e| e.into_inner()).clone();
         if let Some(w) = waker {
             w();
@@ -360,6 +366,65 @@ unsafe impl Sync for Handle {}
 struct RenderCtx(*mut ffi::mpv_render_context);
 // SAFETY: the render context is used from the render thread only after creation.
 unsafe impl Send for RenderCtx {}
+
+/// What the desktop may do to a player (see `mpris.rs`). Safe after the player is dropped: every
+/// call takes the same guard `Drop` takes and does nothing once the player is gone.
+#[derive(Clone)]
+pub(crate) struct Remote {
+    mpv: Arc<Handle>,
+    shared: Arc<Shared>,
+}
+
+impl Remote {
+    fn with(&self, f: impl FnOnce(&Handle)) {
+        let _guard = self
+            .shared
+            .worker_cmd
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if !self.shared.shutdown.load(Ordering::Acquire) {
+            f(&self.mpv);
+        }
+    }
+    pub(crate) fn is_gone(&self) -> bool {
+        self.shared.shutdown.load(Ordering::Acquire)
+    }
+    pub(crate) fn state(&self) -> PlaybackState {
+        self.shared.lock_state().clone()
+    }
+    pub(crate) async fn changed(&self) {
+        self.shared.changed.notified().await;
+    }
+    pub(crate) fn set_paused(&self, paused: bool) {
+        self.with(|m| set_flag_raw(m, "pause", paused));
+    }
+    pub(crate) fn seek_to(&self, seconds: f64) {
+        self.with(|m| {
+            let _ = command(
+                m,
+                &[
+                    "seek",
+                    &format!("{:.3}", seconds.max(0.0)),
+                    "absolute+exact",
+                ],
+            );
+        });
+    }
+    pub(crate) fn seek_by(&self, seconds: f64) {
+        self.with(|m| {
+            let _ = command(m, &["seek", &format!("{seconds:.3}"), "relative+exact"]);
+        });
+    }
+}
+
+fn set_flag_raw(mpv: &Handle, name: &str, on: bool) {
+    let n = cstr(name);
+    let mut v: c_int = on.into();
+    // SAFETY: valid handle (callers hold the worker guard or own the Player); FLAG takes an int.
+    unsafe {
+        ffi::mpv_set_property(mpv.0, n.as_ptr(), ffi::FORMAT_FLAG, (&raw mut v).cast());
+    }
+}
 
 /// A video player. Dropping it stops playback and frees mpv.
 pub struct Player {
@@ -510,6 +575,7 @@ impl Player {
             worker_cmd: Mutex::new(()),
             target: Mutex::new((1280, 720)),
             stats: Mutex::new(RenderStats::default()),
+            changed: tokio::sync::Notify::new(),
         });
 
         let api = cstr("sw");
@@ -559,6 +625,11 @@ impl Player {
                 .spawn(move || event_loop(mpv, shared))
                 .map_err(|e| Error::Player(e.to_string()))?
         };
+        #[cfg(target_os = "linux")]
+        crate::mpris::start(Remote {
+            mpv: mpv.clone(),
+            shared: shared.clone(),
+        });
         Ok(Player {
             mpv,
             shared,
@@ -787,6 +858,7 @@ impl Drop for Player {
                 .unwrap_or_else(|e| e.into_inner());
             self.shared.shutdown.store(true, Ordering::Release);
         }
+        self.shared.changed.notify_one();
         self.shared.signal_render();
         if let Some(t) = self.render_thread.take() {
             let _ = t.join();
@@ -858,6 +930,8 @@ fn begin_load(
                 st.is_live = s.is_live;
                 st.height = s.height;
                 st.heights = s.heights.clone();
+                st.title = s.title.clone();
+                st.channel = s.author.clone();
             }
             // %N% quotes a value of N bytes, so commas and '=' in a URL are safe.
             let mut options = Vec::new();

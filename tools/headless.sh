@@ -54,7 +54,8 @@ case "${1:-}" in
     # - the player plays a locally generated test clip instead of the YouTube video.
     # Set NT_LIVE=1 to talk to YouTube and play real videos (still muted).
     root=$(cd "$(dirname "$0")/.." && pwd)
-    export NT_MUTE="${NT_MUTE:-1}" NT_APP_ID="nttest-$fw"
+    # NT_NO_MPRIS: test players never appear in the desktop media widget or take media keys.
+    export NT_MUTE="${NT_MUTE:-1}" NT_NO_MPRIS=1 NT_APP_ID="nttest-$fw"
     # Test runs get their own library, never the owner's (~/.local/share/native-tube).
     export NT_DATA_DIR="${NT_DATA_DIR:-$root/.cache/test-data/$fw}"
     if [[ "${NT_LIVE:-0}" != 1 ]]; then

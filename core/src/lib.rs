@@ -18,6 +18,8 @@ mod innertube;
 mod library;
 pub mod metrics;
 mod model;
+#[cfg(target_os = "linux")]
+mod mpris;
 pub mod player;
 mod polite;
 pub mod resolve;
