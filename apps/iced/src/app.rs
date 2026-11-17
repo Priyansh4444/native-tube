@@ -13,8 +13,8 @@ use iced::{Size, Subscription, Task, event, mouse, window};
 use nt_core::autopilot::Command;
 use nt_core::metrics::marks;
 use nt_core::{
-    ChannelInfo, ChannelRef, Comment, CommentPage, Continuation, PixelFormat, PlaybackState, Player, Status, TOPICS, Video,
-    VideoFrame, WatchInfo, client, library,
+    ChannelInfo, ChannelRef, Comment, CommentPage, Continuation, PixelFormat, PlaybackState,
+    Player, Status, TOPICS, Video, VideoFrame, WatchInfo, client, library,
 };
 use std::cell::Cell;
 use std::sync::Arc;
@@ -49,7 +49,12 @@ pub enum Message {
     OpenChannelOf(ListRef, usize),
     OpenChannel(ChannelRef),
     OpenWatchChannel,
-    FeedLoaded { page: u64, req: u64, append: bool, result: nt_core::Result<nt_core::Page<Video>> },
+    FeedLoaded {
+        page: u64,
+        req: u64,
+        append: bool,
+        result: nt_core::Result<nt_core::Page<Video>>,
+    },
     WatchLoaded(u64, nt_core::Result<WatchInfo>),
     CommentsLoaded(u64, nt_core::Result<CommentPage>),
     ChannelLoaded(u64, nt_core::Result<ChannelInfo>),
@@ -169,6 +174,8 @@ pub struct Watch {
     pub comments_y: Cell<f32>,
 }
 
+// A handful of pages exist at a time; boxing the big variants would only add indirection.
+#[allow(clippy::large_enum_variant)]
 pub enum Body {
     Home(Home),
     Search(Search),
@@ -236,7 +243,9 @@ impl App {
         };
         let task = app.replace_root(Root::Home);
         mark_on_next_frame(marks::FIRST_FRAME);
-        let scale = window::latest().and_then(window::scale_factor).map(Message::Scale);
+        let scale = window::latest()
+            .and_then(window::scale_factor)
+            .map(Message::Scale);
         (app, Task::batch([task, scale]))
     }
 
@@ -261,13 +270,19 @@ impl App {
     fn new_page(&mut self, body: Body) -> Page {
         let id = self.next_id;
         self.next_id += 1;
-        Page { id, scroll: ScrollModel::default(), body }
+        Page {
+            id,
+            scroll: ScrollModel::default(),
+            body,
+        }
     }
 
     // ---- navigation ---------------------------------------------------------------------
 
     fn leave_top(&mut self) {
-        let Some(page) = self.pages.last_mut() else { return };
+        let Some(page) = self.pages.last_mut() else {
+            return;
+        };
         if let Body::Watch(w) = &mut page.body
             && self.playing_page == Some(page.id)
         {
@@ -295,11 +310,24 @@ impl App {
         self.leave_top();
         self.close_suggestions();
         let body = match root {
-            Root::Home => Body::Home(Home { topic: 0, load: Load::Loading, feed: Feed::default(), req: 0 }),
+            Root::Home => Body::Home(Home {
+                topic: 0,
+                load: Load::Loading,
+                feed: Feed::default(),
+                req: 0,
+            }),
             Root::Subscriptions => {
                 let channels = library().subscriptions();
-                let load = if channels.is_empty() { Load::Ready } else { Load::Loading };
-                Body::Subs(Subs { channels, load, feed: Feed::default() })
+                let load = if channels.is_empty() {
+                    Load::Ready
+                } else {
+                    Load::Loading
+                };
+                Body::Subs(Subs {
+                    channels,
+                    load,
+                    feed: Feed::default(),
+                })
             }
             Root::History => Body::History(library().history()),
             Root::WatchLater => Body::Later(library().watch_later()),
@@ -349,33 +377,43 @@ impl App {
                 h.load = Load::Loading;
                 h.req += 1;
                 let req = h.req;
-                Task::perform(client().home(TOPICS[h.topic].id), move |result| Message::FeedLoaded {
-                    page: id,
-                    req,
-                    append: false,
-                    result,
+                Task::perform(client().home(TOPICS[h.topic].id), move |result| {
+                    Message::FeedLoaded {
+                        page: id,
+                        req,
+                        append: false,
+                        result,
+                    }
                 })
             }
             Body::Search(s) => {
                 s.load = Load::Loading;
-                Task::perform(client().search(&s.query), move |result| Message::FeedLoaded {
-                    page: id,
-                    req: 0,
-                    append: false,
-                    result,
+                Task::perform(client().search(&s.query), move |result| {
+                    Message::FeedLoaded {
+                        page: id,
+                        req: 0,
+                        append: false,
+                        result,
+                    }
                 })
             }
             Body::Watch(w) => {
                 w.load = Load::Loading;
-                Task::perform(client().watch(&w.video.id), move |r| Message::WatchLoaded(id, r))
+                Task::perform(client().watch(&w.video.id), move |r| {
+                    Message::WatchLoaded(id, r)
+                })
             }
             Body::Channel(c) => {
                 c.load = Load::Loading;
-                Task::perform(client().channel(&c.id), move |r| Message::ChannelLoaded(id, r))
+                Task::perform(client().channel(&c.id), move |r| {
+                    Message::ChannelLoaded(id, r)
+                })
             }
             Body::Subs(s) if !s.channels.is_empty() => {
                 s.load = Load::Loading;
-                Task::perform(client().subscription_feed(s.channels.clone()), move |r| Message::SubsLoaded(id, r))
+                Task::perform(client().subscription_feed(s.channels.clone()), move |r| {
+                    Message::SubsLoaded(id, r)
+                })
             }
             _ => Task::none(),
         }
@@ -407,7 +445,13 @@ impl App {
             return Task::none();
         }
         let id = stub.id.clone();
-        self.push(Body::Channel(Channel { id, stub, load: Load::Loading, info: None, feed: Feed::default() }));
+        self.push(Body::Channel(Channel {
+            id,
+            stub,
+            load: Load::Loading,
+            info: None,
+            feed: Feed::default(),
+        }));
         self.load_top()
     }
 
@@ -418,7 +462,11 @@ impl App {
         }
         self.query = query.clone();
         self.blur += 1;
-        self.push(Body::Search(Search { query, load: Load::Loading, feed: Feed::default() }));
+        self.push(Body::Search(Search {
+            query,
+            load: Load::Loading,
+            feed: Feed::default(),
+        }));
         self.load_top()
     }
 
@@ -504,17 +552,32 @@ impl App {
                     Comments::Idle => near && w.comments_next.is_some(),
                     _ => false,
                 };
-                return if go { Self::load_comments(id, w) } else { Task::none() };
+                return if go {
+                    Self::load_comments(id, w)
+                } else {
+                    Task::none()
+                };
             }
             _ => None,
         };
-        let Some((feed, req)) = feed else { return Task::none() };
+        let Some((feed, req)) = feed else {
+            return Task::none();
+        };
         if !near || feed.more != Some(More::Idle) {
             return Task::none();
         }
-        let Some(next) = feed.next.clone() else { return Task::none() };
+        let Some(next) = feed.next.clone() else {
+            return Task::none();
+        };
         feed.more = Some(More::Loading);
-        Task::perform(client().more_videos(&next), move |result| Message::FeedLoaded { page: id, req, append: true, result })
+        Task::perform(client().more_videos(&next), move |result| {
+            Message::FeedLoaded {
+                page: id,
+                req,
+                append: true,
+                result,
+            }
+        })
     }
 
     fn load_comments(id: u64, w: &mut Watch) -> Task<Message> {
@@ -526,9 +589,13 @@ impl App {
         } else {
             w.comments_next.clone()
         };
-        let Some(next) = next else { return Task::none() };
+        let Some(next) = next else {
+            return Task::none();
+        };
         w.comments_state = Comments::Loading;
-        Task::perform(client().more_comments(&next), move |r| Message::CommentsLoaded(id, r))
+        Task::perform(client().more_comments(&next), move |r| {
+            Message::CommentsLoaded(id, r)
+        })
     }
 
     fn close_suggestions(&mut self) {
@@ -569,9 +636,18 @@ impl App {
                 None => Task::none(),
             },
             Message::OpenChannelOf(list, i) => {
-                let Some(v) = self.list(list).get(i) else { return Task::none() };
-                let Some(id) = v.channel_id.clone() else { return Task::none() };
-                let stub = ChannelRef { id, name: v.channel.clone(), avatar: v.channel_avatar.clone(), subscribers: None };
+                let Some(v) = self.list(list).get(i) else {
+                    return Task::none();
+                };
+                let Some(id) = v.channel_id.clone() else {
+                    return Task::none();
+                };
+                let stub = ChannelRef {
+                    id,
+                    name: v.channel.clone(),
+                    avatar: v.channel_avatar.clone(),
+                    subscribers: None,
+                };
                 self.open_channel(stub)
             }
             Message::OpenChannel(c) => self.open_channel(c),
@@ -588,10 +664,18 @@ impl App {
                     },
                     _ => None,
                 };
-                stub.map(|s| self.open_channel(s)).unwrap_or_else(Task::none)
+                stub.map(|s| self.open_channel(s))
+                    .unwrap_or_else(Task::none)
             }
-            Message::FeedLoaded { page, req, append, result } => {
-                let Some(p) = self.pages.iter_mut().find(|p| p.id == page) else { return Task::none() };
+            Message::FeedLoaded {
+                page,
+                req,
+                append,
+                result,
+            } => {
+                let Some(p) = self.pages.iter_mut().find(|p| p.id == page) else {
+                    return Task::none();
+                };
                 let (load, feed, mark) = match &mut p.body {
                     Body::Home(h) if h.req == req => (&mut h.load, &mut h.feed, marks::HOME_LOADED),
                     Body::Search(s) => (&mut s.load, &mut s.feed, marks::SEARCH_LOADED),
@@ -615,8 +699,12 @@ impl App {
                 Task::none()
             }
             Message::WatchLoaded(page, r) => {
-                let Some(p) = self.pages.iter_mut().find(|p| p.id == page) else { return Task::none() };
-                let Body::Watch(w) = &mut p.body else { return Task::none() };
+                let Some(p) = self.pages.iter_mut().find(|p| p.id == page) else {
+                    return Task::none();
+                };
+                let Body::Watch(w) = &mut p.body else {
+                    return Task::none();
+                };
                 match r {
                     Ok(mut info) => {
                         // Core workaround (NOTES.md): some live watch responses carry no
@@ -642,8 +730,12 @@ impl App {
                 Task::none()
             }
             Message::CommentsLoaded(page, r) => {
-                let Some(p) = self.pages.iter_mut().find(|p| p.id == page) else { return Task::none() };
-                let Body::Watch(w) = &mut p.body else { return Task::none() };
+                let Some(p) = self.pages.iter_mut().find(|p| p.id == page) else {
+                    return Task::none();
+                };
+                let Body::Watch(w) = &mut p.body else {
+                    return Task::none();
+                };
                 match r {
                     Ok(cp) => {
                         if cp.total.is_some() {
@@ -660,8 +752,12 @@ impl App {
                 Task::none()
             }
             Message::ChannelLoaded(page, r) => {
-                let Some(p) = self.pages.iter_mut().find(|p| p.id == page) else { return Task::none() };
-                let Body::Channel(c) = &mut p.body else { return Task::none() };
+                let Some(p) = self.pages.iter_mut().find(|p| p.id == page) else {
+                    return Task::none();
+                };
+                let Body::Channel(c) = &mut p.body else {
+                    return Task::none();
+                };
                 match r {
                     Ok(mut info) => {
                         c.feed.set(std::mem::take(&mut info.videos));
@@ -675,8 +771,12 @@ impl App {
                 Task::none()
             }
             Message::SubsLoaded(page, r) => {
-                let Some(p) = self.pages.iter_mut().find(|p| p.id == page) else { return Task::none() };
-                let Body::Subs(s) = &mut p.body else { return Task::none() };
+                let Some(p) = self.pages.iter_mut().find(|p| p.id == page) else {
+                    return Task::none();
+                };
+                let Body::Subs(s) = &mut p.body else {
+                    return Task::none();
+                };
                 match r {
                     Ok(items) => {
                         s.feed.items = items;
@@ -693,7 +793,9 @@ impl App {
                 {
                     w.comments_state = Comments::Idle;
                     let id = self.top().id;
-                    let Body::Watch(w) = &mut self.top_mut().body else { return Task::none() };
+                    let Body::Watch(w) = &mut self.top_mut().body else {
+                        return Task::none();
+                    };
                     return Self::load_comments(id, w);
                 }
                 self.load_top()
@@ -702,7 +804,9 @@ impl App {
                 let page = self.top_mut();
                 page.scroll.rearm_near_end();
                 match &mut page.body {
-                    Body::Home(Home { feed, .. }) | Body::Search(Search { feed, .. }) | Body::Channel(Channel { feed, .. }) => {
+                    Body::Home(Home { feed, .. })
+                    | Body::Search(Search { feed, .. })
+                    | Body::Channel(Channel { feed, .. }) => {
                         feed.more = Some(More::Idle);
                     }
                     _ => {}
@@ -738,7 +842,9 @@ impl App {
                 })
             }
             Message::SuggestFire(seq) if seq == self.sugg_seq => {
-                Task::perform(client().suggestions(&self.query), move |r| Message::Suggestions(seq, r))
+                Task::perform(client().suggestions(&self.query), move |r| {
+                    Message::Suggestions(seq, r)
+                })
             }
             Message::SuggestFire(_) => Task::none(),
             Message::Suggestions(seq, r) => {
@@ -757,7 +863,10 @@ impl App {
                     return Task::none();
                 }
                 let n = self.suggestions.len() as i32;
-                let cur = self.sugg_sel.map(|i| i as i32).unwrap_or(if d > 0 { -1 } else { n });
+                let cur = self
+                    .sugg_sel
+                    .map(|i| i as i32)
+                    .unwrap_or(if d > 0 { -1 } else { n });
                 let next = cur + d;
                 self.sugg_sel = (0..n).contains(&next).then_some(next as usize);
                 Task::none()
@@ -787,7 +896,9 @@ impl App {
             Message::ToggleSubscribe => {
                 let ch = match &self.top().body {
                     Body::Watch(w) => w.info.as_ref().map(|i| i.channel.clone()),
-                    Body::Channel(c) => c.info.as_ref().map(|i| i.as_ref()).or(Some(c.stub.clone())),
+                    Body::Channel(c) => {
+                        c.info.as_ref().map(|i| i.as_ref()).or(Some(c.stub.clone()))
+                    }
                     _ => None,
                 };
                 if let Some(ch) = ch.filter(|c| !c.id.is_empty()) {
@@ -797,7 +908,11 @@ impl App {
             }
             Message::ToggleLater => {
                 if let Body::Watch(w) = &self.top().body {
-                    let mut v = w.info.as_ref().map(|i| i.as_video()).unwrap_or_else(|| w.video.clone());
+                    let mut v = w
+                        .info
+                        .as_ref()
+                        .map(|i| i.as_video())
+                        .unwrap_or_else(|| w.video.clone());
                     if v.duration.is_none() {
                         v.duration = w.video.duration.clone();
                     }
@@ -865,7 +980,8 @@ impl App {
             Message::RetryPlayback => {
                 let top = self.top();
                 if let Body::Watch(w) = &top.body {
-                    let (id, vid, at) = (top.id, w.video.id.clone(), self.play.position.max(w.resume));
+                    let (id, vid, at) =
+                        (top.id, w.video.id.clone(), self.play.position.max(w.resume));
                     self.start_playback(id, &vid, at);
                 }
                 Task::none()
@@ -888,7 +1004,9 @@ impl App {
             return None;
         }
         match key.as_ref() {
-            keyboard::Key::Named(Named::Space) | keyboard::Key::Character("k") => Some(Message::PlayPause),
+            keyboard::Key::Named(Named::Space) | keyboard::Key::Character("k") => {
+                Some(Message::PlayPause)
+            }
             keyboard::Key::Character("j") => Some(Message::SeekBy(-10.0)),
             keyboard::Key::Character("l") => Some(Message::SeekBy(10.0)),
             keyboard::Key::Named(Named::ArrowLeft) => Some(Message::SeekBy(-5.0)),
@@ -906,7 +1024,9 @@ impl App {
         };
         match cmd {
             Command::Home { topic } => {
-                let idx = topic.and_then(|t| TOPICS.iter().position(|x| x.id == t)).unwrap_or(0);
+                let idx = topic
+                    .and_then(|t| TOPICS.iter().position(|x| x.id == t))
+                    .unwrap_or(0);
                 let t = self.replace_root(Root::Home);
                 if idx != 0 {
                     return self.update(Message::Topic(idx));
@@ -918,7 +1038,11 @@ impl App {
                 self.update(Message::SearchSubmit)
             }
             Command::OpenVideo { index } => {
-                let list = if matches!(self.top().body, Body::Watch(_)) { ListRef::Related } else { ListRef::Main };
+                let list = if matches!(self.top().body, Body::Watch(_)) {
+                    ListRef::Related
+                } else {
+                    ListRef::Main
+                };
                 self.update(Message::Open(list, index))
             }
             Command::OpenChannel => self.update(Message::OpenWatchChannel),
@@ -956,12 +1080,17 @@ impl App {
             Subscription::run(ext::autopilot),
             event::listen_with(|e, _status, _id| match e {
                 iced::Event::Window(window::Event::Resized(s)) => Some(Message::WindowSize(s)),
-                iced::Event::Window(window::Event::Opened { size, .. }) => Some(Message::WindowSize(size)),
+                iced::Event::Window(window::Event::Opened { size, .. }) => {
+                    Some(Message::WindowSize(size))
+                }
                 iced::Event::Window(window::Event::Rescaled(s)) => Some(Message::Scale(s)),
-                iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Back)) => Some(Message::Back),
-                iced::Event::Keyboard(keyboard::Event::KeyPressed { key: keyboard::Key::Character(c), .. })
-                    if c.as_str() == "/" && _status == iced::event::Status::Ignored =>
-                {
+                iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Back)) => {
+                    Some(Message::Back)
+                }
+                iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                    key: keyboard::Key::Character(c),
+                    ..
+                }) if c.as_str() == "/" && _status == iced::event::Status::Ignored => {
                     Some(Message::FocusSearch)
                 }
                 iced::Event::Keyboard(keyboard::Event::KeyPressed {

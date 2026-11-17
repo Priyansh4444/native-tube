@@ -40,7 +40,9 @@ pub fn bucket(w: f32) -> u32 {
 
 pub fn to_render_image(img: &nt_core::RgbaImage) -> Option<Arc<RenderImage>> {
     let buf = image::RgbaImage::from_raw(img.width, img.height, img.to_bgra())?;
-    Some(Arc::new(RenderImage::new(smallvec::smallvec![image::Frame::new(buf)])))
+    Some(Arc::new(RenderImage::new(smallvec::smallvec![
+        image::Frame::new(buf)
+    ])))
 }
 
 impl ImageCache {
@@ -73,12 +75,22 @@ impl ImageCache {
                 Slot::Failed(_) => {}
             }
         }
-        self.map.insert(key.clone(), Entry { slot: Slot::Loading, last_used: frame });
+        self.map.insert(
+            key.clone(),
+            Entry {
+                slot: Slot::Loading,
+                last_used: frame,
+            },
+        );
         let job = nt_core::images::image(&key.0, key.1);
         cx.spawn(async move |this, cx| {
             let result = job.await;
             let img = match result {
-                Ok(rgba) => cx.background_executor().spawn(async move { to_render_image(&rgba) }).await,
+                Ok(rgba) => {
+                    cx.background_executor()
+                        .spawn(async move { to_render_image(&rgba) })
+                        .await
+                }
                 Err(_) => None,
             };
             let _ = this.update(cx, |app, cx| {
@@ -113,13 +125,18 @@ impl ImageCache {
         ages.sort_by_key(|(t, _)| *t);
         let excess = self.ready - MAX_READY * 3 / 4;
         for (_, key) in ages.into_iter().take(excess) {
-            if let Some(Entry { slot: Slot::Ready(img), .. }) = self.map.remove(&key) {
+            if let Some(Entry {
+                slot: Slot::Ready(img),
+                ..
+            }) = self.map.remove(&key)
+            {
                 let _ = window.drop_image(img);
                 self.ready -= 1;
             }
         }
         // Forget stale failures and abandoned loads too, so the map stays small.
         let frame = self.frame;
-        self.map.retain(|_, e| !matches!(e.slot, Slot::Failed(_)) || e.last_used + 600 > frame);
+        self.map
+            .retain(|_, e| !matches!(e.slot, Slot::Failed(_)) || e.last_used + 600 > frame);
     }
 }

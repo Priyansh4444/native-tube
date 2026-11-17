@@ -5,8 +5,8 @@ use crate::pages::*;
 use crate::theme::*;
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, Context, Div, ElementId, FontWeight, Hsla, MouseButton, MouseDownEvent, ObjectFit, RenderImage,
-    ScrollEvent, SharedString, Stateful, deferred, div, img, px,
+    AnyElement, Context, Div, ElementId, FontWeight, Hsla, MouseButton, MouseDownEvent, ObjectFit,
+    RenderImage, ScrollEvent, SharedString, Stateful, deferred, div, img, px,
 };
 use gpui_component::button::{Button, ButtonCustomVariant, ButtonVariants as _};
 use gpui_component::input::Input;
@@ -24,7 +24,13 @@ use std::sync::Arc;
 
 type Cx<'a> = Context<'a, NtApp>;
 
-fn image(app: &mut NtApp, url: Option<&str>, w: f32, t: f64, cx: &mut Cx) -> Option<Arc<RenderImage>> {
+fn image(
+    app: &mut NtApp,
+    url: Option<&str>,
+    w: f32,
+    t: f64,
+    cx: &mut Cx,
+) -> Option<Arc<RenderImage>> {
     let url = url?;
     let scale = app.geo.scale;
     app.images.get(url, w * scale, t, cx, |a| &mut a.images)
@@ -36,38 +42,88 @@ fn id(name: &'static str, i: usize) -> ElementId {
 
 /// A rounded picture with a raised placeholder until the pixels arrive.
 fn picture(src: Option<Arc<RenderImage>>, w: f32, h: f32, radius: f32) -> Div {
-    let base = div().w(px(w)).h(px(h)).flex_shrink_0().rounded(px(radius)).bg(raised());
+    let base = div()
+        .w(px(w))
+        .h(px(h))
+        .flex_shrink_0()
+        .rounded(px(radius))
+        .bg(raised());
     match src {
-        Some(src) => base.child(img(src).size_full().rounded(px(radius)).object_fit(ObjectFit::Cover)),
+        Some(src) => base.child(
+            img(src)
+                .size_full()
+                .rounded(px(radius))
+                .object_fit(ObjectFit::Cover),
+        ),
         None => base,
     }
 }
 
 fn avatar(src: Option<Arc<RenderImage>>, size: f32) -> Div {
-    let base = div().size(px(size)).flex_shrink_0().rounded_full().bg(raised());
+    let base = div()
+        .size(px(size))
+        .flex_shrink_0()
+        .rounded_full()
+        .bg(raised());
     match src {
-        Some(src) => base.child(img(src).size_full().rounded_full().object_fit(ObjectFit::Cover)),
+        Some(src) => base.child(
+            img(src)
+                .size_full()
+                .rounded_full()
+                .object_fit(ObjectFit::Cover),
+        ),
         None => base,
     }
 }
 
 fn label(text: impl Into<SharedString>, size: f32, lh: f32, color: Hsla) -> Div {
-    div().text_size(px(size)).line_height(px(lh)).text_color(color).child(text.into())
+    div()
+        .text_size(px(size))
+        .line_height(px(lh))
+        .text_color(color)
+        .child(text.into())
 }
 
 fn one_line(text: impl Into<SharedString>, size: f32, lh: f32, color: Hsla) -> Div {
-    label(text, size, lh, color).overflow_hidden().whitespace_nowrap().text_ellipsis()
+    label(text, size, lh, color)
+        .overflow_hidden()
+        .whitespace_nowrap()
+        .text_ellipsis()
 }
 
-fn clamp_lines(text: impl Into<SharedString>, size: f32, lh: f32, color: Hsla, lines: usize) -> Div {
-    label(text, size, lh, color).line_clamp(lines).text_ellipsis()
+fn clamp_lines(
+    text: impl Into<SharedString>,
+    size: f32,
+    lh: f32,
+    color: Hsla,
+    lines: usize,
+) -> Div {
+    label(text, size, lh, color)
+        .line_clamp(lines)
+        .text_ellipsis()
 }
 
-pub fn pill(name: &'static str, text: impl Into<SharedString>, bg_: Hsla, fg: Hsla, cx: &Cx) -> Button {
-    let hover_c = if bg_ == raised() { hover() } else { bg_.opacity(0.85) };
+pub fn pill(
+    name: &'static str,
+    text: impl Into<SharedString>,
+    bg_: Hsla,
+    fg: Hsla,
+    cx: &Cx,
+) -> Button {
+    let hover_c = if bg_ == raised() {
+        hover()
+    } else {
+        bg_.opacity(0.85)
+    };
     Button::new(name)
         .label(text)
-        .custom(ButtonCustomVariant::new(cx).color(bg_).foreground(fg).hover(hover_c).active(hover_c))
+        .custom(
+            ButtonCustomVariant::new(cx)
+                .color(bg_)
+                .foreground(fg)
+                .hover(hover_c)
+                .active(hover_c),
+        )
         // The kit draws a custom variant's background at 20% strength; we want the token itself.
         .bg(bg_)
         .text_color(fg)
@@ -186,10 +242,21 @@ pub fn top_bar(app: &mut NtApp, cx: &mut Cx) -> AnyElement {
         .border_1()
         .border_color(divider())
         .rounded_l(px(20.0))
-        .child(Input::new(&app.search).appearance(false).cleanable(true).w_full());
+        .child(
+            Input::new(&app.search)
+                .appearance(false)
+                .cleanable(true)
+                .w_full(),
+        );
     let go = Button::new("search-go")
         .icon(icon(I::Search))
-        .custom(ButtonCustomVariant::new(cx).color(raised()).foreground(text()).hover(hover()).active(hover()))
+        .custom(
+            ButtonCustomVariant::new(cx)
+                .color(raised())
+                .foreground(text())
+                .hover(hover())
+                .active(hover()),
+        )
         .bg(raised())
         .w(px(64.0))
         .h(px(40.0))
@@ -228,9 +295,21 @@ pub fn top_bar(app: &mut NtApp, cx: &mut Cx) -> AnyElement {
                 .flex_shrink_0()
                 .w(px(180.0))
                 .child(back)
-                .child(div().text_size(px(18.0)).font_weight(FontWeight::BOLD).child("NativeTube")),
+                .child(
+                    div()
+                        .text_size(px(18.0))
+                        .font_weight(FontWeight::BOLD)
+                        .child("NativeTube"),
+                ),
         )
-        .child(div().flex_1().min_w(px(160.0)).flex().justify_center().child(search))
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(160.0))
+                .flex()
+                .justify_center()
+                .child(search),
+        )
         .child(div().flex_shrink(1.0).w(px(180.0)))
         .into_any_element()
 }
@@ -292,7 +371,9 @@ pub fn rail(app: &mut NtApp, cx: &mut Cx) -> AnyElement {
 
 pub fn content(app: &mut NtApp, t: f64, cx: &mut Cx) -> AnyElement {
     let geo = app.geo;
-    let Some(page) = app.stack.last() else { return div().into_any_element() };
+    let Some(page) = app.stack.last() else {
+        return div().into_any_element();
+    };
     let chips = page.has_chips();
     let top = geo.scroller_top(chips);
     let vh = geo.viewport_h(chips);
@@ -342,7 +423,15 @@ pub fn content(app: &mut NtApp, t: f64, cx: &mut Cx) -> AnyElement {
         );
     for b in &blocks {
         let el = block(app, b, t, cx);
-        area = area.child(div().absolute().left(px(b.x)).top(px(b.y - offset)).w(px(b.w)).h(px(b.h)).child(el));
+        area = area.child(
+            div()
+                .absolute()
+                .left(px(b.x))
+                .top(px(b.y - offset))
+                .w(px(b.w))
+                .h(px(b.h))
+                .child(el),
+        );
     }
     area = area.children(scrollbar(app, vh, content_h, t, cx));
 
@@ -421,7 +510,8 @@ fn scrollbar(app: &mut NtApp, vh: f32, content_h: f32, t: f64, cx: &mut Cx) -> O
                     } else if let Some(p) = this.top_mut() {
                         // Track click: a page toward the pointer, as Chrome does.
                         let step = p.scroll.page_step(vh_);
-                        p.scroll.scroll_by(if my < top + y { -step } else { step }, t);
+                        p.scroll
+                            .scroll_by(if my < top + y { -step } else { step }, t);
                     }
                     this.sb.last_activity = t;
                     cx.notify();
@@ -448,13 +538,31 @@ fn prefetch_images(app: &mut NtApp, b: &Block, t: f64, cx: &mut Cx) {
     let videos: Vec<(Video, f32, f32)> = {
         let Some(page) = app.stack.last() else { return };
         match &b.kind {
-            BlockKind::GridRow { first, count, card_w } => {
-                page.feed.items[*first..first + count].iter().map(|v| (v.clone(), *card_w, 36.0)).collect()
-            }
-            BlockKind::ListRow(i) => page.feed.items.get(*i).map(|v| vec![(v.clone(), list_thumb_w(b.w), 24.0)]).unwrap_or_default(),
-            BlockKind::CompactRow(i) => page.feed.items.get(*i).map(|v| vec![(v.clone(), COMPACT_THUMB_W, 0.0)]).unwrap_or_default(),
+            BlockKind::GridRow {
+                first,
+                count,
+                card_w,
+            } => page.feed.items[*first..first + count]
+                .iter()
+                .map(|v| (v.clone(), *card_w, 36.0))
+                .collect(),
+            BlockKind::ListRow(i) => page
+                .feed
+                .items
+                .get(*i)
+                .map(|v| vec![(v.clone(), list_thumb_w(b.w), 24.0)])
+                .unwrap_or_default(),
+            BlockKind::CompactRow(i) => page
+                .feed
+                .items
+                .get(*i)
+                .map(|v| vec![(v.clone(), COMPACT_THUMB_W, 0.0)])
+                .unwrap_or_default(),
             BlockKind::Comment(i) => {
-                let url = page.watch().and_then(|w| w.comments.get(*i)).and_then(|c| c.author_avatar.clone());
+                let url = page
+                    .watch()
+                    .and_then(|w| w.comments.get(*i))
+                    .and_then(|c| c.author_avatar.clone());
                 image(app, url.as_deref(), 40.0, t, cx);
                 return;
             }
@@ -471,8 +579,16 @@ fn prefetch_images(app: &mut NtApp, b: &Block, t: f64, cx: &mut Cx) {
 
 fn block(app: &mut NtApp, b: &Block, t: f64, cx: &mut Cx) -> AnyElement {
     match &b.kind {
-        BlockKind::GridRow { first, count, card_w } => {
-            let items: Vec<Video> = app.stack.last().map(|p| p.feed.items[*first..first + count].to_vec()).unwrap_or_default();
+        BlockKind::GridRow {
+            first,
+            count,
+            card_w,
+        } => {
+            let items: Vec<Video> = app
+                .stack
+                .last()
+                .map(|p| p.feed.items[*first..first + count].to_vec())
+                .unwrap_or_default();
             let mut row = div().flex().gap(px(COL_GAP));
             for (k, v) in items.into_iter().enumerate() {
                 row = row.child(card(app, first + k, v, *card_w, t, cx));
@@ -488,7 +604,12 @@ fn block(app: &mut NtApp, b: &Block, t: f64, cx: &mut Cx) -> AnyElement {
                         .flex()
                         .flex_col()
                         .gap(px(12.0))
-                        .child(Skeleton::new().w(px(*card_w)).h(px(card_w * 9.0 / 16.0)).rounded(px(R_THUMB)))
+                        .child(
+                            Skeleton::new()
+                                .w(px(*card_w))
+                                .h(px(card_w * 9.0 / 16.0))
+                                .rounded(px(R_THUMB)),
+                        )
                         .child(
                             div()
                                 .flex()
@@ -509,25 +630,39 @@ fn block(app: &mut NtApp, b: &Block, t: f64, cx: &mut Cx) -> AnyElement {
             row.into_any_element()
         }
         BlockKind::ListRow(i) => {
-            let Some(v) = app.stack.last().and_then(|p| p.feed.items.get(*i)).cloned() else { return div().into_any_element() };
+            let Some(v) = app.stack.last().and_then(|p| p.feed.items.get(*i)).cloned() else {
+                return div().into_any_element();
+            };
             list_row(app, *i, v, b.w, b.h, t, cx)
         }
         BlockKind::CompactRow(i) => {
-            let Some(v) = app.stack.last().and_then(|p| p.feed.items.get(*i)).cloned() else { return div().into_any_element() };
+            let Some(v) = app.stack.last().and_then(|p| p.feed.items.get(*i)).cloned() else {
+                return div().into_any_element();
+            };
             compact_row(app, *i, v, t, cx)
         }
-        BlockKind::Spinner | BlockKind::CommentsSpinner => {
-            div().size_full().flex().items_center().justify_center().child(Spinner::new().large().color(text2())).into_any_element()
-        }
+        BlockKind::Spinner | BlockKind::CommentsSpinner => div()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(Spinner::new().large().color(text2()))
+            .into_any_element(),
         BlockKind::LoadError | BlockKind::MoreError | BlockKind::CommentsError => {
             let msg = app
                 .stack
                 .last()
-                .map(|p| match (&p.status, &p.feed.more_error, p.watch().map(|w| &w.comments_state)) {
-                    (Load::Failed(e), _, _) => e.clone(),
-                    (_, Some(e), _) => e.clone(),
-                    (_, _, Some(CommentsState::Failed(e))) => e.clone(),
-                    _ => String::new(),
+                .map(|p| {
+                    match (
+                        &p.status,
+                        &p.feed.more_error,
+                        p.watch().map(|w| &w.comments_state),
+                    ) {
+                        (Load::Failed(e), _, _) => e.clone(),
+                        (_, Some(e), _) => e.clone(),
+                        (_, _, Some(CommentsState::Failed(e))) => e.clone(),
+                        _ => String::new(),
+                    }
                 })
                 .unwrap_or_default();
             div()
@@ -537,9 +672,19 @@ fn block(app: &mut NtApp, b: &Block, t: f64, cx: &mut Cx) -> AnyElement {
                 .items_center()
                 .justify_center()
                 .gap(px(12.0))
-                .child(label("Something went wrong", 16.0, 22.0, text()).font_weight(FontWeight::MEDIUM))
-                .child(clamp_lines(msg, 14.0, 20.0, text2(), 2).max_w(px(560.0)).text_center())
-                .child(pill("retry", "Retry", raised(), text(), cx).on_click(cx.listener(|this, _, _, cx| this.retry(cx))))
+                .child(
+                    label("Something went wrong", 16.0, 22.0, text())
+                        .font_weight(FontWeight::MEDIUM),
+                )
+                .child(
+                    clamp_lines(msg, 14.0, 20.0, text2(), 2)
+                        .max_w(px(560.0))
+                        .text_center(),
+                )
+                .child(
+                    pill("retry", "Retry", raised(), text(), cx)
+                        .on_click(cx.listener(|this, _, _, cx| this.retry(cx))),
+                )
                 .into_any_element()
         }
         BlockKind::Empty(msg) => div()
@@ -550,14 +695,25 @@ fn block(app: &mut NtApp, b: &Block, t: f64, cx: &mut Cx) -> AnyElement {
             .child(label(*msg, 16.0, 22.0, text2()))
             .into_any_element(),
         BlockKind::PageTitle => {
-            let history = app.stack.last().is_some_and(|p| matches!(p.kind, Kind::History));
+            let history = app
+                .stack
+                .last()
+                .is_some_and(|p| matches!(p.kind, Kind::History));
             let has = app.stack.last().is_some_and(|p| !p.feed.items.is_empty());
             div()
                 .size_full()
                 .flex()
                 .items_center()
                 .justify_between()
-                .child(label(if history { "History" } else { "Watch Later" }, 20.0, 28.0, text()).font_weight(FontWeight::BOLD))
+                .child(
+                    label(
+                        if history { "History" } else { "Watch Later" },
+                        20.0,
+                        28.0,
+                        text(),
+                    )
+                    .font_weight(FontWeight::BOLD),
+                )
                 .when(history && has, |d| {
                     d.child(
                         pill("clear-history", "Clear history", raised(), text(), cx)
@@ -581,7 +737,11 @@ fn block(app: &mut NtApp, b: &Block, t: f64, cx: &mut Cx) -> AnyElement {
         BlockKind::WatchMeta { title_h } => watch_meta(app, *title_h, t, cx),
         BlockKind::WatchDesc { lines, shown } => watch_desc(app, *lines, *shown, cx),
         BlockKind::CommentsHeader => {
-            let total = app.stack.last().and_then(|p| p.watch()).and_then(|w| w.comments_total.clone());
+            let total = app
+                .stack
+                .last()
+                .and_then(|p| p.watch())
+                .and_then(|w| w.comments_total.clone());
             let title = match total {
                 Some(n) => format!("{n} Comments"),
                 None => "Comments".to_string(),
@@ -603,7 +763,12 @@ fn card(app: &mut NtApp, index: usize, v: Video, w: f32, t: f64, cx: &mut Cx) ->
     let av = image(app, v.channel_avatar.as_deref(), 36.0, t, cx);
     let has_avatar = v.channel_avatar.is_some();
     let open = v.clone();
-    let name = channel_link(&v, div().id(id("card-ch", index)), cx).child(one_line(v.channel.clone(), 14.0, 20.0, text2()));
+    let name = channel_link(&v, div().id(id("card-ch", index)), cx).child(one_line(
+        v.channel.clone(),
+        14.0,
+        20.0,
+        text2(),
+    ));
     let av_el = channel_link(&v, div().id(id("card-av", index)), cx).child(avatar(av, 36.0));
     div()
         .id(id("card", index))
@@ -642,7 +807,15 @@ fn card(app: &mut NtApp, index: usize, v: Video, w: f32, t: f64, cx: &mut Cx) ->
         .into_any_element()
 }
 
-fn list_row(app: &mut NtApp, index: usize, v: Video, w: f32, h: f32, t: f64, cx: &mut Cx) -> AnyElement {
+fn list_row(
+    app: &mut NtApp,
+    index: usize,
+    v: Video,
+    w: f32,
+    h: f32,
+    t: f64,
+    cx: &mut Cx,
+) -> AnyElement {
     let tw = list_thumb_w(w);
     let pic = thumb(app, &v, tw, h, R_THUMB, t, cx);
     let av = image(app, v.channel_avatar.as_deref(), 24.0, t, cx);
@@ -670,10 +843,17 @@ fn list_row(app: &mut NtApp, index: usize, v: Video, w: f32, h: f32, t: f64, cx:
                 .min_w(px(0.0))
                 .flex()
                 .flex_col()
-                .child(clamp_lines(v.title.clone(), 18.0, 26.0, text(), 2).font_weight(FontWeight::MEDIUM))
+                .child(
+                    clamp_lines(v.title.clone(), 18.0, 26.0, text(), 2)
+                        .font_weight(FontWeight::MEDIUM),
+                )
                 .child(one_line(v.meta_line(), 12.0, 18.0, text2()))
                 .child(ch)
-                .children(v.snippet.clone().map(|s| clamp_lines(s, 12.0, 18.0, text2(), 2))),
+                .children(
+                    v.snippet
+                        .clone()
+                        .map(|s| clamp_lines(s, 12.0, 18.0, text2(), 2)),
+                ),
         )
         .into_any_element()
 }
@@ -698,7 +878,10 @@ fn compact_row(app: &mut NtApp, index: usize, v: Video, t: f64, cx: &mut Cx) -> 
                 .flex()
                 .flex_col()
                 .gap(px(4.0))
-                .child(clamp_lines(v.title.clone(), 14.0, 20.0, text(), 2).font_weight(FontWeight::MEDIUM))
+                .child(
+                    clamp_lines(v.title.clone(), 14.0, 20.0, text(), 2)
+                        .font_weight(FontWeight::MEDIUM),
+                )
                 .child(one_line(v.channel.clone(), 12.0, 18.0, text2()))
                 .child(one_line(v.meta_line(), 12.0, 18.0, text2())),
         )
@@ -707,13 +890,24 @@ fn compact_row(app: &mut NtApp, index: usize, v: Video, t: f64, cx: &mut Cx) -> 
 
 fn channel_header(app: &mut NtApp, t: f64, cx: &mut Cx) -> AnyElement {
     let Some((info, subscribed)) = app.stack.last().and_then(|p| match &p.kind {
-        Kind::Channel { info: Some(i), subscribed, .. } => Some((i.clone(), *subscribed)),
+        Kind::Channel {
+            info: Some(i),
+            subscribed,
+            ..
+        } => Some((i.clone(), *subscribed)),
         _ => None,
     }) else {
         return div().into_any_element();
     };
     let av = image(app, info.avatar.as_deref(), 80.0, t, cx);
-    let meta: Vec<String> = [info.handle.clone(), info.subscribers.clone(), info.video_count.clone()].into_iter().flatten().collect();
+    let meta: Vec<String> = [
+        info.handle.clone(),
+        info.subscribers.clone(),
+        info.video_count.clone(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
     div()
         .size_full()
         .flex()
@@ -727,10 +921,23 @@ fn channel_header(app: &mut NtApp, t: f64, cx: &mut Cx) -> AnyElement {
                 .flex()
                 .flex_col()
                 .gap(px(4.0))
-                .child(one_line(info.name.clone(), 20.0, 28.0, text()).font_weight(FontWeight::BOLD))
+                .child(
+                    one_line(info.name.clone(), 20.0, 28.0, text()).font_weight(FontWeight::BOLD),
+                )
                 .child(one_line(meta.join(" • "), 14.0, 20.0, text2()))
-                .child(clamp_lines(info.description.clone(), 14.0, 20.0, text2(), 2))
-                .child(div().mt(px(8.0)).flex().child(subscribe_button(subscribed, cx))),
+                .child(clamp_lines(
+                    info.description.clone(),
+                    14.0,
+                    20.0,
+                    text2(),
+                    2,
+                ))
+                .child(
+                    div()
+                        .mt(px(8.0))
+                        .flex()
+                        .child(subscribe_button(subscribed, cx)),
+                ),
         )
         .into_any_element()
 }
@@ -749,7 +956,12 @@ fn subs_strip(app: &mut NtApp, w: f32, t: f64, cx: &mut Cx) -> AnyElement {
         Kind::Subscriptions { channels } => Some(channels.clone()),
         _ => None,
     });
-    let mut row = div().w(px(w)).h_full().flex().gap(px(8.0)).overflow_hidden();
+    let mut row = div()
+        .w(px(w))
+        .h_full()
+        .flex()
+        .gap(px(8.0))
+        .overflow_hidden();
     for (i, ch) in channels.unwrap_or_default().into_iter().enumerate() {
         let av = image(app, ch.avatar.as_deref(), 64.0, t, cx);
         let cid = ch.id.clone();
@@ -778,31 +990,62 @@ fn subs_strip(app: &mut NtApp, w: f32, t: f64, cx: &mut Cx) -> AnyElement {
 
 fn player(app: &mut NtApp, b: &Block, cx: &mut Cx) -> AnyElement {
     let scale = app.geo.scale;
-    app.video.set_target((b.w * scale).round() as u32, (b.h * scale).round() as u32);
+    app.video
+        .set_target((b.w * scale).round() as u32, (b.h * scale).round() as u32);
     let s = app.video.state.clone();
     let err = app.video.error.clone().or(match &s.status {
         nt_core::Status::Failed(e) => Some(e.clone()),
         _ => None,
     });
-    let loading = err.is_none() && (matches!(s.status, nt_core::Status::Loading | nt_core::Status::Idle) || s.buffering);
+    let loading = err.is_none()
+        && (matches!(s.status, nt_core::Status::Loading | nt_core::Status::Idle) || s.buffering);
     let paused = s.paused || s.status == nt_core::Status::Ended;
-    let frac = app.seek_drag.unwrap_or(if s.duration > 0.0 { (s.position / s.duration) as f32 } else { 0.0 });
-    let buffered = if s.duration > 0.0 { ((s.position + s.buffered_ahead) / s.duration).min(1.0) as f32 } else { 0.0 };
+    let frac = app.seek_drag.unwrap_or(if s.duration > 0.0 {
+        (s.position / s.duration) as f32
+    } else {
+        0.0
+    });
+    let buffered = if s.duration > 0.0 {
+        ((s.position + s.buffered_ahead) / s.duration).min(1.0) as f32
+    } else {
+        0.0
+    };
     // Seek bar geometry in window coordinates, for drags handled at the root.
     let bar_x = RAIL_W + b.x + 12.0;
     let bar_w = b.w - 24.0;
     app.seek_bar = Some((bar_x, bar_w));
 
-    let mut surface = div().id("player").group("player").relative().size_full().bg(c(0x000000)).rounded(px(R_THUMB)).overflow_hidden();
+    let mut surface = div()
+        .id("player")
+        .group("player")
+        .relative()
+        .size_full()
+        .bg(c(0x000000))
+        .rounded(px(R_THUMB))
+        .overflow_hidden();
     if let Some(frame) = app.video.image.clone()
         && err.is_none()
     {
-        surface = surface.child(img(frame).size_full().rounded(px(R_THUMB)).object_fit(ObjectFit::Contain));
+        surface = surface.child(
+            img(frame)
+                .size_full()
+                .rounded(px(R_THUMB))
+                .object_fit(ObjectFit::Contain),
+        );
     }
-    surface = surface.on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _, cx| this.toggle_pause(cx)));
+    surface = surface.on_mouse_down(
+        MouseButton::Left,
+        cx.listener(|this, _: &MouseDownEvent, _, cx| this.toggle_pause(cx)),
+    );
     if loading {
         surface = surface.child(
-            div().absolute().inset_0().flex().items_center().justify_center().child(Spinner::new().large().color(text())),
+            div()
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(Spinner::new().large().color(text())),
         );
     }
     if let Some(e) = err {
@@ -848,15 +1091,52 @@ fn player(app: &mut NtApp, b: &Block, cx: &mut Cx) -> AnyElement {
                 .h(px(4.0))
                 .rounded(px(2.0))
                 .bg(c(0xffffff).opacity(0.25))
-                .child(div().absolute().left_0().top_0().h_full().w(px(bar_w * buffered)).rounded(px(2.0)).bg(c(0xffffff).opacity(0.45)))
-                .child(div().absolute().left_0().top_0().h_full().w(px(bar_w * frac)).rounded(px(2.0)).bg(accent())),
+                .child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .top_0()
+                        .h_full()
+                        .w(px(bar_w * buffered))
+                        .rounded(px(2.0))
+                        .bg(c(0xffffff).opacity(0.45)),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .top_0()
+                        .h_full()
+                        .w(px(bar_w * frac))
+                        .rounded(px(2.0))
+                        .bg(accent()),
+                ),
         )
-        .child(div().absolute().top(px(2.0)).left(px(bar_w * frac - 6.0)).size(px(12.0)).rounded_full().bg(accent()));
+        .child(
+            div()
+                .absolute()
+                .top(px(2.0))
+                .left(px(bar_w * frac - 6.0))
+                .size(px(12.0))
+                .rounded_full()
+                .bg(accent()),
+        );
 
-    let pos = app.seek_drag.map(|f| f as f64 * s.duration).unwrap_or(s.position);
+    let pos = app
+        .seek_drag
+        .map(|f| f as f64 * s.duration)
+        .unwrap_or(s.position);
     let time = format!("{} / {}", format::clock(pos), format::clock(s.duration));
-    let play_icon = if paused { icon(I::Play) } else { icon(I::Pause) };
-    let mute_icon = if s.muted || s.volume <= 0.0 { icon(I::VolumeX) } else { icon(I::Volume2) };
+    let play_icon = if paused {
+        icon(I::Play)
+    } else {
+        icon(I::Pause)
+    };
+    let mute_icon = if s.muted || s.volume <= 0.0 {
+        icon(I::VolumeX)
+    } else {
+        icon(I::Volume2)
+    };
     let controls = div()
         .id("controls")
         .absolute()
@@ -874,7 +1154,9 @@ fn player(app: &mut NtApp, b: &Block, cx: &mut Cx) -> AnyElement {
         .flex()
         .flex_col()
         .gap(px(4.0))
-        .when(!paused, |d| d.opacity(0.0).group_hover("player", |s| s.opacity(1.0)))
+        .when(!paused, |d| {
+            d.opacity(0.0).group_hover("player", |s| s.opacity(1.0))
+        })
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .child(seek)
         .child(
@@ -899,23 +1181,38 @@ fn player(app: &mut NtApp, b: &Block, cx: &mut Cx) -> AnyElement {
                             cx.notify();
                         })),
                 )
-                .child(div().w(px(96.0)).child(Slider::new(&app.volume).horizontal()))
-                .child(div().ml(px(8.0)).text_size(px(14.0)).text_color(text()).child(time)),
+                .child(
+                    div()
+                        .w(px(96.0))
+                        .child(Slider::new(&app.volume).horizontal()),
+                )
+                .child(
+                    div()
+                        .ml(px(8.0))
+                        .text_size(px(14.0))
+                        .text_color(text())
+                        .child(time),
+                ),
         );
     surface.child(controls).into_any_element()
 }
 
 fn watch_meta(app: &mut NtApp, title_h: f32, t: f64, cx: &mut Cx) -> AnyElement {
-    let Some((info, subscribed, saved, card_channel)) = app
-        .stack
-        .last()
-        .and_then(|p| p.watch())
-        .and_then(|w| w.info.clone().map(|i| (i, w.subscribed, w.saved, w.video.channel.clone())))
+    let Some((info, subscribed, saved, card_channel)) =
+        app.stack.last().and_then(|p| p.watch()).and_then(|w| {
+            w.info
+                .clone()
+                .map(|i| (i, w.subscribed, w.saved, w.video.channel.clone()))
+        })
     else {
         return div().into_any_element();
     };
     // Some watch responses (multi-artist videos) carry no channel name; the card had one.
-    let channel_name = if info.channel.name.is_empty() { card_channel } else { info.channel.name.clone() };
+    let channel_name = if info.channel.name.is_empty() {
+        card_channel
+    } else {
+        info.channel.name.clone()
+    };
     let av = image(app, info.channel.avatar.as_deref(), 40.0, t, cx);
     let cid = info.channel.id.clone();
     let cid2 = cid.clone();
@@ -925,7 +1222,11 @@ fn watch_meta(app: &mut NtApp, title_h: f32, t: f64, cx: &mut Cx) -> AnyElement 
         .flex()
         .flex_col()
         .pt(px(12.0))
-        .child(label(info.title.clone(), 20.0, TITLE_LH, text()).h(px(title_h)).font_weight(FontWeight::SEMIBOLD))
+        .child(
+            label(info.title.clone(), 20.0, TITLE_LH, text())
+                .h(px(title_h))
+                .font_weight(FontWeight::SEMIBOLD),
+        )
         .child(
             div()
                 .mt(px(12.0))
@@ -937,7 +1238,9 @@ fn watch_meta(app: &mut NtApp, title_h: f32, t: f64, cx: &mut Cx) -> AnyElement 
                     div()
                         .id("watch-av")
                         .cursor_pointer()
-                        .on_click(cx.listener(move |this, _, _, cx| this.open_channel(cid.clone(), cx)))
+                        .on_click(
+                            cx.listener(move |this, _, _, cx| this.open_channel(cid.clone(), cx)),
+                        )
                         .child(avatar(av, 40.0)),
                 )
                 .child(
@@ -948,9 +1251,19 @@ fn watch_meta(app: &mut NtApp, title_h: f32, t: f64, cx: &mut Cx) -> AnyElement 
                         .flex()
                         .flex_col()
                         .cursor_pointer()
-                        .on_click(cx.listener(move |this, _, _, cx| this.open_channel(cid2.clone(), cx)))
-                        .child(one_line(channel_name, 16.0, 22.0, text()).font_weight(FontWeight::MEDIUM))
-                        .child(one_line(info.channel.subscribers.clone().unwrap_or_default(), 12.0, 18.0, text2())),
+                        .on_click(
+                            cx.listener(move |this, _, _, cx| this.open_channel(cid2.clone(), cx)),
+                        )
+                        .child(
+                            one_line(channel_name, 16.0, 22.0, text())
+                                .font_weight(FontWeight::MEDIUM),
+                        )
+                        .child(one_line(
+                            info.channel.subscribers.clone().unwrap_or_default(),
+                            12.0,
+                            18.0,
+                            text2(),
+                        )),
                 )
                 .child(div().ml(px(12.0)).child(subscribe_button(subscribed, cx)))
                 .child(div().flex_1())
@@ -969,22 +1282,47 @@ fn watch_meta(app: &mut NtApp, title_h: f32, t: f64, cx: &mut Cx) -> AnyElement 
                         .child(likes),
                 )
                 .child(
-                    pill("watch-later", if saved { "Saved" } else { "Watch Later" }, raised(), text(), cx)
-                        .icon(if saved { icon(I::BookmarkCheck) } else { icon(I::Bookmark) })
-                        .on_click(cx.listener(|this, _, _, cx| this.toggle_watch_later(cx))),
+                    pill(
+                        "watch-later",
+                        if saved { "Saved" } else { "Watch Later" },
+                        raised(),
+                        text(),
+                        cx,
+                    )
+                    .icon(if saved {
+                        icon(I::BookmarkCheck)
+                    } else {
+                        icon(I::Bookmark)
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_watch_later(cx))),
                 ),
         )
         .into_any_element()
 }
 
 fn watch_desc(app: &mut NtApp, lines: usize, shown: usize, cx: &mut Cx) -> AnyElement {
-    let Some((info, expanded)) = app.stack.last().and_then(|p| p.watch()).and_then(|w| w.info.clone().map(|i| (i, w.desc_expanded)))
+    let Some((info, expanded)) = app
+        .stack
+        .last()
+        .and_then(|p| p.watch())
+        .and_then(|w| w.info.clone().map(|i| (i, w.desc_expanded)))
     else {
         return div().into_any_element();
     };
-    let head = [info.views.clone(), info.date.clone()].into_iter().flatten().collect::<Vec<_>>().join("  ");
+    let head = [info.views.clone(), info.date.clone()]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join("  ");
     let desc = info.description.trim_end().to_string();
-    let mut body = div().size_full().p(px(12.0)).rounded(px(R_THUMB)).bg(raised()).flex().flex_col().gap(px(4.0));
+    let mut body = div()
+        .size_full()
+        .p(px(12.0))
+        .rounded(px(R_THUMB))
+        .bg(raised())
+        .flex()
+        .flex_col()
+        .gap(px(4.0));
     body = body.child(one_line(head, 14.0, 20.0, text()).font_weight(FontWeight::BOLD));
     if shown > 0 {
         let mut d = label(desc, 14.0, BODY_LH, text());
@@ -1017,7 +1355,13 @@ fn watch_desc(app: &mut NtApp, lines: usize, shown: usize, cx: &mut Cx) -> AnyEl
 }
 
 fn comment(app: &mut NtApp, i: usize, w: f32, t: f64, cx: &mut Cx) -> AnyElement {
-    let Some(cm) = app.stack.last().and_then(|p| p.watch()).and_then(|w| w.comments.get(i)).cloned() else {
+    let Some(cm) = app
+        .stack
+        .last()
+        .and_then(|p| p.watch())
+        .and_then(|w| w.comments.get(i))
+        .cloned()
+    else {
         return div().into_any_element();
     };
     let av = image(app, cm.author_avatar.as_deref(), 40.0, t, cx);
@@ -1026,10 +1370,23 @@ fn comment(app: &mut NtApp, i: usize, w: f32, t: f64, cx: &mut Cx) -> AnyElement
         head.push_str(" • ");
         head.push_str(p);
     }
-    let mut actions = div().flex().items_center().gap(px(8.0)).text_size(px(12.0)).line_height(px(20.0)).text_color(text2());
-    actions = actions.child(div().text_size(px(14.0)).child(icon(I::ThumbsUp))).child(cm.likes.clone().unwrap_or_default());
+    let mut actions = div()
+        .flex()
+        .items_center()
+        .gap(px(8.0))
+        .text_size(px(12.0))
+        .line_height(px(20.0))
+        .text_color(text2());
+    actions = actions
+        .child(div().text_size(px(14.0)).child(icon(I::ThumbsUp)))
+        .child(cm.likes.clone().unwrap_or_default());
     if let Some(r) = cm.reply_count.clone().filter(|r| r != "0") {
-        actions = actions.child(div().ml(px(12.0)).text_color(c(0x3ea6ff)).child(format!("{r} replies")));
+        actions = actions.child(
+            div()
+                .ml(px(12.0))
+                .text_color(c(0x3ea6ff))
+                .child(format!("{r} replies")),
+        );
     }
     let _ = cx;
     div()

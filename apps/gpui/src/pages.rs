@@ -62,12 +62,24 @@ pub struct WatchState {
     pub comment_h_width: f32,
 }
 
+// A handful of pages exist at a time; boxing the big variants would only add indirection.
+#[allow(clippy::large_enum_variant)]
 pub enum Kind {
-    Home { topic: usize },
-    Search { query: String },
+    Home {
+        topic: usize,
+    },
+    Search {
+        query: String,
+    },
     Watch(Box<WatchState>),
-    Channel { id: String, info: Option<ChannelInfo>, subscribed: bool },
-    Subscriptions { channels: Vec<ChannelRef> },
+    Channel {
+        id: String,
+        info: Option<ChannelInfo>,
+        subscribed: bool,
+    },
+    Subscriptions {
+        channels: Vec<ChannelRef>,
+    },
     History,
     WatchLater,
 }
@@ -89,7 +101,16 @@ pub struct Page {
 
 impl Page {
     pub fn new(id: PageId, kind: Kind) -> Page {
-        Page { id, kind, status: Load::Loading, feed: Feed::default(), scroll: ScrollAnimator::new(), version: 0, req: 0, layout: None }
+        Page {
+            id,
+            kind,
+            status: Load::Loading,
+            feed: Feed::default(),
+            scroll: ScrollAnimator::new(),
+            version: 0,
+            req: 0,
+            layout: None,
+        }
     }
 
     pub fn root(&self) -> Option<Root> {
@@ -162,7 +183,9 @@ pub const CARD_TEXT_H: f32 = 12.0 + 44.0 + 4.0 + 20.0 + 20.0;
 
 /// As many columns as fit with a card width between 300 and 420.
 pub fn grid(inner_w: f32) -> (usize, f32) {
-    let fit = ((inner_w + COL_GAP) / (CARD_MIN + COL_GAP)).floor().max(1.0) as usize;
+    let fit = ((inner_w + COL_GAP) / (CARD_MIN + COL_GAP))
+        .floor()
+        .max(1.0) as usize;
     let cols = fit.max(1);
     let w = ((inner_w - COL_GAP * (cols as f32 - 1.0)) / cols as f32).min(CARD_MAX);
     (cols, w)
@@ -174,7 +197,11 @@ pub fn card_h(card_w: f32) -> f32 {
 
 /// Search-style list row: thumbnail 360x202 (narrower when the window is narrow).
 pub fn list_thumb_w(inner_w: f32) -> f32 {
-    if inner_w >= 760.0 { 360.0 } else { (inner_w * 0.45).floor() }
+    if inner_w >= 760.0 {
+        360.0
+    } else {
+        (inner_w * 0.45).floor()
+    }
 }
 pub const LIST_GAP: f32 = 16.0;
 
@@ -187,8 +214,15 @@ pub const SPINNER_H: f32 = 72.0;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum BlockKind {
-    GridRow { first: usize, count: usize, card_w: f32 },
-    SkeletonRow { cols: usize, card_w: f32 },
+    GridRow {
+        first: usize,
+        count: usize,
+        card_w: f32,
+    },
+    SkeletonRow {
+        cols: usize,
+        card_w: f32,
+    },
     ListRow(usize),
     CompactRow(usize),
     Spinner,
@@ -200,8 +234,13 @@ pub enum BlockKind {
     ChannelHeader,
     SubsStrip,
     Player,
-    WatchMeta { title_h: f32 },
-    WatchDesc { lines: usize, shown: usize },
+    WatchMeta {
+        title_h: f32,
+    },
+    WatchDesc {
+        lines: usize,
+        shown: usize,
+    },
     CommentsHeader,
     Comment(usize),
     CommentsSpinner,
@@ -281,43 +320,94 @@ pub fn comment_text_w(pw: f32) -> f32 {
 
 pub fn build_layout(page: &mut Page, geo: &Geo, m: &mut dyn Measure) -> Layout {
     let inner = geo.inner_w();
-    let mut lay = Layout { columns: vec![Vec::new()], ..Default::default() };
+    let mut lay = Layout {
+        columns: vec![Vec::new()],
+        ..Default::default()
+    };
     let mut y = PAD;
     match &mut page.kind {
         Kind::Watch(w) => {
             let (pw, related_x) = watch_columns(geo);
             let ph = player_h(geo, pw);
             let mut col: Vec<Block> = Vec::new();
-            col.push(Block { x: PAD, y, w: pw, h: ph, kind: BlockKind::Player });
+            col.push(Block {
+                x: PAD,
+                y,
+                w: pw,
+                h: ph,
+                kind: BlockKind::Player,
+            });
             y += ph;
             match (&page.status, &w.info) {
                 (Load::Failed(_), _) => {
-                    col.push(Block { x: PAD, y: y + 16.0, w: pw, h: 160.0, kind: BlockKind::LoadError });
+                    col.push(Block {
+                        x: PAD,
+                        y: y + 16.0,
+                        w: pw,
+                        h: 160.0,
+                        kind: BlockKind::LoadError,
+                    });
                     y += 176.0;
                 }
                 (_, None) => {
-                    col.push(Block { x: PAD, y, w: pw, h: SPINNER_H, kind: BlockKind::Spinner });
+                    col.push(Block {
+                        x: PAD,
+                        y,
+                        w: pw,
+                        h: SPINNER_H,
+                        kind: BlockKind::Spinner,
+                    });
                     y += SPINNER_H;
                 }
                 (_, Some(info)) => {
                     let title_lines = m.lines(&info.title, 20.0, 600, pw).max(1);
                     let title_h = title_lines as f32 * TITLE_LH;
                     let meta_h = 12.0 + title_h + 12.0 + 48.0;
-                    col.push(Block { x: PAD, y, w: pw, h: meta_h, kind: BlockKind::WatchMeta { title_h } });
+                    col.push(Block {
+                        x: PAD,
+                        y,
+                        w: pw,
+                        h: meta_h,
+                        kind: BlockKind::WatchMeta { title_h },
+                    });
                     y += meta_h + 12.0;
                     let lines = if info.description.trim().is_empty() {
                         0
                     } else {
                         m.lines(info.description.trim_end(), 14.0, 400, pw - 24.0)
                     };
-                    let shown = if w.desc_expanded { lines } else { lines.min(DESC_CLAMP) };
+                    let shown = if w.desc_expanded {
+                        lines
+                    } else {
+                        lines.min(DESC_CLAMP)
+                    };
                     let toggle = if lines > DESC_CLAMP { 4.0 + 20.0 } else { 0.0 };
-                    let desc_h = 12.0 + 20.0 + if shown > 0 { 4.0 + shown as f32 * BODY_LH } else { 0.0 } + toggle + 12.0;
-                    col.push(Block { x: PAD, y, w: pw, h: desc_h, kind: BlockKind::WatchDesc { lines, shown } });
+                    let desc_h = 12.0
+                        + 20.0
+                        + if shown > 0 {
+                            4.0 + shown as f32 * BODY_LH
+                        } else {
+                            0.0
+                        }
+                        + toggle
+                        + 12.0;
+                    col.push(Block {
+                        x: PAD,
+                        y,
+                        w: pw,
+                        h: desc_h,
+                        kind: BlockKind::WatchDesc { lines, shown },
+                    });
                     y += desc_h + 24.0;
                     if info.comments.is_some() || !w.comments.is_empty() {
                         lay.comments_y = Some(y);
-                        col.push(Block { x: PAD, y, w: pw, h: 40.0, kind: BlockKind::CommentsHeader });
+                        col.push(Block {
+                            x: PAD,
+                            y,
+                            w: pw,
+                            h: 40.0,
+                            kind: BlockKind::CommentsHeader,
+                        });
                         y += 40.0 + 12.0;
                         let tw = comment_text_w(pw);
                         if w.comment_h_width != tw {
@@ -329,16 +419,34 @@ pub fn build_layout(page: &mut Page, geo: &Geo, m: &mut dyn Measure) -> Layout {
                             w.comment_h.push(comment_h(lines));
                         }
                         for (i, h) in w.comment_h.iter().enumerate() {
-                            col.push(Block { x: PAD, y, w: pw, h: *h, kind: BlockKind::Comment(i) });
+                            col.push(Block {
+                                x: PAD,
+                                y,
+                                w: pw,
+                                h: *h,
+                                kind: BlockKind::Comment(i),
+                            });
                             y += h;
                         }
                         match w.comments_state {
                             CommentsState::Loading => {
-                                col.push(Block { x: PAD, y, w: pw, h: SPINNER_H, kind: BlockKind::CommentsSpinner });
+                                col.push(Block {
+                                    x: PAD,
+                                    y,
+                                    w: pw,
+                                    h: SPINNER_H,
+                                    kind: BlockKind::CommentsSpinner,
+                                });
                                 y += SPINNER_H;
                             }
                             CommentsState::Failed(_) => {
-                                col.push(Block { x: PAD, y, w: pw, h: 96.0, kind: BlockKind::CommentsError });
+                                col.push(Block {
+                                    x: PAD,
+                                    y,
+                                    w: pw,
+                                    h: 96.0,
+                                    kind: BlockKind::CommentsError,
+                                });
                                 y += 96.0;
                             }
                             _ => {}
@@ -354,14 +462,32 @@ pub fn build_layout(page: &mut Page, geo: &Geo, m: &mut dyn Measure) -> Layout {
             };
             let mut rel: Vec<Block> = Vec::new();
             for i in 0..page.feed.items.len() {
-                rel.push(Block { x: rx, y: ry, w: rw, h: COMPACT_THUMB_H, kind: BlockKind::CompactRow(i) });
+                rel.push(Block {
+                    x: rx,
+                    y: ry,
+                    w: rw,
+                    h: COMPACT_THUMB_H,
+                    kind: BlockKind::CompactRow(i),
+                });
                 ry += COMPACT_THUMB_H + COMPACT_GAP;
             }
             if page.feed.loading_more {
-                rel.push(Block { x: rx, y: ry, w: rw, h: SPINNER_H, kind: BlockKind::Spinner });
+                rel.push(Block {
+                    x: rx,
+                    y: ry,
+                    w: rw,
+                    h: SPINNER_H,
+                    kind: BlockKind::Spinner,
+                });
                 ry += SPINNER_H;
             } else if page.feed.more_error.is_some() {
-                rel.push(Block { x: rx, y: ry, w: rw, h: 96.0, kind: BlockKind::MoreError });
+                rel.push(Block {
+                    x: rx,
+                    y: ry,
+                    w: rw,
+                    h: 96.0,
+                    kind: BlockKind::MoreError,
+                });
                 ry += 96.0;
             }
             if column == 1 {
@@ -379,34 +505,85 @@ pub fn build_layout(page: &mut Page, geo: &Geo, m: &mut dyn Measure) -> Layout {
             if let Some(info) = info {
                 if info.banner.is_some() {
                     let bh = 160.0;
-                    lay.columns[0].push(Block { x: PAD, y, w: inner, h: bh, kind: BlockKind::ChannelBanner });
+                    lay.columns[0].push(Block {
+                        x: PAD,
+                        y,
+                        w: inner,
+                        h: bh,
+                        kind: BlockKind::ChannelBanner,
+                    });
                     y += bh + 16.0;
                 }
                 let hh = 168.0;
-                lay.columns[0].push(Block { x: PAD, y, w: inner, h: hh, kind: BlockKind::ChannelHeader });
+                lay.columns[0].push(Block {
+                    x: PAD,
+                    y,
+                    w: inner,
+                    h: hh,
+                    kind: BlockKind::ChannelHeader,
+                });
                 y += hh + 16.0;
             }
-            y = grid_section(page.status.clone(), &page.feed, inner, y, &mut lay.columns[0], "This channel has no videos");
+            y = grid_section(
+                page.status.clone(),
+                &page.feed,
+                inner,
+                y,
+                &mut lay.columns[0],
+                "This channel has no videos",
+            );
         }
         Kind::Subscriptions { channels } => {
             if page.status == Load::Ready && channels.is_empty() {
-                lay.columns[0].push(Block { x: PAD, y, w: inner, h: 200.0, kind: BlockKind::Empty("You haven't subscribed to any channels yet") });
+                lay.columns[0].push(Block {
+                    x: PAD,
+                    y,
+                    w: inner,
+                    h: 200.0,
+                    kind: BlockKind::Empty("You haven't subscribed to any channels yet"),
+                });
                 y += 200.0;
             } else {
                 if !channels.is_empty() {
-                    lay.columns[0].push(Block { x: PAD, y, w: inner, h: 112.0, kind: BlockKind::SubsStrip });
+                    lay.columns[0].push(Block {
+                        x: PAD,
+                        y,
+                        w: inner,
+                        h: 112.0,
+                        kind: BlockKind::SubsStrip,
+                    });
                     y += 112.0 + 16.0;
                 }
-                y = grid_section(page.status.clone(), &page.feed, inner, y, &mut lay.columns[0], "No recent uploads");
+                y = grid_section(
+                    page.status.clone(),
+                    &page.feed,
+                    inner,
+                    y,
+                    &mut lay.columns[0],
+                    "No recent uploads",
+                );
             }
         }
         Kind::Home { .. } => {
-            y = grid_section(page.status.clone(), &page.feed, inner, y, &mut lay.columns[0], "No videos");
+            y = grid_section(
+                page.status.clone(),
+                &page.feed,
+                inner,
+                y,
+                &mut lay.columns[0],
+                "No videos",
+            );
         }
         Kind::Search { .. } | Kind::History | Kind::WatchLater => {
             let col = &mut lay.columns[0];
             if matches!(page.kind, Kind::History | Kind::WatchLater) {
-                col.push(Block { x: PAD, y, w: inner, h: 48.0, kind: BlockKind::PageTitle });
+                col.push(Block {
+                    x: PAD,
+                    y,
+                    w: inner,
+                    h: 48.0,
+                    kind: BlockKind::PageTitle,
+                });
                 y += 48.0 + 8.0;
             }
             let empty = match page.kind {
@@ -416,22 +593,46 @@ pub fn build_layout(page: &mut Page, geo: &Geo, m: &mut dyn Measure) -> Layout {
             };
             match &page.status {
                 Load::Loading => {
-                    col.push(Block { x: PAD, y, w: inner, h: SPINNER_H * 2.0, kind: BlockKind::Spinner });
+                    col.push(Block {
+                        x: PAD,
+                        y,
+                        w: inner,
+                        h: SPINNER_H * 2.0,
+                        kind: BlockKind::Spinner,
+                    });
                     y += SPINNER_H * 2.0;
                 }
                 Load::Failed(_) => {
-                    col.push(Block { x: PAD, y, w: inner, h: 160.0, kind: BlockKind::LoadError });
+                    col.push(Block {
+                        x: PAD,
+                        y,
+                        w: inner,
+                        h: 160.0,
+                        kind: BlockKind::LoadError,
+                    });
                     y += 160.0;
                 }
                 Load::Ready if page.feed.items.is_empty() => {
-                    col.push(Block { x: PAD, y, w: inner, h: 200.0, kind: BlockKind::Empty(empty) });
+                    col.push(Block {
+                        x: PAD,
+                        y,
+                        w: inner,
+                        h: 200.0,
+                        kind: BlockKind::Empty(empty),
+                    });
                     y += 200.0;
                 }
                 Load::Ready => {
                     let th = list_thumb_w(inner) * 9.0 / 16.0;
                     let th = th.round();
                     for i in 0..page.feed.items.len() {
-                        col.push(Block { x: PAD, y, w: inner, h: th, kind: BlockKind::ListRow(i) });
+                        col.push(Block {
+                            x: PAD,
+                            y,
+                            w: inner,
+                            h: th,
+                            kind: BlockKind::ListRow(i),
+                        });
                         y += th + LIST_GAP;
                     }
                     y = feed_tail(&page.feed, inner, y, col);
@@ -447,38 +648,85 @@ pub fn build_layout(page: &mut Page, geo: &Geo, m: &mut dyn Measure) -> Layout {
 
 fn feed_tail(feed: &Feed, inner: f32, mut y: f32, col: &mut Vec<Block>) -> f32 {
     if feed.loading_more {
-        col.push(Block { x: PAD, y, w: inner, h: SPINNER_H, kind: BlockKind::Spinner });
+        col.push(Block {
+            x: PAD,
+            y,
+            w: inner,
+            h: SPINNER_H,
+            kind: BlockKind::Spinner,
+        });
         y += SPINNER_H;
     } else if feed.more_error.is_some() {
-        col.push(Block { x: PAD, y, w: inner, h: 96.0, kind: BlockKind::MoreError });
+        col.push(Block {
+            x: PAD,
+            y,
+            w: inner,
+            h: 96.0,
+            kind: BlockKind::MoreError,
+        });
         y += 96.0;
     }
     y
 }
 
-fn grid_section(status: Load, feed: &Feed, inner: f32, mut y: f32, col: &mut Vec<Block>, empty: &'static str) -> f32 {
+fn grid_section(
+    status: Load,
+    feed: &Feed,
+    inner: f32,
+    mut y: f32,
+    col: &mut Vec<Block>,
+    empty: &'static str,
+) -> f32 {
     let (cols, cw) = grid(inner);
     let ch = card_h(cw);
     match status {
         Load::Loading => {
             for _ in 0..3 {
-                col.push(Block { x: PAD, y, w: inner, h: ch, kind: BlockKind::SkeletonRow { cols, card_w: cw } });
+                col.push(Block {
+                    x: PAD,
+                    y,
+                    w: inner,
+                    h: ch,
+                    kind: BlockKind::SkeletonRow { cols, card_w: cw },
+                });
                 y += ch + ROW_GAP;
             }
         }
         Load::Failed(_) => {
-            col.push(Block { x: PAD, y, w: inner, h: 160.0, kind: BlockKind::LoadError });
+            col.push(Block {
+                x: PAD,
+                y,
+                w: inner,
+                h: 160.0,
+                kind: BlockKind::LoadError,
+            });
             y += 160.0;
         }
         Load::Ready if feed.items.is_empty() => {
-            col.push(Block { x: PAD, y, w: inner, h: 200.0, kind: BlockKind::Empty(empty) });
+            col.push(Block {
+                x: PAD,
+                y,
+                w: inner,
+                h: 200.0,
+                kind: BlockKind::Empty(empty),
+            });
             y += 200.0;
         }
         Load::Ready => {
             let mut first = 0;
             while first < feed.items.len() {
                 let count = cols.min(feed.items.len() - first);
-                col.push(Block { x: PAD, y, w: inner, h: ch, kind: BlockKind::GridRow { first, count, card_w: cw } });
+                col.push(Block {
+                    x: PAD,
+                    y,
+                    w: inner,
+                    h: ch,
+                    kind: BlockKind::GridRow {
+                        first,
+                        count,
+                        card_w: cw,
+                    },
+                });
                 y += ch + ROW_GAP;
                 first += count;
             }

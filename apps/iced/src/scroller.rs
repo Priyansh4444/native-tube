@@ -21,7 +21,9 @@ use iced::advanced::renderer::{self, Quad};
 use iced::advanced::widget::{Tree, Widget, tree};
 use iced::advanced::{Clipboard, Shell, mouse};
 use iced::keyboard::{self, key::Named};
-use iced::{Border, Color, Element, Event, Length, Rectangle, Renderer, Size, Theme, Vector, window};
+use iced::{
+    Border, Color, Element, Event, Length, Rectangle, Renderer, Size, Theme, Vector, window,
+};
 use nt_core::scroll::{self, ScrollAnimator};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -96,8 +98,7 @@ impl ScrollModel {
     }
     /// Feed helpers used by the autopilot and keyboard shortcuts coming from `update`.
     pub fn with<R>(&self, f: impl FnOnce(&mut ScrollAnimator, f64) -> R) -> R {
-        let r = f(&mut self.anim.borrow_mut(), clock::now());
-        r
+        f(&mut self.anim.borrow_mut(), clock::now())
     }
 }
 
@@ -149,7 +150,13 @@ impl<'a, M: Clone + 'a> Scroller<'a, M> {
             bottom: 24.0,
         };
         for lane in lanes {
-            s.lanes.push((lane.x, lane.width, lane.top, lane.assumed_total, lane.items.len()));
+            s.lanes.push((
+                lane.x,
+                lane.width,
+                lane.top,
+                lane.assumed_total,
+                lane.items.len(),
+            ));
             for item in lane.items {
                 s.keys.push(item.key);
                 s.assumed.push(item.assumed);
@@ -180,7 +187,12 @@ impl<'a, M: Clone + 'a> Scroller<'a, M> {
         let max = (content - vh).max(1.0);
         let h = (vh * vh / content).max(32.0).min(vh);
         let y = bounds.y + (self.model.offset.get() / max).clamp(0.0, 1.0) * (vh - h);
-        Some(Rectangle { x: bounds.x + bounds.width - SCROLLBAR_W - 3.0, y, width: SCROLLBAR_W, height: h })
+        Some(Rectangle {
+            x: bounds.x + bounds.width - SCROLLBAR_W - 3.0,
+            y,
+            width: SCROLLBAR_W,
+            height: h,
+        })
     }
 
     fn content_cursor(&self, cursor: mouse::Cursor, bounds: Rectangle) -> mouse::Cursor {
@@ -225,11 +237,16 @@ impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for Scroller<'a, M> {
     }
 
     fn state(&self) -> tree::State {
-        tree::State::new(KeyState { keys: self.keys.clone() })
+        tree::State::new(KeyState {
+            keys: self.keys.clone(),
+        })
     }
 
     fn children(&self) -> Vec<Tree> {
-        self.children.iter().map(|c| Tree::new(c.as_widget())).collect()
+        self.children
+            .iter()
+            .map(|c| Tree::new(c.as_widget()))
+            .collect()
     }
 
     fn diff(&self, tree: &mut Tree) {
@@ -240,7 +257,8 @@ impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for Scroller<'a, M> {
             }
             return;
         }
-        let mut old: HashMap<u64, Tree> = state.keys.drain(..).zip(tree.children.drain(..)).collect();
+        let mut old: HashMap<u64, Tree> =
+            state.keys.drain(..).zip(tree.children.drain(..)).collect();
         for (key, child) in self.keys.iter().zip(&self.children) {
             let t = match old.remove(key) {
                 Some(mut t) => {
@@ -254,7 +272,12 @@ impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for Scroller<'a, M> {
         state.keys.clone_from(&self.keys);
     }
 
-    fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, limits: &layout::Limits) -> layout::Node {
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
         let size = limits.max();
         let width_key: f32 = self.lanes.iter().map(|l| l.1).sum();
         if self.model.heights_width.get() != width_key {
@@ -268,9 +291,14 @@ impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for Scroller<'a, M> {
         for &(x, width, top, assumed_total, count) in &self.lanes {
             let mut y = top;
             let mut total = assumed_total;
-            let item_limits = layout::Limits::new(Size::new(width, 0.0), Size::new(width, f32::INFINITY));
+            let item_limits =
+                layout::Limits::new(Size::new(width, 0.0), Size::new(width, f32::INFINITY));
             for _ in 0..count {
-                let node = self.children[i].as_widget_mut().layout(&mut tree.children[i], renderer, &item_limits);
+                let node = self.children[i].as_widget_mut().layout(
+                    &mut tree.children[i],
+                    renderer,
+                    &item_limits,
+                );
                 let h = node.size().height;
                 heights.insert(self.keys[i], h);
                 total += h - self.assumed[i];
@@ -322,7 +350,9 @@ impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for Scroller<'a, M> {
             // Keep the scrollbar up a moment after motion, then one frame to hide it.
             let since = now - model.last_motion.get();
             if since < SCROLLBAR_LINGER && !model.anim.borrow().needs_frame() {
-                shell.request_redraw_at(*at + Duration::from_secs_f64(SCROLLBAR_LINGER - since + 0.01));
+                shell.request_redraw_at(
+                    *at + Duration::from_secs_f64(SCROLLBAR_LINGER - since + 0.01),
+                );
             }
             self.check_band(shell);
         }
@@ -334,7 +364,8 @@ impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for Scroller<'a, M> {
                     if let Some(thumb) = self.thumb(bounds) {
                         let track = bounds.height - thumb.height;
                         let max = model.content_h.get() - bounds.height;
-                        let frac = ((position.y - grab - bounds.y) / track.max(1.0)).clamp(0.0, 1.0);
+                        let frac =
+                            ((position.y - grab - bounds.y) / track.max(1.0)).clamp(0.0, 1.0);
                         model.anim.borrow_mut().jump_to((frac * max) as f64);
                         self.after_input(shell);
                     }
@@ -352,7 +383,9 @@ impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for Scroller<'a, M> {
         }
 
         if let Event::Mouse(mouse::Event::CursorMoved { .. }) = event {
-            let over = cursor.position_over(bounds).is_some_and(|p| p.x >= bounds.x + bounds.width - SCROLLBAR_HIT_W);
+            let over = cursor
+                .position_over(bounds)
+                .is_some_and(|p| p.x >= bounds.x + bounds.width - SCROLLBAR_HIT_W);
             if over != model.hover_bar.get() {
                 model.hover_bar.set(over);
                 shell.request_redraw();
@@ -389,9 +422,17 @@ impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for Scroller<'a, M> {
         // Children, in content coordinates.
         let content_cursor = self.content_cursor(cursor, bounds);
         let off = model.offset.get();
-        let content_viewport = Rectangle { y: bounds.y + off, ..bounds };
+        let content_viewport = Rectangle {
+            y: bounds.y + off,
+            ..bounds
+        };
         let _ = viewport;
-        for ((child, tree), layout) in self.children.iter_mut().zip(&mut tree.children).zip(layout.children()) {
+        for ((child, tree), layout) in self
+            .children
+            .iter_mut()
+            .zip(&mut tree.children)
+            .zip(layout.children())
+        {
             child.as_widget_mut().update(
                 tree,
                 event,
@@ -433,7 +474,9 @@ impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for Scroller<'a, M> {
                 self.after_input(shell);
                 shell.capture_event();
             }
-            Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) if self.keys_enabled => {
+            Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. })
+                if self.keys_enabled =>
+            {
                 if let Some(f) = &self.on_key
                     && let Some(msg) = f(key, *modifiers)
                 {
@@ -508,15 +551,33 @@ impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for Scroller<'a, M> {
     ) {
         use iced::advanced::Renderer as _;
         let bounds = layout.bounds();
-        let Some(visible) = bounds.intersection(viewport) else { return };
+        let Some(visible) = bounds.intersection(viewport) else {
+            return;
+        };
         let off = self.model.offset.get();
         let content_cursor = self.content_cursor(cursor, bounds);
-        let content_viewport = Rectangle { y: visible.y + off, ..visible };
+        let content_viewport = Rectangle {
+            y: visible.y + off,
+            ..visible
+        };
         renderer.with_layer(visible, |renderer| {
             renderer.with_translation(Vector::new(0.0, -off), |renderer| {
-                for ((child, tree), layout) in self.children.iter().zip(&tree.children).zip(layout.children()) {
+                for ((child, tree), layout) in self
+                    .children
+                    .iter()
+                    .zip(&tree.children)
+                    .zip(layout.children())
+                {
                     if layout.bounds().intersects(&content_viewport) {
-                        child.as_widget().draw(tree, renderer, theme, style, layout, content_cursor, &content_viewport);
+                        child.as_widget().draw(
+                            tree,
+                            renderer,
+                            theme,
+                            style,
+                            layout,
+                            content_cursor,
+                            &content_viewport,
+                        );
                     }
                 }
             });
@@ -531,10 +592,22 @@ impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for Scroller<'a, M> {
                 renderer.fill_quad(
                     Quad {
                         bounds: thumb,
-                        border: Border { radius: (SCROLLBAR_W / 2.0).into(), ..Border::default() },
+                        border: Border {
+                            radius: (SCROLLBAR_W / 2.0).into(),
+                            ..Border::default()
+                        },
                         ..Quad::default()
                     },
-                    Color::from_rgba8(0xaa, 0xaa, 0xaa, if self.model.drag.get().is_some() { 0.9 } else { 0.6 }),
+                    Color::from_rgba8(
+                        0xaa,
+                        0xaa,
+                        0xaa,
+                        if self.model.drag.get().is_some() {
+                            0.9
+                        } else {
+                            0.6
+                        },
+                    ),
                 );
             });
         }
@@ -554,13 +627,19 @@ impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for Scroller<'a, M> {
         }
         let content_cursor = self.content_cursor(cursor, bounds);
         let off = self.model.offset.get();
-        let content_viewport = Rectangle { y: bounds.y + off, ..bounds };
+        let content_viewport = Rectangle {
+            y: bounds.y + off,
+            ..bounds
+        };
         self.children
             .iter()
             .zip(&tree.children)
             .zip(layout.children())
             .filter(|(_, l)| l.bounds().intersects(&content_viewport))
-            .map(|((c, t), l)| c.as_widget().mouse_interaction(t, l, content_cursor, &content_viewport, renderer))
+            .map(|((c, t), l)| {
+                c.as_widget()
+                    .mouse_interaction(t, l, content_cursor, &content_viewport, renderer)
+            })
             .max()
             .unwrap_or_default()
     }
@@ -593,7 +672,9 @@ pub fn mark_on_next_frame(name: &'static str) {
 }
 
 pub fn frame_hook<'a, M: 'a>(inner: impl Into<Element<'a, M>>) -> Element<'a, M> {
-    Element::new(FrameHook { inner: inner.into() })
+    Element::new(FrameHook {
+        inner: inner.into(),
+    })
 }
 
 impl<'a, M: 'a> Widget<M, Theme, Renderer> for FrameHook<'a, M> {
@@ -615,7 +696,12 @@ impl<'a, M: 'a> Widget<M, Theme, Renderer> for FrameHook<'a, M> {
     fn diff(&self, tree: &mut Tree) {
         self.inner.as_widget().diff(tree)
     }
-    fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, limits: &layout::Limits) -> layout::Node {
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
         self.inner.as_widget_mut().layout(tree, renderer, limits)
     }
     fn operate(
@@ -625,7 +711,9 @@ impl<'a, M: 'a> Widget<M, Theme, Renderer> for FrameHook<'a, M> {
         renderer: &Renderer,
         operation: &mut dyn iced::advanced::widget::Operation,
     ) {
-        self.inner.as_widget_mut().operate(tree, layout, renderer, operation)
+        self.inner
+            .as_widget_mut()
+            .operate(tree, layout, renderer, operation)
     }
     fn update(
         &mut self,
@@ -638,7 +726,9 @@ impl<'a, M: 'a> Widget<M, Theme, Renderer> for FrameHook<'a, M> {
         shell: &mut Shell<'_, M>,
         viewport: &Rectangle,
     ) {
-        self.inner.as_widget_mut().update(tree, event, layout, cursor, renderer, clipboard, shell, viewport)
+        self.inner.as_widget_mut().update(
+            tree, event, layout, cursor, renderer, clipboard, shell, viewport,
+        )
     }
     fn draw(
         &self,
@@ -650,7 +740,9 @@ impl<'a, M: 'a> Widget<M, Theme, Renderer> for FrameHook<'a, M> {
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
-        self.inner.as_widget().draw(tree, renderer, theme, style, layout, cursor, viewport);
+        self.inner
+            .as_widget()
+            .draw(tree, renderer, theme, style, layout, cursor, viewport);
         nt_core::metrics::frame();
         PENDING_MARKS.with(|p| {
             for name in p.borrow_mut().drain(..) {
@@ -666,7 +758,9 @@ impl<'a, M: 'a> Widget<M, Theme, Renderer> for FrameHook<'a, M> {
         viewport: &Rectangle,
         renderer: &Renderer,
     ) -> mouse::Interaction {
-        self.inner.as_widget().mouse_interaction(tree, layout, cursor, viewport, renderer)
+        self.inner
+            .as_widget()
+            .mouse_interaction(tree, layout, cursor, viewport, renderer)
     }
     fn overlay<'b>(
         &'b mut self,
@@ -676,6 +770,8 @@ impl<'a, M: 'a> Widget<M, Theme, Renderer> for FrameHook<'a, M> {
         viewport: &Rectangle,
         translation: Vector,
     ) -> Option<iced::advanced::overlay::Element<'b, M, Theme, Renderer>> {
-        self.inner.as_widget_mut().overlay(tree, layout, renderer, viewport, translation)
+        self.inner
+            .as_widget_mut()
+            .overlay(tree, layout, renderer, viewport, translation)
     }
 }

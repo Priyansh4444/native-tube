@@ -36,22 +36,37 @@ impl iced::Executor for CoreExecutor {
 /// only accepts the bare command object, so the whole scenario is rejected. Unwrap those steps
 /// into a copy and point `NT_AUTOPILOT` at it. Does nothing when the file already parses as is.
 fn normalize_scenario() {
-    let Some(path) = std::env::var_os("NT_AUTOPILOT") else { return };
-    let Ok(bytes) = std::fs::read(&path) else { return };
+    let Some(path) = std::env::var_os("NT_AUTOPILOT") else {
+        return;
+    };
+    let Ok(bytes) = std::fs::read(&path) else {
+        return;
+    };
     if serde_json::from_slice::<Vec<nt_core::autopilot::Step>>(&bytes).is_ok() {
         return;
     }
-    let Ok(serde_json::Value::Array(steps)) = serde_json::from_slice::<serde_json::Value>(&bytes) else { return };
+    let Ok(serde_json::Value::Array(steps)) = serde_json::from_slice::<serde_json::Value>(&bytes)
+    else {
+        return;
+    };
     let steps: Vec<serde_json::Value> = steps
         .into_iter()
         .map(|step| match step {
-            serde_json::Value::Object(mut m) if m.len() == 1 && m.contains_key("do") => m.remove("do").unwrap_or_default(),
+            serde_json::Value::Object(mut m) if m.len() == 1 && m.contains_key("do") => {
+                m.remove("do").unwrap_or_default()
+            }
             other => other,
         })
         .collect();
-    let dir = std::env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir);
+    let dir = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
     let out = dir.join(format!("nt-iced-scenario-{}.json", std::process::id()));
-    if serde_json::to_vec(&steps).ok().and_then(|b| std::fs::write(&out, b).ok()).is_some() {
+    if serde_json::to_vec(&steps)
+        .ok()
+        .and_then(|b| std::fs::write(&out, b).ok())
+        .is_some()
+    {
         // SAFETY: called at the very start of `main`; the only other thread (the metrics
         // sampler) never reads the environment.
         unsafe { std::env::set_var("NT_AUTOPILOT", &out) };
@@ -61,13 +76,17 @@ fn normalize_scenario() {
 /// iced asks wgpu for the high-performance adapter and probes every backend. On a hybrid
 /// laptop that wakes the discrete GPU (and the compositor then has to copy every frame to the
 /// integrated one that scans out), and loads GL drivers we never use. A UI wants the low-power
-/// adapter on Vulkan; both knobs are wgpu's own env variables, so a user setting wins.
+/// adapter; on Linux, also select Vulkan so wgpu does not probe GL drivers. Both knobs are
+/// wgpu's own env variables, so a user setting wins. macOS keeps wgpu's native Metal backend.
 fn prefer_integrated_gpu() {
-    for (key, value) in [("WGPU_POWER_PREF", "low"), ("WGPU_BACKEND", "vulkan")] {
-        if std::env::var_os(key).is_none() {
-            // SAFETY: start of `main`, before iced or any thread that reads the environment.
-            unsafe { std::env::set_var(key, value) };
-        }
+    if std::env::var_os("WGPU_POWER_PREF").is_none() {
+        // SAFETY: start of `main`, before iced or any thread that reads the environment.
+        unsafe { std::env::set_var("WGPU_POWER_PREF", "low") };
+    }
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("WGPU_BACKEND").is_none() {
+        // SAFETY: start of `main`, before iced or any thread that reads the environment.
+        unsafe { std::env::set_var("WGPU_BACKEND", "vulkan") };
     }
 }
 
@@ -83,6 +102,7 @@ fn main() -> iced::Result {
         min_size: Some(Size::new(640.0, 480.0)),
         resizable: true,
         platform_specific: window::settings::PlatformSpecific {
+            #[cfg(target_os = "linux")]
             application_id: std::env::var("NT_APP_ID").unwrap_or_else(|_| "nt-iced".to_string()),
             ..Default::default()
         },
@@ -93,7 +113,10 @@ fn main() -> iced::Result {
         .title("NativeTube")
         .subscription(app::App::subscription)
         .theme(|_: &app::App| theme::theme())
-        .style(|_, _| iced::theme::Style { background_color: theme::BG, text_color: theme::TEXT })
+        .style(|_, _| iced::theme::Style {
+            background_color: theme::BG,
+            text_color: theme::TEXT,
+        })
         .executor::<CoreExecutor>()
         .window(window)
         .antialiasing(false)

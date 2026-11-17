@@ -75,7 +75,10 @@ pub struct Page<T> {
 
 impl<T> Default for Page<T> {
     fn default() -> Self {
-        Page { items: Vec::new(), next: None }
+        Page {
+            items: Vec::new(),
+            next: None,
+        }
     }
 }
 
@@ -180,16 +183,56 @@ pub struct Topic {
 
 /// The home feed's categories, in display order. The first is the default.
 pub const TOPICS: &[Topic] = &[
-    Topic { id: "all", title: "All", query: "" },
-    Topic { id: "music", title: "Music", query: "music videos" },
-    Topic { id: "gaming", title: "Gaming", query: "gaming" },
-    Topic { id: "news", title: "News", query: "news today" },
-    Topic { id: "tech", title: "Tech", query: "technology" },
-    Topic { id: "programming", title: "Programming", query: "programming" },
-    Topic { id: "science", title: "Science", query: "science documentary" },
-    Topic { id: "sports", title: "Sports", query: "sports highlights" },
-    Topic { id: "podcasts", title: "Podcasts", query: "podcast full episode" },
-    Topic { id: "cooking", title: "Cooking", query: "cooking recipes" },
+    Topic {
+        id: "all",
+        title: "All",
+        query: "",
+    },
+    Topic {
+        id: "music",
+        title: "Music",
+        query: "music videos",
+    },
+    Topic {
+        id: "gaming",
+        title: "Gaming",
+        query: "gaming",
+    },
+    Topic {
+        id: "news",
+        title: "News",
+        query: "news today",
+    },
+    Topic {
+        id: "tech",
+        title: "Tech",
+        query: "technology",
+    },
+    Topic {
+        id: "programming",
+        title: "Programming",
+        query: "programming",
+    },
+    Topic {
+        id: "science",
+        title: "Science",
+        query: "science documentary",
+    },
+    Topic {
+        id: "sports",
+        title: "Sports",
+        query: "sports highlights",
+    },
+    Topic {
+        id: "podcasts",
+        title: "Podcasts",
+        query: "podcast full episode",
+    },
+    Topic {
+        id: "cooking",
+        title: "Cooking",
+        query: "cooking recipes",
+    },
 ];
 
 /// Decoded straight-alpha RGBA8 pixels, tightly packed.

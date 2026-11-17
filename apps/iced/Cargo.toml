@@ -12,7 +12,6 @@ path = "src/main.rs"
 nt-core = { path = "../../core" }
 iced = { version = "0.14", default-features = false, features = [
     "wgpu",
-    "wayland",
     "advanced",
     "image-without-codecs",
     "crisp",
@@ -20,6 +19,9 @@ iced = { version = "0.14", default-features = false, features = [
 ] }
 serde_json = "1"
 tokio = { version = "1", features = ["time", "sync"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+iced = { version = "0.14", default-features = false, features = ["wayland"] }
 
 [profile.release]
 debug = false

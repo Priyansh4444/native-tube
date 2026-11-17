@@ -4,8 +4,9 @@
 
 - iced 0.14.0 (iced_core 0.14.0, iced_widget 0.14.2, iced_winit 0.14.1, iced_wgpu 0.14.0), with wgpu 27.0.1,
   winit 0.30.13 (Wayland through smithay-client-toolkit 0.19.2), and cosmic-text 0.15 for text.
-- Features: `wgpu`, `wayland`, `advanced`, `image-without-codecs`, `crisp`, `tokio`. Default features are off,
-  so there is no tiny-skia fallback, no X11, and no image codecs (the core decodes).
+- Features: `wgpu`, `advanced`, `image-without-codecs`, `crisp`, `tokio`, with `wayland` enabled only on Linux.
+  Default features are off, so there is no tiny-skia fallback, no X11, and no image codecs (the core decodes).
+  macOS uses winit's native backend and wgpu's native Metal backend.
 - The component kit is iced's own widgets (button, text, text_input, slider, container, row/column,
   stack, hover, mouse_area, shader, image). No third-party widget crates.
 - About 3,800 lines of Rust in `src/`.

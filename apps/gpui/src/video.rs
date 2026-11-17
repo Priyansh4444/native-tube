@@ -107,10 +107,14 @@ impl VideoState {
             }
             return false;
         };
-        let Some(buf) = image::RgbaImage::from_raw(frame.width, frame.height, frame.pixels().to_vec()) else {
+        let Some(buf) =
+            image::RgbaImage::from_raw(frame.width, frame.height, frame.pixels().to_vec())
+        else {
             return false;
         };
-        let new = Arc::new(RenderImage::new(smallvec::smallvec![image::Frame::new(buf)]));
+        let new = Arc::new(RenderImage::new(smallvec::smallvec![image::Frame::new(
+            buf
+        )]));
         if let Some(old) = self.image.replace(new) {
             let _ = window.drop_image(old);
         }

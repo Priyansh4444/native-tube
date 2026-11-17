@@ -1,0 +1,33 @@
+name: macOS builds
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.frontend }}
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        frontend: [gpui, iced, rune]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install libmpv
+        run: brew install mpv
+
+      - name: Build release executable
+        run: cargo build --locked --release --manifest-path apps/${{ matrix.frontend }}/Cargo.toml
+
+      - name: Upload executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-tube-${{ matrix.frontend }}-macos-${{ runner.arch }}
+          path: apps/${{ matrix.frontend }}/target/release/nt-${{ matrix.frontend }}
+          if-no-files-found: error

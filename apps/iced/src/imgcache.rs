@@ -71,7 +71,10 @@ impl Images {
         let slot = match result {
             Ok(img) => {
                 self.ready.set(self.ready.get() + 1);
-                Slot::Ready(Handle::from_rgba(img.width, img.height, img.pixels.clone()), Cell::new(tick))
+                Slot::Ready(
+                    Handle::from_rgba(img.width, img.height, img.pixels.clone()),
+                    Cell::new(tick),
+                )
             }
             Err(_) => Slot::Failed(crate::clock::now()),
         };
@@ -91,7 +94,13 @@ impl Images {
         let mut ticks: Vec<u64> = map
             .values()
             .flat_map(|m| m.values())
-            .filter_map(|s| if let Slot::Ready(_, t) = s { Some(t.get()) } else { None })
+            .filter_map(|s| {
+                if let Slot::Ready(_, t) = s {
+                    Some(t.get())
+                } else {
+                    None
+                }
+            })
             .collect();
         ticks.sort_unstable();
         // Drop the oldest quarter, but never anything used by the latest view.

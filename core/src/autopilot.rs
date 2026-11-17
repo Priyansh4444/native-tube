@@ -24,21 +24,31 @@ pub enum Command {
         topic: Option<String>,
     },
     /// Type `query` into search and submit. Mark `search_loaded` when results show.
-    Search { query: String },
+    Search {
+        query: String,
+    },
     /// Open the video at `index` in the list on screen (home, search, channel, or the watch
     /// page's related list). Mark `watch_loaded`, then `playback_started` on the first picture.
-    OpenVideo { index: usize },
+    OpenVideo {
+        index: usize,
+    },
     /// Open the channel of the video on the watch page. Mark `channel_loaded`.
     OpenChannel,
     /// Go back one page.
     Back,
     /// Mouse-wheel notches into the main scroll view (positive scrolls down), through the same
     /// code path real wheel events take.
-    Scroll { ticks: f64 },
+    Scroll {
+        ticks: f64,
+    },
     /// One precise (touchpad) scroll delta in logical pixels, through the real touchpad path.
-    ScrollPixels { px: f64 },
+    ScrollPixels {
+        px: f64,
+    },
     /// A touchpad fling at this velocity (logical px/s), through the real fling path.
-    Fling { velocity: f64 },
+    Fling {
+        velocity: f64,
+    },
     /// Jump the main scroll view to the top.
     ScrollToTop,
     TogglePause,
@@ -53,7 +63,9 @@ pub enum Command {
 #[serde(untagged)]
 pub enum Step {
     /// Start a named measurement phase.
-    Phase { phase: String },
+    Phase {
+        phase: String,
+    },
     /// Wait for a mark issued after the previous command (default timeout 30 s; on timeout the
     /// step is recorded as failed and the scenario goes on).
     WaitMark {
@@ -61,8 +73,12 @@ pub enum Step {
         #[serde(default)]
         timeout: Option<f64>,
     },
-    Sleep { sleep: f64 },
-    Snapshot { snapshot: String },
+    Sleep {
+        sleep: f64,
+    },
+    Snapshot {
+        snapshot: String,
+    },
     /// Send `do` `repeat` times, `every` seconds apart.
     Repeat {
         repeat: u32,
@@ -98,9 +114,10 @@ pub fn enabled() -> bool {
 pub fn start() {
     PILOT.get_or_init(|| {
         let path = std::env::var_os("NT_AUTOPILOT")?;
-        let steps: Vec<Step> = match std::fs::read(&path).map_err(|e| e.to_string()).and_then(|b| {
-            serde_json::from_slice(&b).map_err(|e| e.to_string())
-        }) {
+        let steps: Vec<Step> = match std::fs::read(&path)
+            .map_err(|e| e.to_string())
+            .and_then(|b| serde_json::from_slice(&b).map_err(|e| e.to_string()))
+        {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("NT_AUTOPILOT: can't read {}: {e}", path.to_string_lossy());
@@ -108,8 +125,13 @@ pub fn start() {
             }
         };
         let (tx, rx) = mpsc::unbounded_channel();
-        let _ = std::thread::Builder::new().name("nt-autopilot".into()).spawn(move || run(steps, tx));
-        Some(Pilot { rx: tokio::sync::Mutex::new(rx), waker: Mutex::new(None) })
+        let _ = std::thread::Builder::new()
+            .name("nt-autopilot".into())
+            .spawn(move || run(steps, tx));
+        Some(Pilot {
+            rx: tokio::sync::Mutex::new(rx),
+            waker: Mutex::new(None),
+        })
     });
 }
 
@@ -159,7 +181,11 @@ fn run(steps: Vec<Step>, tx: mpsc::UnboundedSender<Command>) {
             }
             Step::Sleep { sleep } => std::thread::sleep(Duration::from_secs_f64(sleep)),
             Step::Snapshot { snapshot } => take_snapshot(&snapshot),
-            Step::Repeat { repeat, every, command } => {
+            Step::Repeat {
+                repeat,
+                every,
+                command,
+            } => {
                 after = metrics::mark_seq();
                 for _ in 0..repeat {
                     send(&tx, command.clone());
@@ -174,13 +200,21 @@ fn run(steps: Vec<Step>, tx: mpsc::UnboundedSender<Command>) {
     }
     let mut report = metrics::report();
     report["failed_waits"] = serde_json::json!(failures);
-    let path = std::env::var_os("NT_REPORT").map(std::path::PathBuf::from).unwrap_or_else(|| {
-        crate::library::data_dir().join(format!("report-{}.json", report["app"].as_str().unwrap_or("app")))
-    });
+    let path = std::env::var_os("NT_REPORT")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            crate::library::data_dir().join(format!(
+                "report-{}.json",
+                report["app"].as_str().unwrap_or("app")
+            ))
+        });
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    match std::fs::write(&path, serde_json::to_vec_pretty(&report).unwrap_or_default()) {
+    match std::fs::write(
+        &path,
+        serde_json::to_vec_pretty(&report).unwrap_or_default(),
+    ) {
         Ok(()) => eprintln!("NT_REPORT {}", path.display()),
         Err(e) => eprintln!("NT_AUTOPILOT: can't write report: {e}"),
     }
@@ -191,13 +225,20 @@ fn run(steps: Vec<Step>, tx: mpsc::UnboundedSender<Command>) {
 }
 
 fn take_snapshot(name: &str) {
-    let (Some(output), Some(dir)) = (std::env::var_os("NT_SNAPSHOT_OUTPUT"), std::env::var_os("NT_SNAPSHOT_DIR")) else {
+    let (Some(output), Some(dir)) = (
+        std::env::var_os("NT_SNAPSHOT_OUTPUT"),
+        std::env::var_os("NT_SNAPSHOT_DIR"),
+    ) else {
         return;
     };
     let dir = std::path::PathBuf::from(dir);
     let _ = std::fs::create_dir_all(&dir);
     let file = dir.join(format!("{name}.png"));
-    let status = std::process::Command::new("grim").arg("-o").arg(&output).arg(&file).status();
+    let status = std::process::Command::new("grim")
+        .arg("-o")
+        .arg(&output)
+        .arg(&file)
+        .status();
     if !matches!(status, Ok(s) if s.success()) {
         eprintln!("NT_AUTOPILOT: snapshot {name} failed");
     }
@@ -210,8 +251,14 @@ mod tests {
     /// The benchmark scenario must parse, step for step.
     #[test]
     fn scenario_parses() {
-        let steps: Vec<Step> = serde_json::from_str(include_str!("../../bench/scenario.json")).unwrap();
-        assert!(steps.iter().any(|s| matches!(s, Step::Do { command: Command::Search { .. } })));
+        let steps: Vec<Step> =
+            serde_json::from_str(include_str!("../../bench/scenario.json")).unwrap();
+        assert!(steps.iter().any(|s| matches!(
+            s,
+            Step::Do {
+                command: Command::Search { .. }
+            }
+        )));
         assert!(steps.iter().any(|s| matches!(s, Step::Repeat { .. })));
         let bare: Vec<Step> = serde_json::from_str(r#"[{"cmd":"back"}]"#).unwrap();
         assert!(matches!(bare[0], Step::Bare(Command::Back)));

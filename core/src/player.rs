@@ -76,10 +76,24 @@ mod ffi {
         pub fn mpv_create() -> *mut mpv_handle;
         pub fn mpv_initialize(ctx: *mut mpv_handle) -> c_int;
         pub fn mpv_terminate_destroy(ctx: *mut mpv_handle);
-        pub fn mpv_set_option_string(ctx: *mut mpv_handle, name: *const c_char, data: *const c_char) -> c_int;
+        pub fn mpv_set_option_string(
+            ctx: *mut mpv_handle,
+            name: *const c_char,
+            data: *const c_char,
+        ) -> c_int;
         pub fn mpv_command(ctx: *mut mpv_handle, args: *mut *const c_char) -> c_int;
-        pub fn mpv_set_property(ctx: *mut mpv_handle, name: *const c_char, format: c_int, data: *mut c_void) -> c_int;
-        pub fn mpv_observe_property(ctx: *mut mpv_handle, id: u64, name: *const c_char, format: c_int) -> c_int;
+        pub fn mpv_set_property(
+            ctx: *mut mpv_handle,
+            name: *const c_char,
+            format: c_int,
+            data: *mut c_void,
+        ) -> c_int;
+        pub fn mpv_observe_property(
+            ctx: *mut mpv_handle,
+            id: u64,
+            name: *const c_char,
+            format: c_int,
+        ) -> c_int;
         pub fn mpv_wait_event(ctx: *mut mpv_handle, timeout: f64) -> *mut mpv_event;
         pub fn mpv_error_string(error: c_int) -> *const c_char;
         pub fn mpv_render_context_create(
@@ -93,7 +107,10 @@ mod ffi {
             callback_ctx: *mut c_void,
         );
         pub fn mpv_render_context_update(ctx: *mut mpv_render_context) -> u64;
-        pub fn mpv_render_context_render(ctx: *mut mpv_render_context, params: *mut mpv_render_param) -> c_int;
+        pub fn mpv_render_context_render(
+            ctx: *mut mpv_render_context,
+            params: *mut mpv_render_param,
+        ) -> c_int;
         pub fn mpv_render_context_free(ctx: *mut mpv_render_context);
     }
 }
@@ -150,7 +167,9 @@ impl PlaybackState {
 
     /// Width / height of the video, once both sides are known.
     pub fn aspect(&self) -> Option<f32> {
-        self.video_size.filter(|(w, h)| *w > 0 && *h > 0).map(|(w, h)| w as f32 / h as f32)
+        self.video_size
+            .filter(|(w, h)| *w > 0 && *h > 0)
+            .map(|(w, h)| w as f32 / h as f32)
     }
 }
 
@@ -177,7 +196,11 @@ impl VideoFrame {
 
 impl std::fmt::Debug for VideoFrame {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "VideoFrame({}x{} {:?} #{})", self.width, self.height, self.format, self.generation)
+        write!(
+            f,
+            "VideoFrame({}x{} {:?} #{})",
+            self.width, self.height, self.format, self.generation
+        )
     }
 }
 
@@ -298,7 +321,9 @@ fn cstr(s: &str) -> CString {
 
 fn mpv_err(code: c_int) -> String {
     // SAFETY: mpv_error_string returns a static string for any code.
-    unsafe { CStr::from_ptr(ffi::mpv_error_string(code)) }.to_string_lossy().into_owned()
+    unsafe { CStr::from_ptr(ffi::mpv_error_string(code)) }
+        .to_string_lossy()
+        .into_owned()
 }
 
 unsafe extern "C" fn on_render_update(ctx: *mut c_void) {
@@ -339,13 +364,24 @@ impl Player {
             // Buffer about as far ahead as YouTube's own player does, not mpv's default 1000 s.
             ("cache-secs", "60".to_string()),
             // NT_MUTE=1 starts muted (all test and benchmark runs set it).
-            ("mute", if std::env::var("NT_MUTE").is_ok_and(|v| v != "0") { "yes" } else { "no" }.to_string()),
+            (
+                "mute",
+                if std::env::var("NT_MUTE").is_ok_and(|v| v != "0") {
+                    "yes"
+                } else {
+                    "no"
+                }
+                .to_string(),
+            ),
             // Stream requests carry the same identity the streams were issued to.
             ("user-agent", crate::resolve::USER_AGENT.to_string()),
             // Fetch in bounded chunks, as YouTube's own players do: googlevideo trickles an
             // open-ended `Range: bytes=0-` (~12 KB/s) but serves bounded ranges at full speed.
             // Measured on a 14 h video: first picture 16.6 s -> 0.7 s.
-            ("stream-lavf-o", "request_size=10485760,initial_request_size=1048576".to_string()),
+            (
+                "stream-lavf-o",
+                "request_size=10485760,initial_request_size=1048576".to_string(),
+            ),
             ("keep-open", "yes".to_string()),
             ("idle", "yes".to_string()),
             ("cache", "yes".to_string()),
@@ -363,9 +399,15 @@ impl Player {
         let extra: Vec<(String, String)> = std::env::var("NT_MPV_OPTS")
             .unwrap_or_default()
             .split(',')
-            .filter_map(|kv| kv.split_once('=').map(|(k, v)| (k.trim().to_string(), v.trim().to_string())))
+            .filter_map(|kv| {
+                kv.split_once('=')
+                    .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
+            })
             .collect();
-        let options = options.into_iter().map(|(k, v)| (k.to_string(), v)).chain(extra);
+        let options = options
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .chain(extra);
         for (name, value) in options {
             let (n, v) = (cstr(&name), cstr(&value));
             // SAFETY: valid handle and NUL-terminated strings.
@@ -385,7 +427,10 @@ impl Player {
         }
 
         let shared = Arc::new(Shared {
-            state: Mutex::new(PlaybackState { volume, ..Default::default() }),
+            state: Mutex::new(PlaybackState {
+                volume,
+                ..Default::default()
+            }),
             frame: Mutex::new(None),
             generation: AtomicU64::new(0),
             waker: Mutex::new(Some(Arc::new(waker))),
@@ -400,8 +445,14 @@ impl Player {
 
         let api = cstr("sw");
         let mut params = [
-            ffi::mpv_render_param { kind: ffi::RENDER_PARAM_API_TYPE, data: api.as_ptr() as *mut c_void },
-            ffi::mpv_render_param { kind: ffi::RENDER_PARAM_INVALID, data: std::ptr::null_mut() },
+            ffi::mpv_render_param {
+                kind: ffi::RENDER_PARAM_API_TYPE,
+                data: api.as_ptr() as *mut c_void,
+            },
+            ffi::mpv_render_param {
+                kind: ffi::RENDER_PARAM_INVALID,
+                data: std::ptr::null_mut(),
+            },
         ];
         let mut ctx: *mut ffi::mpv_render_context = std::ptr::null_mut();
         // SAFETY: valid handle; params end with INVALID.
@@ -409,7 +460,10 @@ impl Player {
         if rc < 0 || ctx.is_null() {
             // SAFETY: nothing else holds the handle yet.
             unsafe { ffi::mpv_terminate_destroy(raw) };
-            return Err(Error::Player(format!("mpv_render_context_create: {}", mpv_err(rc))));
+            return Err(Error::Player(format!(
+                "mpv_render_context_create: {}",
+                mpv_err(rc)
+            )));
         }
         // SAFETY: `shared` outlives the render context: the render thread frees the context before it exits,
         // and the thread holds its own `Arc<Shared>` until then.
@@ -436,7 +490,13 @@ impl Player {
                 .spawn(move || event_loop(mpv, shared))
                 .map_err(|e| Error::Player(e.to_string()))?
         };
-        Ok(Player { mpv, shared, format, render_thread: Some(render_thread), event_thread: Some(event_thread) })
+        Ok(Player {
+            mpv,
+            shared,
+            format,
+            render_thread: Some(render_thread),
+            event_thread: Some(event_thread),
+        })
     }
 
     /// Replace the waker (for toolkits that only get a waker after the player exists).
@@ -456,14 +516,28 @@ impl Player {
         let n = cstr(name);
         let mut v: c_int = on.into();
         // SAFETY: valid handle; FLAG takes a pointer to an int.
-        unsafe { ffi::mpv_set_property(self.mpv.0, n.as_ptr(), ffi::FORMAT_FLAG, (&raw mut v).cast()) };
+        unsafe {
+            ffi::mpv_set_property(
+                self.mpv.0,
+                n.as_ptr(),
+                ffi::FORMAT_FLAG,
+                (&raw mut v).cast(),
+            )
+        };
     }
 
     fn set_double(&self, name: &str, value: f64) {
         let n = cstr(name);
         let mut v = value;
         // SAFETY: valid handle; DOUBLE takes a pointer to a double.
-        unsafe { ffi::mpv_set_property(self.mpv.0, n.as_ptr(), ffi::FORMAT_DOUBLE, (&raw mut v).cast()) };
+        unsafe {
+            ffi::mpv_set_property(
+                self.mpv.0,
+                n.as_ptr(),
+                ffi::FORMAT_DOUBLE,
+                (&raw mut v).cast(),
+            )
+        };
     }
 
     /// Open a YouTube video by id and start playing. Returns at once: the streams are found on a
@@ -476,7 +550,13 @@ impl Player {
         {
             let mut s = self.shared.lock_state();
             let (volume, muted) = (s.volume, s.muted);
-            *s = PlaybackState { status: Status::Loading, volume, muted, source: Some(video_id.to_string()), ..Default::default() };
+            *s = PlaybackState {
+                status: Status::Loading,
+                volume,
+                muted,
+                source: Some(video_id.to_string()),
+                ..Default::default()
+            };
         }
         *self.shared.frame.lock().unwrap_or_else(|e| e.into_inner()) = None;
         self.set_flag("pause", false);
@@ -492,11 +572,18 @@ impl Player {
         crate::client::runtime().spawn(async move {
             let found = crate::resolve::resolve(&id).await;
             let _guard = shared.worker_cmd.lock().unwrap_or_else(|e| e.into_inner());
-            if shared.shutdown.load(Ordering::Acquire) || shared.load_ticket.load(Ordering::Acquire) != ticket {
+            if shared.shutdown.load(Ordering::Acquire)
+                || shared.load_ticket.load(Ordering::Acquire) != ticket
+            {
                 return; // the player is gone, or another video was asked for meanwhile
             }
             let result = found.and_then(|s| {
-                let mut args = vec!["loadfile".to_string(), s.video, "replace".into(), "-1".into()];
+                let mut args = vec![
+                    "loadfile".to_string(),
+                    s.video,
+                    "replace".into(),
+                    "-1".into(),
+                ];
                 if let Some(audio) = s.audio {
                     // %N% quotes a value of N bytes, so commas and '=' in the URL are safe.
                     args.push(format!("audio-file=%{}%{}", audio.len(), audio));
@@ -525,7 +612,11 @@ impl Player {
             // Volume and mute are mpv's settings, not the file's: they survive a stop.
             let mut st = self.shared.lock_state();
             let (volume, muted) = (st.volume, st.muted);
-            *st = PlaybackState { volume, muted, ..Default::default() };
+            *st = PlaybackState {
+                volume,
+                muted,
+                ..Default::default()
+            };
         }
         self.shared.wake();
     }
@@ -542,7 +633,11 @@ impl Player {
     }
 
     pub fn toggle_pause(&self) {
-        if self.state().paused || self.state().status == Status::Ended { self.play() } else { self.pause() }
+        if self.state().paused || self.state().status == Status::Ended {
+            self.play()
+        } else {
+            self.pause()
+        }
     }
 
     /// Seek to an absolute position in seconds.
@@ -584,7 +679,11 @@ impl Player {
 
     /// The newest rendered frame, if any.
     pub fn frame(&self) -> Option<Arc<VideoFrame>> {
-        self.shared.frame.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.shared
+            .frame
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// Changes whenever a new frame is published; cheap to compare every UI frame.
@@ -601,7 +700,11 @@ impl Drop for Player {
     fn drop(&mut self) {
         {
             // Wait out a worker that is mid-command, then make sure no other one starts.
-            let _guard = self.shared.worker_cmd.lock().unwrap_or_else(|e| e.into_inner());
+            let _guard = self
+                .shared
+                .worker_cmd
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             self.shared.shutdown.store(true, Ordering::Release);
         }
         self.shared.signal_render();
@@ -627,7 +730,11 @@ fn command(mpv: &Handle, args: &[&str]) -> Result<()> {
     // SAFETY: valid handle (Drop waits for `worker_cmd` before destroying it); a NULL-terminated
     // array of NUL-terminated strings that outlive the call.
     let rc = unsafe { ffi::mpv_command(mpv.0, ptrs.as_mut_ptr()) };
-    if rc < 0 { Err(Error::Player(format!("{}: {}", args[0], mpv_err(rc)))) } else { Ok(()) }
+    if rc < 0 {
+        Err(Error::Player(format!("{}: {}", args[0], mpv_err(rc))))
+    } else {
+        Ok(())
+    }
 }
 
 fn event_loop(mpv: Arc<Handle>, shared: Arc<Shared>) {
@@ -659,7 +766,10 @@ fn event_loop(mpv: Arc<Handle>, shared: Arc<Shared>) {
                 let mut s = shared.lock_state();
                 match end.reason {
                     ffi::END_FILE_REASON_ERROR => {
-                        s.status = Status::Failed(format!("Couldn't play this video ({})", mpv_err(end.error)))
+                        s.status = Status::Failed(format!(
+                            "Couldn't play this video ({})",
+                            mpv_err(end.error)
+                        ))
                     }
                     ffi::END_FILE_REASON_EOF => s.status = Status::Ended,
                     _ => {}
@@ -681,7 +791,9 @@ fn event_loop(mpv: Arc<Handle>, shared: Arc<Shared>) {
 
 /// Fold one observed property into the state. Returns whether the UI should hear about it.
 fn apply_property(shared: &Shared, index: usize, prop: &ffi::mpv_event_property) -> bool {
-    let Some((name, _)) = OBSERVED.get(index) else { return false };
+    let Some((name, _)) = OBSERVED.get(index) else {
+        return false;
+    };
     // An absent value (e.g. no duration yet) comes as FORMAT_NONE with null data.
     let (flag, int, double) = if prop.data.is_null() {
         (None, None, None)
@@ -697,7 +809,16 @@ fn apply_property(shared: &Shared, index: usize, prop: &ffi::mpv_event_property)
         }
     };
     let mut s = shared.lock_state();
-    let before = (s.position.floor(), s.duration, s.paused, s.buffering, s.volume, s.muted, s.video_size, s.status.clone());
+    let before = (
+        s.position.floor(),
+        s.duration,
+        s.paused,
+        s.buffering,
+        s.volume,
+        s.muted,
+        s.video_size,
+        s.status.clone(),
+    );
     match *name {
         "time-pos" => s.position = double.unwrap_or(0.0),
         "duration" => s.duration = double.unwrap_or(0.0),
@@ -708,7 +829,11 @@ fn apply_property(shared: &Shared, index: usize, prop: &ffi::mpv_event_property)
         "dwidth" | "dheight" => {
             let (mut w, mut h) = s.video_size.unwrap_or((0, 0));
             let v = int.unwrap_or(0).max(0) as u32;
-            if *name == "dwidth" { w = v } else { h = v }
+            if *name == "dwidth" {
+                w = v
+            } else {
+                h = v
+            }
             // Keep the half we have until the other arrives; readers check both sides are non-zero.
             s.video_size = (w > 0 || h > 0).then_some((w, h));
         }
@@ -722,7 +847,16 @@ fn apply_property(shared: &Shared, index: usize, prop: &ffi::mpv_event_property)
         }
         _ => {}
     }
-    let after = (s.position.floor(), s.duration, s.paused, s.buffering, s.volume, s.muted, s.video_size, s.status.clone());
+    let after = (
+        s.position.floor(),
+        s.duration,
+        s.paused,
+        s.buffering,
+        s.volume,
+        s.muted,
+        s.video_size,
+        s.status.clone(),
+    );
     // Position changes wake the UI once a second (the clock), not on every picture.
     before != after
 }
@@ -761,29 +895,58 @@ fn render_loop(ctx: RenderCtx, shared: Arc<Shared>, format: PixelFormat) {
         if flags & ffi::RENDER_UPDATE_FRAME == 0 {
             continue;
         }
-        let video = shared.lock_state().video_size.filter(|(w, h)| *w > 0 && *h > 0).unwrap_or((1280, 720));
+        let video = shared
+            .lock_state()
+            .video_size
+            .filter(|(w, h)| *w > 0 && *h > 0)
+            .unwrap_or((1280, 720));
         let target = *shared.target.lock().unwrap_or_else(|e| e.into_inner());
         let (w, h) = render_size(video, target);
         let len = (w * h * 4) as usize;
 
         // Reuse a pooled buffer nobody else holds; otherwise allocate.
-        let reusable = pool.iter().position(|f| Arc::strong_count(f) == 1 && f.width == w && f.height == h);
+        let reusable = pool
+            .iter()
+            .position(|f| Arc::strong_count(f) == 1 && f.width == w && f.height == h);
         let mut frame = match reusable {
             Some(i) => pool.swap_remove(i),
-            None => Arc::new(VideoFrame { width: w, height: h, format, generation: 0, buf: AlignedBuf::new(len) }),
+            None => Arc::new(VideoFrame {
+                width: w,
+                height: h,
+                format,
+                generation: 0,
+                buf: AlignedBuf::new(len),
+            }),
         };
         pool.retain(|f| Arc::strong_count(f) > 1 || (f.width == w && f.height == h));
-        let Some(f) = Arc::get_mut(&mut frame) else { continue };
+        let Some(f) = Arc::get_mut(&mut frame) else {
+            continue;
+        };
 
         let started = Instant::now();
         let mut size = [w as c_int, h as c_int];
         let mut stride: usize = (w * 4) as usize;
         let mut params = [
-            ffi::mpv_render_param { kind: ffi::RENDER_PARAM_SW_SIZE, data: size.as_mut_ptr().cast() },
-            ffi::mpv_render_param { kind: ffi::RENDER_PARAM_SW_FORMAT, data: fmt.as_ptr() as *mut c_void },
-            ffi::mpv_render_param { kind: ffi::RENDER_PARAM_SW_STRIDE, data: (&raw mut stride).cast() },
-            ffi::mpv_render_param { kind: ffi::RENDER_PARAM_SW_POINTER, data: f.buf.as_mut_slice().as_mut_ptr().cast() },
-            ffi::mpv_render_param { kind: ffi::RENDER_PARAM_INVALID, data: std::ptr::null_mut() },
+            ffi::mpv_render_param {
+                kind: ffi::RENDER_PARAM_SW_SIZE,
+                data: size.as_mut_ptr().cast(),
+            },
+            ffi::mpv_render_param {
+                kind: ffi::RENDER_PARAM_SW_FORMAT,
+                data: fmt.as_ptr() as *mut c_void,
+            },
+            ffi::mpv_render_param {
+                kind: ffi::RENDER_PARAM_SW_STRIDE,
+                data: (&raw mut stride).cast(),
+            },
+            ffi::mpv_render_param {
+                kind: ffi::RENDER_PARAM_SW_POINTER,
+                data: f.buf.as_mut_slice().as_mut_ptr().cast(),
+            },
+            ffi::mpv_render_param {
+                kind: ffi::RENDER_PARAM_INVALID,
+                data: std::ptr::null_mut(),
+            },
         ];
         // SAFETY: the buffer holds at least stride * h bytes and is 64-byte aligned; params end with INVALID.
         let rc = unsafe { ffi::mpv_render_context_render(ctx.0, params.as_mut_ptr()) };
@@ -804,7 +967,11 @@ fn render_loop(ctx: RenderCtx, shared: Arc<Shared>, format: PixelFormat) {
             st.max_render_ms = st.max_render_ms.max(ms);
         }
         // The previous frame stays in the pool (it was pushed when it was rendered).
-        shared.frame.lock().unwrap_or_else(|e| e.into_inner()).replace(frame.clone());
+        shared
+            .frame
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .replace(frame.clone());
         shared.generation.fetch_add(1, Ordering::AcqRel);
         pool.push(frame);
         while pool.len() > 4 {

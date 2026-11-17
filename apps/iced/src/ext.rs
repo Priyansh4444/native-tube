@@ -14,7 +14,10 @@ pub enum Ext {
     Player,
 }
 
-type Chan = (mpsc::UnboundedSender<Ext>, Mutex<Option<mpsc::UnboundedReceiver<Ext>>>);
+type Chan = (
+    mpsc::UnboundedSender<Ext>,
+    Mutex<Option<mpsc::UnboundedReceiver<Ext>>>,
+);
 
 fn chan() -> &'static Chan {
     static C: OnceLock<Chan> = OnceLock::new();

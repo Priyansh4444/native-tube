@@ -61,8 +61,17 @@ impl Fixtures {
         }
         // An index makes the directory auditable by hand.
         use std::io::Write;
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(self.dir.join("index.txt")) {
-            let _ = writeln!(f, "{:016x} {}", fnv1a(key.as_bytes()), key.chars().take(200).collect::<String>());
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.dir.join("index.txt"))
+        {
+            let _ = writeln!(
+                f,
+                "{:016x} {}",
+                fnv1a(key.as_bytes()),
+                key.chars().take(200).collect::<String>()
+            );
         }
     }
 }

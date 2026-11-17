@@ -71,7 +71,9 @@ impl<T: Send + 'static> Job<T> {
 impl<T> Future for Job<T> {
     type Output = Result<T>;
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        Pin::new(&mut self.rx).poll(cx).map(|r| r.unwrap_or(Err(Error::Cancelled)))
+        Pin::new(&mut self.rx)
+            .poll(cx)
+            .map(|r| r.unwrap_or(Err(Error::Cancelled)))
     }
 }
 
@@ -109,7 +111,10 @@ impl Client {
             .timeout(std::time::Duration::from_secs(20))
             .build()
             .expect("failed to build the HTTP client");
-        Client { http, fixtures: Fixtures::from_env() }
+        Client {
+            http,
+            fixtures: Fixtures::from_env(),
+        }
     }
 
     pub(crate) async fn get_bytes(&self, url: &str) -> Result<bytes::Bytes> {
@@ -120,15 +125,24 @@ impl Client {
             return Ok(hit);
         }
         // Static image CDNs aren't YouTube's API; everything else waits its turn at the gate.
-        let is_cdn = ["ytimg.com/", "ggpht.com/", "googleusercontent.com/"].iter().any(|h| url.contains(h));
-        let _turn = if is_cdn { None } else { Some(crate::polite::turn().await?) };
+        let is_cdn = ["ytimg.com/", "ggpht.com/", "googleusercontent.com/"]
+            .iter()
+            .any(|h| url.contains(h));
+        let _turn = if is_cdn {
+            None
+        } else {
+            Some(crate::polite::turn().await?)
+        };
         let resp = self.http.get(url).send().await?;
         if is_cdn {
             if !resp.status().is_success() {
                 return Err(Error::Network(format!("{} for {url}", resp.status())));
             }
         } else {
-            crate::polite::check_status(resp.status(), resp.headers().get(reqwest::header::RETRY_AFTER))?;
+            crate::polite::check_status(
+                resp.status(),
+                resp.headers().get(reqwest::header::RETRY_AFTER),
+            )?;
         }
         let body = resp.bytes().await?;
         if let Some(f) = &self.fixtures {
@@ -157,7 +171,10 @@ impl Client {
             .json(&body)
             .send()
             .await?;
-        crate::polite::check_status(resp.status(), resp.headers().get(reqwest::header::RETRY_AFTER))?;
+        crate::polite::check_status(
+            resp.status(),
+            resp.headers().get(reqwest::header::RETRY_AFTER),
+        )?;
         let raw = resp.bytes().await?;
         if let Some(f) = &self.fixtures {
             f.store(&key, &raw);
@@ -167,7 +184,9 @@ impl Client {
 
     async fn search_raw(&self, query: String, params: &'static str) -> Result<Page<Video>> {
         let params = params.replace("%3D", "=");
-        let v = self.post("search", json!({ "query": query, "params": params })).await?;
+        let v = self
+            .post("search", json!({ "query": query, "params": params }))
+            .await?;
         innertube::parse_search(&v)
     }
 
@@ -175,7 +194,9 @@ impl Client {
         if c.endpoint == "multi" {
             return self.more_multi(c.token).await;
         }
-        let v = self.post(&c.endpoint, json!({ "continuation": c.token })).await?;
+        let v = self
+            .post(&c.endpoint, json!({ "continuation": c.token }))
+            .await?;
         let mut page = innertube::parse_video_continuation(&v, &c.endpoint)?;
         if let Some((id, name, avatar)) = &c.owner {
             for video in &mut page.items {
@@ -197,7 +218,9 @@ impl Client {
         for token in tokens {
             let this = self.clone();
             jobs.push(tokio::spawn(async move {
-                let v = this.post("search", json!({ "continuation": token })).await?;
+                let v = this
+                    .post("search", json!({ "continuation": token }))
+                    .await?;
                 innertube::parse_video_continuation(&v, "search")
             }));
         }
@@ -215,13 +238,21 @@ impl Client {
     async fn home_raw(&self, topic: String) -> Result<Page<Video>> {
         let topic = TOPICS.iter().find(|t| t.id == topic).unwrap_or(&TOPICS[0]);
         if !topic.query.is_empty() {
-            return self.search_raw(topic.query.to_string(), THIS_WEEK_VIDEOS).await;
+            return self
+                .search_raw(topic.query.to_string(), THIS_WEEK_VIDEOS)
+                .await;
         }
         let mut jobs = Vec::new();
         for id in ALL_MIX {
-            let query = TOPICS.iter().find(|t| t.id == *id).map(|t| t.query).unwrap_or(id);
+            let query = TOPICS
+                .iter()
+                .find(|t| t.id == *id)
+                .map(|t| t.query)
+                .unwrap_or(id);
             let this = self.clone();
-            jobs.push(tokio::spawn(async move { this.search_raw(query.to_string(), THIS_WEEK_VIDEOS).await }));
+            jobs.push(tokio::spawn(async move {
+                this.search_raw(query.to_string(), THIS_WEEK_VIDEOS).await
+            }));
         }
         let mut pages = Vec::new();
         for job in jobs {
@@ -269,7 +300,9 @@ impl Client {
     pub fn more_comments(&self, next: &Continuation) -> Job<CommentPage> {
         let (this, next) = (self.clone(), next.clone());
         Job::spawn(async move {
-            let v = this.post("next", json!({ "continuation": next.token })).await?;
+            let v = this
+                .post("next", json!({ "continuation": next.token }))
+                .await?;
             innertube::parse_comments(&v)
         })
     }
@@ -279,7 +312,10 @@ impl Client {
         let (this, id) = (self.clone(), channel_id.to_string());
         Job::spawn(async move {
             let v = this
-                .post("browse", json!({ "browseId": id, "params": innertube::CHANNEL_VIDEOS_TAB }))
+                .post(
+                    "browse",
+                    json!({ "browseId": id, "params": innertube::CHANNEL_VIDEOS_TAB }),
+                )
                 .await?;
             innertube::parse_channel(&v, &id)
         })
@@ -297,7 +333,9 @@ impl Client {
                 urlencode(&prefix)
             );
             let body = this.get_bytes(&url).await?;
-            Ok(innertube::parse_suggestions(&String::from_utf8_lossy(&body)))
+            Ok(innertube::parse_suggestions(&String::from_utf8_lossy(
+                &body,
+            )))
         })
     }
 
@@ -313,7 +351,10 @@ impl Client {
             for ch in channels.into_iter().take(40) {
                 let this = this.clone();
                 jobs.push(tokio::spawn(async move {
-                    let url = format!("https://www.youtube.com/feeds/videos.xml?channel_id={}", ch.id);
+                    let url = format!(
+                        "https://www.youtube.com/feeds/videos.xml?channel_id={}",
+                        ch.id
+                    );
                     let xml = this.get_bytes(&url).await?;
                     let mut items = innertube::parse_feed(&String::from_utf8_lossy(&xml), now)?;
                     for (_, v) in &mut items {
@@ -347,7 +388,11 @@ fn interleave(pages: Vec<Page<Video>>) -> Page<Video> {
             }
         }
     }
-    let tokens: Vec<&str> = pages.iter().filter_map(|p| p.next.as_ref()).map(|c| c.token.as_str()).collect();
+    let tokens: Vec<&str> = pages
+        .iter()
+        .filter_map(|p| p.next.as_ref())
+        .map(|c| c.token.as_str())
+        .collect();
     let next = (!tokens.is_empty()).then(|| Continuation {
         endpoint: "multi".into(),
         token: serde_json::to_string(&tokens).unwrap_or_default(),
@@ -360,7 +405,9 @@ pub(crate) fn urlencode(s: &str) -> String {
     let mut out = String::with_capacity(s.len() * 3);
     for b in s.bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
             b' ' => out.push('+'),
             _ => out.push_str(&format!("%{b:02X}")),
         }

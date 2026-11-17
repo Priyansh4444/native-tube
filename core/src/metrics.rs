@@ -102,23 +102,25 @@ pub fn init(app: &str) {
         s.exec_to_init = seconds_since_exec();
     }
     if std::env::var_os("NT_AUTOPILOT").is_some() || std::env::var_os("NT_METRICS").is_some() {
-        let _ = std::thread::Builder::new().name("nt-metrics".into()).spawn(|| {
-            loop {
-                let (cpu, rss) = (cpu_seconds(), rss_bytes());
-                {
-                    let mut s = lock();
-                    let t = now();
-                    s.samples.push((t, cpu, rss));
-                    s.rss_peak = s.rss_peak.max(rss);
-                    if let Some(p) = s.phases.last_mut()
-                        && p.end.is_none()
+        let _ = std::thread::Builder::new()
+            .name("nt-metrics".into())
+            .spawn(|| {
+                loop {
+                    let (cpu, rss) = (cpu_seconds(), rss_bytes());
                     {
-                        p.rss_peak = p.rss_peak.max(rss);
+                        let mut s = lock();
+                        let t = now();
+                        s.samples.push((t, cpu, rss));
+                        s.rss_peak = s.rss_peak.max(rss);
+                        if let Some(p) = s.phases.last_mut()
+                            && p.end.is_none()
+                        {
+                            p.rss_peak = p.rss_peak.max(rss);
+                        }
                     }
+                    std::thread::sleep(Duration::from_millis(100));
                 }
-                std::thread::sleep(Duration::from_millis(100));
-            }
-        });
+            });
     }
     let _ = m;
 }
@@ -174,7 +176,11 @@ pub fn wait_mark(name: &str, after: u64, timeout: Duration) -> Option<f64> {
             return Some(*t);
         }
         let left = deadline.checked_duration_since(Instant::now())?;
-        s = metrics().mark_cv.wait_timeout(s, left).unwrap_or_else(|e| e.into_inner()).0;
+        s = metrics()
+            .mark_cv
+            .wait_timeout(s, left)
+            .unwrap_or_else(|e| e.into_inner())
+            .0;
     }
 }
 
@@ -294,7 +300,11 @@ pub fn cpu_seconds() -> f64 {
 /// Resident set size in bytes.
 pub fn rss_bytes() -> u64 {
     let statm = std::fs::read_to_string("/proc/self/statm").unwrap_or_default();
-    let pages = statm.split_whitespace().nth(1).and_then(|x| x.parse::<u64>().ok()).unwrap_or(0);
+    let pages = statm
+        .split_whitespace()
+        .nth(1)
+        .and_then(|x| x.parse::<u64>().ok())
+        .unwrap_or(0);
     // SAFETY: sysconf is always safe to call.
     let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) }.max(4096) as u64;
     pages * page
@@ -303,6 +313,11 @@ pub fn rss_bytes() -> u64 {
 /// Seconds between the kernel starting this process and now.
 fn seconds_since_exec() -> Option<f64> {
     let start_ticks: f64 = stat_fields().get(19)?.parse().ok()?;
-    let uptime: f64 = std::fs::read_to_string("/proc/uptime").ok()?.split_whitespace().next()?.parse().ok()?;
+    let uptime: f64 = std::fs::read_to_string("/proc/uptime")
+        .ok()?
+        .split_whitespace()
+        .next()?
+        .parse()
+        .ok()?;
     Some(uptime - start_ticks / clock_ticks())
 }

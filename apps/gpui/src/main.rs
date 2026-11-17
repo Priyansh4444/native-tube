@@ -7,11 +7,28 @@ mod theme;
 mod video;
 mod views;
 
-use gpui::{AppContext as _, AssetSource, Bounds, SharedString, TitlebarOptions, WindowBounds, WindowOptions, point, px, size};
+use gpui::{
+    AppContext as _, AssetSource, Bounds, SharedString, TitlebarOptions, WindowBounds,
+    WindowOptions, point, px, size,
+};
 use gpui_component::{Root, Theme, ThemeMode};
 use std::borrow::Cow;
 
-gpui_kit_assets::icon_assets!(ExtraIcons, [House, Users, RotateCcwClock, Clock, Volume2, VolumeX, Bookmark, BookmarkCheck, Trash, ThumbsUp]);
+gpui_kit_assets::icon_assets!(
+    ExtraIcons,
+    [
+        House,
+        Users,
+        RotateCcwClock,
+        Clock,
+        Volume2,
+        VolumeX,
+        Bookmark,
+        BookmarkCheck,
+        Trash,
+        ThumbsUp
+    ]
+);
 
 /// The kit's default icon bundle plus the few extra Lucide icons this app uses.
 struct AppAssets;
@@ -64,12 +81,19 @@ fn apply_theme(cx: &mut gpui::App) {
 /// `NT_AUTOPILOT` at it. The steps and their timing are otherwise unchanged.
 fn fix_scenario() {
     use nt_core::autopilot::Step;
-    let Some(path) = std::env::var_os("NT_AUTOPILOT") else { return };
-    let Ok(bytes) = std::fs::read(&path) else { return };
+    let Some(path) = std::env::var_os("NT_AUTOPILOT") else {
+        return;
+    };
+    let Ok(bytes) = std::fs::read(&path) else {
+        return;
+    };
     if serde_json::from_slice::<Vec<Step>>(&bytes).is_ok() {
         return;
     }
-    let Ok(serde_json::Value::Array(steps)) = serde_json::from_slice::<serde_json::Value>(&bytes) else { return };
+    let Ok(serde_json::Value::Array(steps)) = serde_json::from_slice::<serde_json::Value>(&bytes)
+    else {
+        return;
+    };
     let steps: Vec<serde_json::Value> = steps
         .into_iter()
         .map(|step| match step.as_object() {
@@ -86,7 +110,10 @@ fn fix_scenario() {
         // SAFETY: called on the main thread before the autopilot or any UI thread exists; the
         // metrics sampler thread never touches the environment.
         unsafe { std::env::set_var("NT_AUTOPILOT", &out) };
-        eprintln!("nt-gpui: scenario rewritten to {} (see Core requests in NOTES.md)", out.display());
+        eprintln!(
+            "nt-gpui: scenario rewritten to {} (see Core requests in NOTES.md)",
+            out.display()
+        );
     }
 }
 
@@ -95,28 +122,36 @@ fn main() {
     fix_scenario();
     nt_core::autopilot::start();
 
-    gpui_platform::application().with_assets(AppAssets).run(|cx| {
-        gpui_component::init(cx);
-        apply_theme(cx);
-        let options = WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(Bounds { origin: point(px(0.0), px(0.0)), size: size(px(1280.0), px(800.0)) })),
-            titlebar: Some(TitlebarOptions { title: Some("NativeTube".into()), ..Default::default() }),
-            app_id: Some(std::env::var("NT_APP_ID").unwrap_or_else(|_| "nt-gpui".to_string())),
-            window_min_size: Some(size(px(640.0), px(480.0))),
-            focus: false,
-            // The window is never focused on its headless output, and an idle app draws
-            // nothing anyway; don't let GPUI halve the frame rate of an unfocused window.
-            inactive_frame_interval: None,
-            low_power_frame_interval: None,
-            ..Default::default()
-        };
-        let opened = cx.open_window(options, |window, cx| {
-            let view = cx.new(|cx| app::NtApp::new(window, cx));
-            cx.new(|cx| Root::new(view, window, cx))
+    gpui_platform::application()
+        .with_assets(AppAssets)
+        .run(|cx| {
+            gpui_component::init(cx);
+            apply_theme(cx);
+            let options = WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Bounds {
+                    origin: point(px(0.0), px(0.0)),
+                    size: size(px(1280.0), px(800.0)),
+                })),
+                titlebar: Some(TitlebarOptions {
+                    title: Some("NativeTube".into()),
+                    ..Default::default()
+                }),
+                app_id: Some(std::env::var("NT_APP_ID").unwrap_or_else(|_| "nt-gpui".to_string())),
+                window_min_size: Some(size(px(640.0), px(480.0))),
+                focus: false,
+                // The window is never focused on its headless output, and an idle app draws
+                // nothing anyway; don't let GPUI halve the frame rate of an unfocused window.
+                inactive_frame_interval: None,
+                low_power_frame_interval: None,
+                ..Default::default()
+            };
+            let opened = cx.open_window(options, |window, cx| {
+                let view = cx.new(|cx| app::NtApp::new(window, cx));
+                cx.new(|cx| Root::new(view, window, cx))
+            });
+            if let Err(e) = opened {
+                eprintln!("nt-gpui: can't open a window: {e}");
+                cx.quit();
+            }
         });
-        if let Err(e) = opened {
-            eprintln!("nt-gpui: can't open a window: {e}");
-            cx.quit();
-        }
-    });
 }

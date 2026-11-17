@@ -46,7 +46,13 @@ impl Images {
                 }
             });
         }
-        map.insert(key, Entry { pixels: pixels.clone(), used: epoch });
+        map.insert(
+            key,
+            Entry {
+                pixels: pixels.clone(),
+                used: epoch,
+            },
+        );
         pixels
     }
 

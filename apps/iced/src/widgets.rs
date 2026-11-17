@@ -12,12 +12,15 @@ use iced::alignment;
 use iced::keyboard::{self, key::Named};
 use iced::widget::image::Handle;
 use iced::widget::text::{LineHeight, Shaping, Wrapping};
-use iced::{Border, Color, Element, Event, Font, Length, Pixels, Point, Rectangle, Renderer, Size, Theme, window};
+use iced::{
+    Border, Color, Element, Event, Font, Length, Pixels, Point, Rectangle, Renderer, Size, Theme,
+    window,
+};
 use std::time::{Duration, Instant};
 
 type Paragraph = <Renderer as atext::Renderer>::Paragraph;
 
-fn text_spec<'s>(content: &'s str, width: f32, size: f32, lh: f32, font: Font) -> atext::Text<&'s str> {
+fn text_spec(content: &str, width: f32, size: f32, lh: f32, font: Font) -> atext::Text<&str> {
     atext::Text {
         content,
         bounds: Size::new(width, f32::INFINITY),
@@ -46,8 +49,21 @@ pub struct Clamp<'a> {
     reserve: bool,
 }
 
-pub fn clamp<'a>(content: impl Into<std::borrow::Cow<'a, str>>, size: f32, line_height: f32, lines: usize) -> Clamp<'a> {
-    Clamp { content: content.into(), size, line_height, lines, color: None, font: Font::DEFAULT, reserve: false }
+pub fn clamp<'a>(
+    content: impl Into<std::borrow::Cow<'a, str>>,
+    size: f32,
+    line_height: f32,
+    lines: usize,
+) -> Clamp<'a> {
+    Clamp {
+        content: content.into(),
+        size,
+        line_height,
+        lines,
+        color: None,
+        font: Font::DEFAULT,
+        reserve: false,
+    }
 }
 
 impl<'a> Clamp<'a> {
@@ -81,20 +97,49 @@ impl<'a, M> Widget<M, Theme, Renderer> for Clamp<'a> {
         tree::Tag::of::<ClampState>()
     }
     fn state(&self) -> tree::State {
-        tree::State::new(ClampState { content: String::new(), width: -1.0, lines: 0, para: None })
+        tree::State::new(ClampState {
+            content: String::new(),
+            width: -1.0,
+            lines: 0,
+            para: None,
+        })
     }
-    fn layout(&mut self, tree: &mut Tree, _renderer: &Renderer, limits: &layout::Limits) -> layout::Node {
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        _renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
         let width = limits.max().width;
         let st = tree.state.downcast_mut::<ClampState>();
-        if st.para.is_none() || st.width != width || st.content != *self.content || st.lines != self.lines {
+        if st.para.is_none()
+            || st.width != width
+            || st.content != *self.content
+            || st.lines != self.lines
+        {
             st.content.clear();
             st.content.push_str(&self.content);
             st.width = width;
             st.lines = self.lines;
-            st.para = Some(fit(&self.content, width, self.size, self.line_height, self.lines, self.font));
+            st.para = Some(fit(
+                &self.content,
+                width,
+                self.size,
+                self.line_height,
+                self.lines,
+                self.font,
+            ));
         }
-        let h = st.para.as_ref().map(|p| p.min_bounds().height).unwrap_or(0.0);
-        let h = if self.reserve { self.line_height * self.lines as f32 } else { h };
+        let h = st
+            .para
+            .as_ref()
+            .map(|p| p.min_bounds().height)
+            .unwrap_or(0.0);
+        let h = if self.reserve {
+            self.line_height * self.lines as f32
+        } else {
+            h
+        };
         layout::Node::new(Size::new(width, h))
     }
     fn draw(
@@ -110,7 +155,12 @@ impl<'a, M> Widget<M, Theme, Renderer> for Clamp<'a> {
         use iced::advanced::text::Renderer as _;
         let st = tree.state.downcast_ref::<ClampState>();
         if let Some(p) = &st.para {
-            renderer.fill_paragraph(p, layout.bounds().position(), self.color.unwrap_or(style.text_color), *viewport);
+            renderer.fill_paragraph(
+                p,
+                layout.bounds().position(),
+                self.color.unwrap_or(style.text_color),
+                *viewport,
+            );
         }
     }
 }
@@ -135,7 +185,11 @@ fn fit(content: &str, width: f32, size: f32, lh: f32, lines: usize, font: Font) 
     // nothing past that many characters per line can fit; a short range keeps this to a few
     // shaping passes.
     let max_chars = (lines as f32 * width / (size * 0.2)).ceil() as usize + 1;
-    let bound = content.char_indices().nth(max_chars).map(|(i, _)| i).unwrap_or(content.len());
+    let bound = content
+        .char_indices()
+        .nth(max_chars)
+        .map(|(i, _)| i)
+        .unwrap_or(content.len());
     let (mut lo, mut hi) = (0usize, bound);
     let mut best = None;
     while lo < hi {
@@ -183,7 +237,14 @@ pub struct Thumb {
 }
 
 pub fn thumb(handle: Option<Handle>, width: f32, height: f32, radius: f32) -> Thumb {
-    Thumb { handle, width, height, radius, badge: None, cover: false }
+    Thumb {
+        handle,
+        width,
+        height,
+        radius,
+        badge: None,
+        cover: false,
+    }
 }
 
 impl Thumb {
@@ -213,7 +274,12 @@ impl<M> Widget<M, Theme, Renderer> for Thumb {
     fn state(&self) -> tree::State {
         tree::State::new(ThumbState { badge: None })
     }
-    fn layout(&mut self, tree: &mut Tree, _renderer: &Renderer, limits: &layout::Limits) -> layout::Node {
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        _renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
         let st = tree.state.downcast_mut::<ThumbState>();
         match &self.badge {
             Some((text, _)) => {
@@ -225,7 +291,11 @@ impl<M> Widget<M, Theme, Renderer> for Thumb {
             }
             None => st.badge = None,
         }
-        layout::Node::new(limits.resolve(self.width, self.height, Size::new(self.width, self.height)))
+        layout::Node::new(limits.resolve(
+            self.width,
+            self.height,
+            Size::new(self.width, self.height),
+        ))
     }
     fn draw(
         &self,
@@ -251,14 +321,26 @@ impl<M> Widget<M, Theme, Renderer> for Thumb {
                 {
                     let s = (b.width / sz.width as f32).max(b.height / sz.height as f32);
                     let (w, hh) = (sz.width as f32 * s, sz.height as f32 * s);
-                    draw_bounds = Rectangle { x: b.x + (b.width - w) / 2.0, y: b.y + (b.height - hh) / 2.0, width: w, height: hh };
+                    draw_bounds = Rectangle {
+                        x: b.x + (b.width - w) / 2.0,
+                        y: b.y + (b.height - hh) / 2.0,
+                        width: w,
+                        height: hh,
+                    };
                 }
                 let mut img = iced::advanced::image::Image::new(h.clone());
                 img.border_radius = self.radius.into();
                 renderer.draw_image(img, draw_bounds, b);
             }
             None => renderer.fill_quad(
-                Quad { bounds: b, border: Border { radius: self.radius.into(), ..Border::default() }, ..Quad::default() },
+                Quad {
+                    bounds: b,
+                    border: Border {
+                        radius: self.radius.into(),
+                        ..Border::default()
+                    },
+                    ..Quad::default()
+                },
                 t::RAISED,
             ),
         }
@@ -272,7 +354,11 @@ impl<M> Widget<M, Theme, Renderer> for Thumb {
                 width: sz.width + 2.0 * pw,
                 height: sz.height + 2.0 * ph,
             };
-            let mut img = iced::advanced::image::Image::new(if *live { t::red_pixel() } else { t::badge_pixel() });
+            let mut img = iced::advanced::image::Image::new(if *live {
+                t::red_pixel()
+            } else {
+                t::badge_pixel()
+            });
             img.border_radius = 4.0.into();
             renderer.draw_image(img, r, r);
             renderer.fill_paragraph(para, Point::new(r.x + pw, r.y + ph), t::TEXT, *viewport);
@@ -365,10 +451,16 @@ impl<M> Widget<M, Theme, Renderer> for Spinner {
                         width: dot,
                         height: dot,
                     },
-                    border: Border { radius: (dot / 2.0).into(), ..Border::default() },
+                    border: Border {
+                        radius: (dot / 2.0).into(),
+                        ..Border::default()
+                    },
                     ..Quad::default()
                 },
-                Color { a: alpha, ..t::TEXT_2 },
+                Color {
+                    a: alpha,
+                    ..t::TEXT_2
+                },
             );
         }
     }
@@ -390,8 +482,16 @@ pub struct SeekBar<'a, M> {
     on_seek: Box<dyn Fn(f32) -> M + 'a>,
 }
 
-pub fn seek_bar<'a, M>(played: f32, buffered: f32, on_seek: impl Fn(f32) -> M + 'a) -> SeekBar<'a, M> {
-    SeekBar { played: played.clamp(0.0, 1.0), buffered: buffered.clamp(0.0, 1.0), on_seek: Box::new(on_seek) }
+pub fn seek_bar<'a, M>(
+    played: f32,
+    buffered: f32,
+    on_seek: impl Fn(f32) -> M + 'a,
+) -> SeekBar<'a, M> {
+    SeekBar {
+        played: played.clamp(0.0, 1.0),
+        buffered: buffered.clamp(0.0, 1.0),
+        on_seek: Box::new(on_seek),
+    }
 }
 
 #[derive(Default)]
@@ -449,7 +549,9 @@ impl<'a, M> Widget<M, Theme, Renderer> for SeekBar<'a, M> {
                     shell.capture_event();
                 }
             }
-            Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) if st.dragging.is_some() => {
+            Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
+                if st.dragging.is_some() =>
+            {
                 st.dragging = None;
                 shell.capture_event();
                 shell.request_redraw();
@@ -470,20 +572,47 @@ impl<'a, M> Widget<M, Theme, Renderer> for SeekBar<'a, M> {
         use iced::advanced::Renderer as _;
         let st = tree.state.downcast_ref::<SeekState>();
         let b = layout.bounds();
-        let thick = if st.hovered || st.dragging.is_some() { 5.0 } else { 3.0 };
+        let thick = if st.hovered || st.dragging.is_some() {
+            5.0
+        } else {
+            3.0
+        };
         let y = b.center_y() - thick / 2.0;
         let played = st.dragging.unwrap_or(self.played);
-        let bar = |x0: f32, x1: f32| Rectangle { x: b.x + x0 * b.width, y, width: ((x1 - x0) * b.width).max(0.0), height: thick };
-        let q = |r: Rectangle| Quad { bounds: r, border: Border { radius: (thick / 2.0).into(), ..Border::default() }, ..Quad::default() };
+        let bar = |x0: f32, x1: f32| Rectangle {
+            x: b.x + x0 * b.width,
+            y,
+            width: ((x1 - x0) * b.width).max(0.0),
+            height: thick,
+        };
+        let q = |r: Rectangle| Quad {
+            bounds: r,
+            border: Border {
+                radius: (thick / 2.0).into(),
+                ..Border::default()
+            },
+            ..Quad::default()
+        };
         renderer.fill_quad(q(bar(0.0, 1.0)), Color::from_rgba(1.0, 1.0, 1.0, 0.25));
-        renderer.fill_quad(q(bar(0.0, self.buffered.max(played))), Color::from_rgba(1.0, 1.0, 1.0, 0.45));
+        renderer.fill_quad(
+            q(bar(0.0, self.buffered.max(played))),
+            Color::from_rgba(1.0, 1.0, 1.0, 0.45),
+        );
         renderer.fill_quad(q(bar(0.0, played)), t::ACCENT);
         if st.hovered || st.dragging.is_some() {
             let d = 13.0;
             renderer.fill_quad(
                 Quad {
-                    bounds: Rectangle { x: b.x + played * b.width - d / 2.0, y: b.center_y() - d / 2.0, width: d, height: d },
-                    border: Border { radius: (d / 2.0).into(), ..Border::default() },
+                    bounds: Rectangle {
+                        x: b.x + played * b.width - d / 2.0,
+                        y: b.center_y() - d / 2.0,
+                        width: d,
+                        height: d,
+                    },
+                    border: Border {
+                        radius: (d / 2.0).into(),
+                        ..Border::default()
+                    },
                     ..Quad::default()
                 },
                 t::ACCENT,
@@ -498,7 +627,11 @@ impl<'a, M> Widget<M, Theme, Renderer> for SeekBar<'a, M> {
         _viewport: &Rectangle,
         _renderer: &Renderer,
     ) -> mouse::Interaction {
-        if cursor.is_over(layout.bounds()) { mouse::Interaction::Pointer } else { mouse::Interaction::None }
+        if cursor.is_over(layout.bounds()) {
+            mouse::Interaction::Pointer
+        } else {
+            mouse::Interaction::None
+        }
     }
 }
 
@@ -529,7 +662,14 @@ pub fn search_box<'a, M>(
     on_nav: impl Fn(i32) -> M + 'a,
     on_escape: Option<M>,
 ) -> SearchBox<'a, M> {
-    SearchBox { inner: inner.into(), focused, on_focus: Box::new(on_focus), on_nav: Box::new(on_nav), on_escape, blur: 0 }
+    SearchBox {
+        inner: inner.into(),
+        focused,
+        on_focus: Box::new(on_focus),
+        on_nav: Box::new(on_nav),
+        on_escape,
+        blur: 0,
+    }
 }
 
 impl<'a, M> SearchBox<'a, M> {
@@ -559,11 +699,22 @@ impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for SearchBox<'a, M> {
         let seen = tree.state.downcast_mut::<u64>();
         if *seen != self.blur {
             *seen = self.blur;
-            tree.children[0].state.downcast_mut::<iced::widget::text_input::State<Paragraph>>().unfocus();
+            tree.children[0]
+                .state
+                .downcast_mut::<iced::widget::text_input::State<Paragraph>>()
+                .unfocus();
         }
     }
-    fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, limits: &layout::Limits) -> layout::Node {
-        let node = self.inner.as_widget_mut().layout(&mut tree.children[0], renderer, limits);
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        let node = self
+            .inner
+            .as_widget_mut()
+            .layout(&mut tree.children[0], renderer, limits);
         layout::Node::with_children(node.size(), vec![node])
     }
     fn operate(
@@ -574,7 +725,9 @@ impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for SearchBox<'a, M> {
         operation: &mut dyn iced::advanced::widget::Operation,
     ) {
         if let Some(l) = layout.children().next() {
-            self.inner.as_widget_mut().operate(&mut tree.children[0], l, renderer, operation);
+            self.inner
+                .as_widget_mut()
+                .operate(&mut tree.children[0], l, renderer, operation);
         }
     }
     fn update(
@@ -588,7 +741,9 @@ impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for SearchBox<'a, M> {
         shell: &mut Shell<'_, M>,
         viewport: &Rectangle,
     ) {
-        let Some(inner_layout) = layout.children().next() else { return };
+        let Some(inner_layout) = layout.children().next() else {
+            return;
+        };
         let is_focused = |tree: &Tree| {
             tree.children[0]
                 .state
@@ -596,7 +751,10 @@ impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for SearchBox<'a, M> {
                 .is_focused()
         };
         if is_focused(tree)
-            && let Event::Keyboard(keyboard::Event::KeyPressed { key: keyboard::Key::Named(k), .. }) = event
+            && let Event::Keyboard(keyboard::Event::KeyPressed {
+                key: keyboard::Key::Named(k),
+                ..
+            }) = event
         {
             match k {
                 Named::ArrowDown => {
@@ -619,7 +777,16 @@ impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for SearchBox<'a, M> {
                 _ => {}
             }
         }
-        self.inner.as_widget_mut().update(&mut tree.children[0], event, inner_layout, cursor, renderer, clipboard, shell, viewport);
+        self.inner.as_widget_mut().update(
+            &mut tree.children[0],
+            event,
+            inner_layout,
+            cursor,
+            renderer,
+            clipboard,
+            shell,
+            viewport,
+        );
         let now = is_focused(tree);
         if now != self.focused {
             self.focused = now;
@@ -637,7 +804,15 @@ impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for SearchBox<'a, M> {
         viewport: &Rectangle,
     ) {
         if let Some(l) = layout.children().next() {
-            self.inner.as_widget().draw(&tree.children[0], renderer, theme, style, l, cursor, viewport);
+            self.inner.as_widget().draw(
+                &tree.children[0],
+                renderer,
+                theme,
+                style,
+                l,
+                cursor,
+                viewport,
+            );
         }
     }
     fn mouse_interaction(
@@ -651,7 +826,15 @@ impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for SearchBox<'a, M> {
         layout
             .children()
             .next()
-            .map(|l| self.inner.as_widget().mouse_interaction(&tree.children[0], l, cursor, viewport, renderer))
+            .map(|l| {
+                self.inner.as_widget().mouse_interaction(
+                    &tree.children[0],
+                    l,
+                    cursor,
+                    viewport,
+                    renderer,
+                )
+            })
             .unwrap_or_default()
     }
 }
@@ -676,4 +859,3 @@ mod tests {
         assert!(p.min_bounds().width > 200.0);
     }
 }
-

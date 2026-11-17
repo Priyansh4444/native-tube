@@ -30,7 +30,6 @@ fn may_unmute() -> bool {
     !std::env::var("NT_MUTE").is_ok_and(|v| v != "0")
 }
 
-
 pub fn pixels() -> &'static Pixels {
     PIXELS.get_or_init(Pixels::new)
 }
@@ -59,7 +58,11 @@ fn waker() {
 
 fn player() -> Result<&'static Arc<Player>, String> {
     PLAYER
-        .get_or_init(|| Player::new(PixelFormat::Rgba, waker).map(Arc::new).map_err(|e| e.to_string()))
+        .get_or_init(|| {
+            Player::new(PixelFormat::Rgba, waker)
+                .map(Arc::new)
+                .map_err(|e| e.to_string())
+        })
         .as_ref()
         .map_err(Clone::clone)
 }
@@ -136,7 +139,10 @@ impl VideoState {
                 p.set_volume(library().volume());
                 self.resume_at = resume_at.filter(|t| *t > 1.0);
                 self.active = true;
-                self.shown = Shown { status: Status::Loading, ..Shown::default() };
+                self.shown = Shown {
+                    status: Status::Loading,
+                    ..Shown::default()
+                };
             }
             Err(e) => self.error = Some(e),
         }
@@ -232,12 +238,28 @@ impl VideoState {
         {
             p.seek(t);
         }
-        let frac = |t: f64| if st.duration > 0.0 { (t / st.duration).clamp(0.0, 1.0) as f32 } else { 0.0 };
+        let frac = |t: f64| {
+            if st.duration > 0.0 {
+                (t / st.duration).clamp(0.0, 1.0) as f32
+            } else {
+                0.0
+            }
+        };
         // Whole points: an unchanged width is an equal value, which wakes no frame (mpv
         // reports the cache growing many times a second, also while paused).
-        self.progress.set([0.0, 0.0, (self.seek_w * frac(st.position)).round(), 4.0]);
-        self.buffered.set([0.0, 0.0, (self.seek_w * frac(st.position + st.buffered_ahead)).round(), 4.0]);
-        self.clock.set(format!("{} / {}", format::clock(st.position), format::clock(st.duration)));
+        self.progress
+            .set([0.0, 0.0, (self.seek_w * frac(st.position)).round(), 4.0]);
+        self.buffered.set([
+            0.0,
+            0.0,
+            (self.seek_w * frac(st.position + st.buffered_ahead)).round(),
+            4.0,
+        ]);
+        self.clock.set(format!(
+            "{} / {}",
+            format::clock(st.position),
+            format::clock(st.duration)
+        ));
         let shown = Shown {
             status: st.status.clone(),
             paused: st.paused,

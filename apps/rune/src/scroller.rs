@@ -18,7 +18,8 @@ pub fn now() -> f64 {
 /// An input event's timestamp (`Tx::input_time`) on that clock; `now()` when there is none.
 pub fn at(i: Option<Instant>) -> f64 {
     let t0 = *T0.get_or_init(Instant::now);
-    i.map(|i| i.saturating_duration_since(t0).as_secs_f64()).unwrap_or_else(now)
+    i.map(|i| i.saturating_duration_since(t0).as_secs_f64())
+        .unwrap_or_else(now)
 }
 
 /// How long the scrollbar stays after the last motion.
@@ -82,7 +83,8 @@ impl Scroller {
             self.vh = vh;
             self.anim.set_viewport(vh as f64);
         }
-        if content_h != self.content_h || self.anim.max_offset() != (content_h - vh).max(0.0) as f64 {
+        if content_h != self.content_h || self.anim.max_offset() != (content_h - vh).max(0.0) as f64
+        {
             self.content_h = content_h;
             self.anim.set_max_offset((content_h - vh) as f64);
         }
@@ -121,7 +123,8 @@ impl Scroller {
         self.live.set([0.0, -(y as f32)]);
         let max = self.anim.max_offset() as f32;
         if self.vh > 0.0 && max > 0.0 {
-            let h = (self.vh * self.vh / self.content_h.max(1.0)).clamp(BAR_MIN.min(self.vh), self.vh);
+            let h =
+                (self.vh * self.vh / self.content_h.max(1.0)).clamp(BAR_MIN.min(self.vh), self.vh);
             let top = (y as f32 / max) * (self.vh - h);
             self.thumb.set([0.0, top, BAR_W, h]);
         }
@@ -150,7 +153,8 @@ impl Scroller {
 
     /// When the scrollbar should next be checked for hiding, if it shows.
     pub fn bar_deadline(&self) -> Option<f64> {
-        self.bar_shown.then_some(self.last_motion + BAR_LINGER + 0.02)
+        self.bar_shown
+            .then_some(self.last_motion + BAR_LINGER + 0.02)
     }
 
     pub fn needs_frame(&self) -> bool {

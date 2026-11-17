@@ -3,8 +3,9 @@
 ## Versions
 
 - `gpui-pre` 0.3.12 (Zed's gpui, snapshot of zed@d2a4fb6), with `gpui-pre-platform` 0.3.12
-  (`wayland` feature) for the Linux platform. The platform lives in its own crates now
-  (`gpui-pre-platform` → `gpui-pre-linux` → `gpui-pre-wgpu`); `gpui-pre` alone has no backend.
+  (`wayland` feature) for Linux. On macOS, the platform crate selects its native backend. The
+  platform lives in its own crates now (`gpui-pre-platform` → `gpui-pre-linux` → `gpui-pre-wgpu`);
+  `gpui-pre` alone has no backend.
 - `gpui-component` 0.9.1 (GPUI Kit) and `gpui-kit-assets` 0.9.1 for the Lucide icons.
 - `gpui-pre-linux` 0.3.12 is **vendored with a ~30-line patch** (`vendor/gpui-pre-linux`, see
   "Workarounds").

@@ -1,7 +1,7 @@
 //! Design tokens from the spec, and the widget styles built from them.
 
-use iced::widget::{button, container, text_input};
 use iced::widget::image::Handle;
+use iced::widget::{button, container, text_input};
 use iced::{Background, Border, Color, Font, Shadow, Theme, font};
 use std::sync::OnceLock;
 
@@ -28,24 +28,39 @@ pub const TOP_BAR: f32 = 56.0;
 pub const RAIL: f32 = 72.0;
 pub const PAD: f32 = 24.0;
 
-pub const MEDIUM: Font = Font { weight: font::Weight::Medium, ..Font::DEFAULT };
-pub const BOLD: Font = Font { weight: font::Weight::Bold, ..Font::DEFAULT };
+pub const MEDIUM: Font = Font {
+    weight: font::Weight::Medium,
+    ..Font::DEFAULT
+};
+pub const BOLD: Font = Font {
+    weight: font::Weight::Bold,
+    ..Font::DEFAULT
+};
 
 pub fn theme() -> Theme {
     Theme::custom(
         "NativeTube".to_string(),
-        iced::theme::Palette { background: BG, text: TEXT, primary: ACCENT, success: ACCENT, warning: ACCENT, danger: ACCENT },
+        iced::theme::Palette {
+            background: BG,
+            text: TEXT,
+            primary: ACCENT,
+            success: ACCENT,
+            warning: ACCENT,
+            danger: ACCENT,
+        },
     )
 }
 
 /// 1x1 pixels stretched into badge backgrounds (see `widgets::Thumb`).
 pub fn badge_pixel() -> Handle {
     static H: OnceLock<Handle> = OnceLock::new();
-    H.get_or_init(|| Handle::from_rgba(1, 1, vec![0u8, 0, 0, 204])).clone()
+    H.get_or_init(|| Handle::from_rgba(1, 1, vec![0u8, 0, 0, 204]))
+        .clone()
 }
 pub fn red_pixel() -> Handle {
     static H: OnceLock<Handle> = OnceLock::new();
-    H.get_or_init(|| Handle::from_rgba(1, 1, vec![0xffu8, 0x3b, 0x30, 0xff])).clone()
+    H.get_or_init(|| Handle::from_rgba(1, 1, vec![0xffu8, 0x3b, 0x30, 0xff]))
+        .clone()
 }
 
 fn bg(c: Color) -> Option<Background> {
@@ -61,8 +76,15 @@ pub fn pill(_: &Theme, status: button::Status) -> button::Style {
     };
     button::Style {
         background: bg(c),
-        text_color: if status == button::Status::Disabled { TEXT_2 } else { TEXT },
-        border: Border { radius: R_BUTTON.into(), ..Border::default() },
+        text_color: if status == button::Status::Disabled {
+            TEXT_2
+        } else {
+            TEXT
+        },
+        border: Border {
+            radius: R_BUTTON.into(),
+            ..Border::default()
+        },
         shadow: Shadow::default(),
         snap: true,
     }
@@ -76,8 +98,15 @@ pub fn icon_button(_: &Theme, status: button::Status) -> button::Style {
     };
     button::Style {
         background: c,
-        text_color: if status == button::Status::Disabled { hex(0x555555) } else { TEXT },
-        border: Border { radius: R_BUTTON.into(), ..Border::default() },
+        text_color: if status == button::Status::Disabled {
+            hex(0x555555)
+        } else {
+            TEXT
+        },
+        border: Border {
+            radius: R_BUTTON.into(),
+            ..Border::default()
+        },
         shadow: Shadow::default(),
         snap: true,
     }
@@ -86,10 +115,21 @@ pub fn icon_button(_: &Theme, status: button::Status) -> button::Style {
 /// Icon on the video controls.
 pub fn control_button(_: &Theme, status: button::Status) -> button::Style {
     let c = match status {
-        button::Status::Hovered | button::Status::Pressed => bg(Color::from_rgba(1.0, 1.0, 1.0, 0.15)),
+        button::Status::Hovered | button::Status::Pressed => {
+            bg(Color::from_rgba(1.0, 1.0, 1.0, 0.15))
+        }
         _ => None,
     };
-    button::Style { background: c, text_color: TEXT, border: Border { radius: R_BUTTON.into(), ..Border::default() }, shadow: Shadow::default(), snap: true }
+    button::Style {
+        background: c,
+        text_color: TEXT,
+        border: Border {
+            radius: R_BUTTON.into(),
+            ..Border::default()
+        },
+        shadow: Shadow::default(),
+        snap: true,
+    }
 }
 
 pub fn chip(selected: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
@@ -97,9 +137,25 @@ pub fn chip(selected: bool) -> impl Fn(&Theme, button::Status) -> button::Style 
         let (b, tc) = if selected {
             (SELECTED_BG, SELECTED_TEXT)
         } else {
-            (if matches!(status, button::Status::Hovered | button::Status::Pressed) { HOVER } else { RAISED }, TEXT)
+            (
+                if matches!(status, button::Status::Hovered | button::Status::Pressed) {
+                    HOVER
+                } else {
+                    RAISED
+                },
+                TEXT,
+            )
         };
-        button::Style { background: bg(b), text_color: tc, border: Border { radius: R_CHIP.into(), ..Border::default() }, shadow: Shadow::default(), snap: true }
+        button::Style {
+            background: bg(b),
+            text_color: tc,
+            border: Border {
+                radius: R_CHIP.into(),
+                ..Border::default()
+            },
+            shadow: Shadow::default(),
+            snap: true,
+        }
     }
 }
 
@@ -109,7 +165,16 @@ pub fn card(_: &Theme, status: button::Status) -> button::Style {
         button::Status::Hovered | button::Status::Pressed => bg(RAISED),
         _ => None,
     };
-    button::Style { background: c, text_color: TEXT, border: Border { radius: R_THUMB.into(), ..Border::default() }, shadow: Shadow::default(), snap: true }
+    button::Style {
+        background: c,
+        text_color: TEXT,
+        border: Border {
+            radius: R_THUMB.into(),
+            ..Border::default()
+        },
+        shadow: Shadow::default(),
+        snap: true,
+    }
 }
 
 /// Text-only link (channel names): secondary, white on hover.
@@ -118,12 +183,24 @@ pub fn link(_: &Theme, status: button::Status) -> button::Style {
         button::Status::Hovered | button::Status::Pressed => TEXT,
         _ => TEXT_2,
     };
-    button::Style { background: None, text_color: tc, border: Border::default(), shadow: Shadow::default(), snap: true }
+    button::Style {
+        background: None,
+        text_color: tc,
+        border: Border::default(),
+        shadow: Shadow::default(),
+        snap: true,
+    }
 }
 
 /// A transparent wrapper (avatars).
 pub fn bare(_: &Theme, _: button::Status) -> button::Style {
-    button::Style { background: None, text_color: TEXT, border: Border::default(), shadow: Shadow::default(), snap: true }
+    button::Style {
+        background: None,
+        text_color: TEXT,
+        border: Border::default(),
+        shadow: Shadow::default(),
+        snap: true,
+    }
 }
 
 pub fn rail_entry(selected: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
@@ -135,14 +212,33 @@ pub fn rail_entry(selected: bool) -> impl Fn(&Theme, button::Status) -> button::
         } else {
             None
         };
-        button::Style { background: c, text_color: TEXT, border: Border { radius: 10.0.into(), ..Border::default() }, shadow: Shadow::default(), snap: true }
+        button::Style {
+            background: c,
+            text_color: TEXT,
+            border: Border {
+                radius: 10.0.into(),
+                ..Border::default()
+            },
+            shadow: Shadow::default(),
+            snap: true,
+        }
     }
 }
 
 pub fn suggestion(selected: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |_, status| {
-        let c = if selected || matches!(status, button::Status::Hovered | button::Status::Pressed) { bg(HOVER) } else { None };
-        button::Style { background: c, text_color: TEXT, border: Border::default(), shadow: Shadow::default(), snap: true }
+        let c = if selected || matches!(status, button::Status::Hovered | button::Status::Pressed) {
+            bg(HOVER)
+        } else {
+            None
+        };
+        button::Style {
+            background: c,
+            text_color: TEXT,
+            border: Border::default(),
+            shadow: Shadow::default(),
+            snap: true,
+        }
     }
 }
 
@@ -155,7 +251,12 @@ pub fn search_button(_: &Theme, status: button::Status) -> button::Style {
         background: bg(c),
         text_color: TEXT,
         border: Border {
-            radius: iced::border::Radius { top_left: 0.0, bottom_left: 0.0, top_right: R_BUTTON, bottom_right: R_BUTTON },
+            radius: iced::border::Radius {
+                top_left: 0.0,
+                bottom_left: 0.0,
+                top_right: R_BUTTON,
+                bottom_right: R_BUTTON,
+            },
             width: 1.0,
             color: DIVIDER,
         },
@@ -169,7 +270,12 @@ pub fn search_input(_: &Theme, status: text_input::Status) -> text_input::Style 
     text_input::Style {
         background: Background::Color(RAISED),
         border: Border {
-            radius: iced::border::Radius { top_left: R_BUTTON, bottom_left: R_BUTTON, top_right: 0.0, bottom_right: 0.0 },
+            radius: iced::border::Radius {
+                top_left: R_BUTTON,
+                bottom_left: R_BUTTON,
+                top_right: 0.0,
+                bottom_right: 0.0,
+            },
             width: 1.0,
             color: if focused { hex(0x1c62b9) } else { DIVIDER },
         },
@@ -181,24 +287,47 @@ pub fn search_input(_: &Theme, status: text_input::Status) -> text_input::Style 
 }
 
 pub fn panel(_: &Theme) -> container::Style {
-    container::Style { background: bg(RAISED), border: Border { radius: R_THUMB.into(), ..Border::default() }, ..container::Style::default() }
+    container::Style {
+        background: bg(RAISED),
+        border: Border {
+            radius: R_THUMB.into(),
+            ..Border::default()
+        },
+        ..container::Style::default()
+    }
 }
 
 pub fn dropdown(_: &Theme) -> container::Style {
     container::Style {
         background: bg(hex(0x212121)),
-        border: Border { radius: R_THUMB.into(), width: 1.0, color: DIVIDER },
-        shadow: Shadow { color: Color::from_rgba(0.0, 0.0, 0.0, 0.5), offset: iced::Vector::new(0.0, 4.0), blur_radius: 16.0 },
+        border: Border {
+            radius: R_THUMB.into(),
+            width: 1.0,
+            color: DIVIDER,
+        },
+        shadow: Shadow {
+            color: Color::from_rgba(0.0, 0.0, 0.0, 0.5),
+            offset: iced::Vector::new(0.0, 4.0),
+            blur_radius: 16.0,
+        },
         ..container::Style::default()
     }
 }
 
 pub fn surface(_: &Theme) -> container::Style {
-    container::Style { background: bg(SURFACE), text_color: Some(TEXT), ..container::Style::default() }
+    container::Style {
+        background: bg(SURFACE),
+        text_color: Some(TEXT),
+        ..container::Style::default()
+    }
 }
 
 pub fn black(_: &Theme) -> container::Style {
-    container::Style { background: bg(Color::BLACK), text_color: Some(TEXT), ..container::Style::default() }
+    container::Style {
+        background: bg(Color::BLACK),
+        text_color: Some(TEXT),
+        ..container::Style::default()
+    }
 }
 
 pub fn controls_scrim(_: &Theme) -> container::Style {

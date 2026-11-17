@@ -25,7 +25,10 @@ pub fn handle() -> Option<&'static AppHandle<App>> {
 
 /// A metrics mark for the next drawn frame (the one that first shows the content).
 pub fn mark_next(name: &'static str) {
-    PENDING_MARKS.lock().unwrap_or_else(|e| e.into_inner()).push(name);
+    PENDING_MARKS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push(name);
 }
 
 /// Called from the frame hook after a drawn frame.
@@ -37,7 +40,10 @@ pub fn flush_marks() {
 }
 
 /// Runs `f` with a job's result on the UI thread, inside a commit.
-pub fn on_result<T: Send + 'static>(job: Job<T>, f: impl FnOnce(&mut App, nt_core::Result<T>, &mut Tx) + Send + 'static) {
+pub fn on_result<T: Send + 'static>(
+    job: Job<T>,
+    f: impl FnOnce(&mut App, nt_core::Result<T>, &mut Tx) + Send + 'static,
+) {
     job.on_done(move |r| {
         if let Some(h) = handle() {
             h.update(move |s, tx| f(s, r, tx));
@@ -325,10 +331,15 @@ impl App {
     /// The next page of the top page's list (infinite scroll). One request at a time.
     pub fn load_more(&mut self) {
         let page = self.top_mut();
-        if page.feed.status != Load::Idle || page.feed.more == Load::Loading || page.watch().is_some() {
+        if page.feed.status != Load::Idle
+            || page.feed.more == Load::Loading
+            || page.watch().is_some()
+        {
             return;
         }
-        let Some(next) = page.feed.next.clone() else { return };
+        let Some(next) = page.feed.next.clone() else {
+            return;
+        };
         let id = page.id;
         page.feed.more = Load::Loading;
         page.touch();
@@ -359,7 +370,11 @@ impl App {
         if w.comments_state == Load::Loading {
             return;
         }
-        let cont = if !w.comments_started { w.info.as_ref().and_then(|i| i.comments.clone()) } else { w.comments_next.clone() };
+        let cont = if !w.comments_started {
+            w.info.as_ref().and_then(|i| i.comments.clone())
+        } else {
+            w.comments_next.clone()
+        };
         let Some(cont) = cont else { return };
         w.comments_started = true;
         w.comments_state = Load::Loading;
@@ -397,7 +412,10 @@ impl App {
         } else if matches!(page.feed.more, Load::Error(_)) {
             page.feed.more = Load::Idle;
             self.load_more();
-        } else if page.watch().is_some_and(|w| matches!(w.comments_state, Load::Error(_))) {
+        } else if page
+            .watch()
+            .is_some_and(|w| matches!(w.comments_state, Load::Error(_)))
+        {
             if let Some(w) = page.watch_mut() {
                 w.comments_state = Load::Idle;
             }
@@ -520,7 +538,10 @@ impl App {
             // winit (Wayland) passes the raw axis value as a logical PixelDelta with its sign
             // flipped; Rune divides by the scale. Chrome scales it ×12 (`wayland_axis_to_px`).
             if e.dy != 0.0 {
-                self.wheel_pixels(nt_core::scroll::wayland_axis_to_px(-e.dy as f64) * touchpad_factor(), t);
+                self.wheel_pixels(
+                    nt_core::scroll::wayland_axis_to_px(-e.dy as f64) * touchpad_factor(),
+                    t,
+                );
             }
             if e.phase == GesturePhase::Ended {
                 self.fling_start(t);
@@ -613,7 +634,9 @@ impl App {
                     false
                 }
                 Command::Home { topic } => {
-                    let i = topic.and_then(|id| nt_core::TOPICS.iter().position(|x| x.id == id)).unwrap_or(0);
+                    let i = topic
+                        .and_then(|id| nt_core::TOPICS.iter().position(|x| x.id == id))
+                        .unwrap_or(0);
                     self.root(Kind::Home { topic: i });
                     true
                 }
@@ -631,7 +654,10 @@ impl App {
                 }
                 Command::OpenChannel => {
                     let id = self.top().watch().and_then(|w| {
-                        w.info.as_ref().map(|i| i.channel.id.clone()).or_else(|| w.video.channel_id.clone())
+                        w.info
+                            .as_ref()
+                            .map(|i| i.channel.id.clone())
+                            .or_else(|| w.video.channel_id.clone())
                     });
                     if let Some(id) = id {
                         self.open_channel(id);
@@ -697,7 +723,11 @@ impl App {
         let target = page.scroll.anim.target() as f32;
         let near_end = |end: f32| target + vh + 1.5 * vh >= end;
         if page.watch().is_none() {
-            if page.feed.next.is_some() && page.feed.more == Load::Idle && page.feed.status == Load::Idle && near_end(list_end) {
+            if page.feed.next.is_some()
+                && page.feed.more == Load::Idle
+                && page.feed.status == Load::Idle
+                && near_end(list_end)
+            {
                 self.load_more();
             }
         } else if let Some(w) = page.watch() {
@@ -718,5 +748,10 @@ impl App {
 /// The touchpad multiplier on top of Chrome's ×12 (`NT_TOUCHPAD_FACTOR`, default 1).
 fn touchpad_factor() -> f64 {
     static F: OnceLock<f64> = OnceLock::new();
-    *F.get_or_init(|| std::env::var("NT_TOUCHPAD_FACTOR").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0))
+    *F.get_or_init(|| {
+        std::env::var("NT_TOUCHPAD_FACTOR")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1.0)
+    })
 }

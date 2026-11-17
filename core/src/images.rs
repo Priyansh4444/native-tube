@@ -24,7 +24,13 @@ struct Cache {
 
 fn cache() -> &'static Mutex<Cache> {
     static C: OnceLock<Mutex<Cache>> = OnceLock::new();
-    C.get_or_init(|| Mutex::new(Cache { slots: HashMap::new(), order: VecDeque::new(), bytes: 0 }))
+    C.get_or_init(|| {
+        Mutex::new(Cache {
+            slots: HashMap::new(),
+            order: VecDeque::new(),
+            bytes: 0,
+        })
+    })
 }
 
 fn fetch_gate() -> &'static Semaphore {
@@ -89,7 +95,9 @@ fn account(key: &(String, u32), result: &Result<Arc<RgbaImage>>) {
         Ok(img) => {
             c.bytes += img.pixels.len();
             while c.bytes > BUDGET_BYTES && c.order.len() > 1 {
-                let Some(old) = c.order.pop_front() else { break };
+                let Some(old) = c.order.pop_front() else {
+                    break;
+                };
                 if let Some(slot) = c.slots.remove(&old)
                     && let Some(Ok(img)) = slot.get()
                 {
@@ -112,13 +120,18 @@ pub fn cached_bytes() -> usize {
 pub fn decode(bytes: &[u8], max_width: u32) -> Result<RgbaImage> {
     let img = image::load_from_memory(bytes).map_err(|e| Error::Parse(format!("image: {e}")))?;
     let img = if max_width > 0 && img.width() > max_width {
-        let h = (u64::from(img.height()) * u64::from(max_width) / u64::from(img.width())).max(1) as u32;
+        let h =
+            (u64::from(img.height()) * u64::from(max_width) / u64::from(img.width())).max(1) as u32;
         img.resize_exact(max_width, h, image::imageops::FilterType::Triangle)
     } else {
         img
     };
     let rgba = img.into_rgba8();
-    Ok(RgbaImage { width: rgba.width(), height: rgba.height(), pixels: bytes::Bytes::from(rgba.into_raw()) })
+    Ok(RgbaImage {
+        width: rgba.width(),
+        height: rgba.height(),
+        pixels: bytes::Bytes::from(rgba.into_raw()),
+    })
 }
 
 impl RgbaImage {

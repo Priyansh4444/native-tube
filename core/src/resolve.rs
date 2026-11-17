@@ -26,8 +26,7 @@ const DEVICE_MODEL: &str = "RealityDevice17,1";
 const OS_NAME: &str = "visionOS";
 const OS_VERSION: &str = "26.5.23O471";
 /// Also sent to the stream servers (as the app does), through mpv's `user-agent`.
-pub const USER_AGENT: &str =
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15";
+pub const USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15";
 /// A visitor id is good for a long time; refresh it now and then anyway.
 const VISITOR_TTL: Duration = Duration::from_secs(6 * 3600);
 
@@ -71,11 +70,19 @@ async fn visitor_data() -> Result<(String, f64)> {
     }
     let started = Instant::now();
     let _turn = crate::polite::turn().await?;
-    let resp = http().get("https://www.youtube.com/sw.js_data").send().await?;
-    crate::polite::check_status(resp.status(), resp.headers().get(reqwest::header::RETRY_AFTER))?;
+    let resp = http()
+        .get("https://www.youtube.com/sw.js_data")
+        .send()
+        .await?;
+    crate::polite::check_status(
+        resp.status(),
+        resp.headers().get(reqwest::header::RETRY_AFTER),
+    )?;
     let body = resp.text().await?;
     // The body is `)]}'` followed by JSON; the visitor id sits at [0][2][0][0][13].
-    let json_start = body.find('[').ok_or_else(|| Error::Parse("sw.js_data: no JSON".into()))?;
+    let json_start = body
+        .find('[')
+        .ok_or_else(|| Error::Parse("sw.js_data: no JSON".into()))?;
     let v: Value = serde_json::from_str(&body[json_start..])?;
     let visitor = v
         .pointer("/0/2/0/0/13")
@@ -87,7 +94,10 @@ async fn visitor_data() -> Result<(String, f64)> {
 }
 
 fn max_height() -> u64 {
-    std::env::var("NT_MAX_HEIGHT").ok().and_then(|s| s.parse().ok()).unwrap_or(720)
+    std::env::var("NT_MAX_HEIGHT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(720)
 }
 
 /// Find the streams for a video.
@@ -120,7 +130,10 @@ pub async fn resolve(video_id: &str) -> Result<Streams> {
         .json(&body)
         .send()
         .await?;
-    crate::polite::check_status(resp.status(), resp.headers().get(reqwest::header::RETRY_AFTER))?;
+    crate::polite::check_status(
+        resp.status(),
+        resp.headers().get(reqwest::header::RETRY_AFTER),
+    )?;
     let v: Value = resp.json().await?;
     let player_ms = started.elapsed().as_secs_f64() * 1000.0;
     let mut streams = pick(&v)?;
@@ -131,25 +144,40 @@ pub async fn resolve(video_id: &str) -> Result<Streams> {
 
 /// Choose streams from a `/player` answer. Pure, so it is testable.
 pub(crate) fn pick(v: &Value) -> Result<Streams> {
-    let status = v.pointer("/playabilityStatus/status").and_then(Value::as_str).unwrap_or("");
+    let status = v
+        .pointer("/playabilityStatus/status")
+        .and_then(Value::as_str)
+        .unwrap_or("");
     if status != "OK" {
         let reason = v
             .pointer("/playabilityStatus/reason")
             .and_then(Value::as_str)
             .unwrap_or("This video can't be played");
         if crate::polite::check_refusal(reason) {
-            return Err(Error::Network(format!("{reason} (YouTube is suspicious of this connection; NativeTube has paused its requests for 30 min)")));
+            return Err(Error::Network(format!(
+                "{reason} (YouTube is suspicious of this connection; NativeTube has paused its requests for 30 min)"
+            )));
         }
-        let made_for_kids = v.pointer("/playabilityStatus/status").and_then(Value::as_str) == Some("UNPLAYABLE")
-            && v.pointer("/videoDetails/isMadeForKids").and_then(Value::as_bool) == Some(true);
+        let made_for_kids = v
+            .pointer("/playabilityStatus/status")
+            .and_then(Value::as_str)
+            == Some("UNPLAYABLE")
+            && v.pointer("/videoDetails/isMadeForKids")
+                .and_then(Value::as_bool)
+                == Some(true);
         return Err(Error::Player(if made_for_kids {
             "Made-for-kids videos can't be played here".to_string()
         } else {
             reason.to_string()
         }));
     }
-    let data = v.get("streamingData").ok_or_else(|| Error::Player("No streams were offered".into()))?;
-    let is_live = v.pointer("/videoDetails/isLive").and_then(Value::as_bool).unwrap_or(false);
+    let data = v
+        .get("streamingData")
+        .ok_or_else(|| Error::Player("No streams were offered".into()))?;
+    let is_live = v
+        .pointer("/videoDetails/isLive")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     if is_live && let Some(hls) = data.get("hlsManifestUrl").and_then(Value::as_str) {
         return Ok(Streams {
             video: hls.to_string(),
@@ -164,9 +192,18 @@ pub(crate) fn pick(v: &Value) -> Result<Streams> {
     let formats: Vec<&Value> = data
         .get("adaptiveFormats")
         .and_then(Value::as_array)
-        .map(|a| a.iter().filter(|f| f.get("url").and_then(Value::as_str).is_some()).collect())
+        .map(|a| {
+            a.iter()
+                .filter(|f| f.get("url").and_then(Value::as_str).is_some())
+                .collect()
+        })
         .unwrap_or_default();
-    let mime = |f: &Value| f.get("mimeType").and_then(Value::as_str).unwrap_or("").to_string();
+    let mime = |f: &Value| {
+        f.get("mimeType")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    };
     let num = |f: &Value, k: &str| f.get(k).and_then(Value::as_u64).unwrap_or(0);
     let max_h = max_height();
 
@@ -177,16 +214,29 @@ pub(crate) fn pick(v: &Value) -> Result<Streams> {
         .find_map(|codec| {
             formats
                 .iter()
-                .filter(|f| mime(f).starts_with("video/") && mime(f).contains(codec) && num(f, "height") <= max_h)
+                .filter(|f| {
+                    mime(f).starts_with("video/")
+                        && mime(f).contains(codec)
+                        && num(f, "height") <= max_h
+                })
                 .max_by_key(|f| (num(f, "height"), num(f, "fps"), num(f, "bitrate")))
         })
         .ok_or_else(|| Error::Player("No playable video stream".into()))?;
     // Audio: AAC in MP4 first, then Opus; highest bitrate.
     let audio = ["audio/mp4", "audio/webm"].iter().find_map(|kind| {
-        formats.iter().filter(|f| mime(f).starts_with(kind)).max_by_key(|f| num(f, "bitrate"))
+        formats
+            .iter()
+            .filter(|f| mime(f).starts_with(kind))
+            .max_by_key(|f| num(f, "bitrate"))
     });
 
-    let codec = |m: &str| m.split("codecs=\"").nth(1).and_then(|c| c.split(['.', '"']).next()).unwrap_or("?").to_string();
+    let codec = |m: &str| {
+        m.split("codecs=\"")
+            .nth(1)
+            .and_then(|c| c.split(['.', '"']).next())
+            .unwrap_or("?")
+            .to_string()
+    };
     let video_desc = format!(
         "{}p{} {} {:.1} Mb/s",
         num(video, "height"),
@@ -194,11 +244,18 @@ pub(crate) fn pick(v: &Value) -> Result<Streams> {
         codec(&mime(video)),
         num(video, "bitrate") as f64 / 1e6
     );
-    let audio_desc =
-        audio.map(|a| format!("{} {} kb/s", codec(&mime(a)), num(a, "bitrate") / 1000)).unwrap_or_else(|| "none".into());
+    let audio_desc = audio
+        .map(|a| format!("{} {} kb/s", codec(&mime(a)), num(a, "bitrate") / 1000))
+        .unwrap_or_else(|| "none".into());
     Ok(Streams {
-        video: video.get("url").and_then(Value::as_str).unwrap_or_default().to_string(),
-        audio: audio.and_then(|a| a.get("url").and_then(Value::as_str)).map(str::to_string),
+        video: video
+            .get("url")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        audio: audio
+            .and_then(|a| a.get("url").and_then(Value::as_str))
+            .map(str::to_string),
         is_live,
         video_desc,
         audio_desc,
@@ -233,7 +290,10 @@ mod tests {
     #[test]
     fn unplayable_reports_reason() {
         let v = json!({"playabilityStatus": {"status": "LOGIN_REQUIRED", "reason": "Sign in to confirm your age"}});
-        assert_eq!(pick(&v), Err(Error::Player("Sign in to confirm your age".into())));
+        assert_eq!(
+            pick(&v),
+            Err(Error::Player("Sign in to confirm your age".into()))
+        );
     }
 
     #[test]

@@ -4,12 +4,12 @@ use crate::images::ImageCache;
 use crate::pages::*;
 use crate::theme::*;
 use crate::video::VideoState;
-use gpui::prelude::*;
 use gpui::Focusable as _;
+use gpui::prelude::*;
 use gpui::{
     App, Context, Entity, FocusHandle, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, NavigationDirection, ScrollDelta, ScrollEvent, Subscription, TouchPhase, Window, canvas,
-    div, px,
+    MouseUpEvent, NavigationDirection, ScrollDelta, ScrollEvent, Subscription, TouchPhase, Window,
+    canvas, div, px,
 };
 use gpui_component::input::{Escape, InputEvent, InputState, MoveDown, MoveUp};
 use gpui_component::slider::{SliderEvent, SliderState};
@@ -67,21 +67,29 @@ impl NtApp {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search"));
         let volume = cx.new(|_| {
-            SliderState::new().min(0.0).max(100.0).step(1.0).default_value(library().volume() as f32)
+            SliderState::new()
+                .min(0.0)
+                .max(100.0)
+                .step(1.0)
+                .default_value(library().volume() as f32)
         });
         let subs = vec![
             cx.subscribe_in(&search, window, Self::on_search_event),
-            cx.subscribe_in(&volume, window, |this: &mut Self, _, ev: &SliderEvent, _, cx| {
-                let v = match ev {
-                    SliderEvent::Change(v) | SliderEvent::Release(v) => v.start(),
-                };
-                if let Some(p) = this.video.ensure(cx) {
-                    p.set_volume(v as f64);
-                    if v > 0.0 && !mute_locked() {
-                        p.set_muted(false);
+            cx.subscribe_in(
+                &volume,
+                window,
+                |this: &mut Self, _, ev: &SliderEvent, _, cx| {
+                    let v = match ev {
+                        SliderEvent::Change(v) | SliderEvent::Release(v) => v.start(),
+                    };
+                    if let Some(p) = this.video.ensure(cx) {
+                        p.set_volume(v as f64);
+                        if v > 0.0 && !mute_locked() {
+                            p.set_muted(false);
+                        }
                     }
-                }
-            }),
+                },
+            ),
         ];
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
@@ -98,7 +106,11 @@ impl NtApp {
             last_precise: false,
             seek_drag: None,
             seek_bar: None,
-            geo: Geo { win_w: 1280.0, win_h: 800.0, scale: 1.0 },
+            geo: Geo {
+                win_w: 1280.0,
+                win_h: 800.0,
+                scale: 1.0,
+            },
             offset: 0.0,
             pending_marks: vec![marks::FIRST_FRAME],
             first_frame: true,
@@ -115,7 +127,10 @@ impl NtApp {
         }
         cx.spawn_in(window, async move |this, cx| {
             while let Some(cmd) = nt_core::autopilot::next_command().await {
-                if this.update_in(cx, |app, window, cx| app.run_command(cmd, window, cx)).is_err() {
+                if this
+                    .update_in(cx, |app, window, cx| app.run_command(cmd, window, cx))
+                    .is_err()
+                {
                     break;
                 }
             }
@@ -178,7 +193,9 @@ impl NtApp {
         self.stack.clear();
         let kind = match root {
             Root::Home => Kind::Home { topic: 0 },
-            Root::Subscriptions => Kind::Subscriptions { channels: Vec::new() },
+            Root::Subscriptions => Kind::Subscriptions {
+                channels: Vec::new(),
+            },
             Root::History => Kind::History,
             Root::WatchLater => Kind::WatchLater,
         };
@@ -192,7 +209,10 @@ impl NtApp {
         self.leave_top_watch();
         self.stack.pop();
         // Coming back to a watch page: play the video again from where it was.
-        let resume = self.top().and_then(|p| p.watch()).map(|w| w.video.id.clone());
+        let resume = self
+            .top()
+            .and_then(|p| p.watch())
+            .map(|w| w.video.id.clone());
         if let Some(id) = resume {
             self.video.load(&id, cx);
         }
@@ -247,7 +267,14 @@ impl NtApp {
             return;
         }
         let subscribed = library().is_subscribed(&channel_id);
-        self.push(Kind::Channel { id: channel_id, info: None, subscribed }, cx);
+        self.push(
+            Kind::Channel {
+                id: channel_id,
+                info: None,
+                subscribed,
+            },
+            cx,
+        );
     }
 
     pub fn submit_search(&mut self, query: String, window: &mut Window, cx: &mut Context<Self>) {
@@ -255,7 +282,8 @@ impl NtApp {
         if query.is_empty() {
             return;
         }
-        self.search.update(cx, |s, cx| s.set_value(query.clone(), window, cx));
+        self.search
+            .update(cx, |s, cx| s.set_value(query.clone(), window, cx));
         self.sugg.open = false;
         self.sugg.selected = None;
         self.sugg.seq += 1;
@@ -287,7 +315,9 @@ impl NtApp {
     }
 
     pub fn start_load(&mut self, id: PageId, cx: &mut Context<Self>) {
-        let Some(page) = self.page_mut(id) else { return };
+        let Some(page) = self.page_mut(id) else {
+            return;
+        };
         page.status = Load::Loading;
         page.req += 1;
         page.touch();
@@ -307,8 +337,17 @@ impl NtApp {
                     let Some(page) = app.page_mut(id) else { return };
                     match r {
                         Ok(info) => {
-                            page.feed = Feed { items: info.videos.items.clone(), next: info.videos.next.clone(), ..Default::default() };
-                            if let Kind::Channel { info: slot, subscribed, .. } = &mut page.kind {
+                            page.feed = Feed {
+                                items: info.videos.items.clone(),
+                                next: info.videos.next.clone(),
+                                ..Default::default()
+                            };
+                            if let Kind::Channel {
+                                info: slot,
+                                subscribed,
+                                ..
+                            } = &mut page.kind
+                            {
                                 *subscribed = library().is_subscribed(&info.id);
                                 *slot = Some(info);
                             }
@@ -330,7 +369,10 @@ impl NtApp {
                         let Some(page) = app.page_mut(id) else { return };
                         match r {
                             Ok(items) => {
-                                page.feed = Feed { items, ..Default::default() };
+                                page.feed = Feed {
+                                    items,
+                                    ..Default::default()
+                                };
                                 page.status = Load::Ready;
                             }
                             Err(e) => page.status = Load::Failed(e.to_string()),
@@ -339,11 +381,17 @@ impl NtApp {
                 }
             }
             Kind::History => {
-                page.feed = Feed { items: library().history(), ..Default::default() };
+                page.feed = Feed {
+                    items: library().history(),
+                    ..Default::default()
+                };
                 page.status = Load::Ready;
             }
             Kind::WatchLater => {
-                page.feed = Feed { items: library().watch_later(), ..Default::default() };
+                page.feed = Feed {
+                    items: library().watch_later(),
+                    ..Default::default()
+                };
                 page.status = Load::Ready;
             }
             Kind::Watch(w) => {
@@ -352,7 +400,11 @@ impl NtApp {
                     let Some(page) = app.page_mut(id) else { return };
                     match r {
                         Ok(info) => {
-                            page.feed = Feed { items: info.related.items.clone(), next: info.related.next.clone(), ..Default::default() };
+                            page.feed = Feed {
+                                items: info.related.items.clone(),
+                                next: info.related.next.clone(),
+                                ..Default::default()
+                            };
                             page.status = Load::Ready;
                             let mut want = false;
                             if let Some(w) = page.watch_mut() {
@@ -373,12 +425,23 @@ impl NtApp {
         }
     }
 
-    fn spawn_feed(&mut self, id: PageId, req: u64, job: Job<nt_core::Page<Video>>, mark: &'static str, cx: &mut Context<Self>) {
+    fn spawn_feed(
+        &mut self,
+        id: PageId,
+        req: u64,
+        job: Job<nt_core::Page<Video>>,
+        mark: &'static str,
+        cx: &mut Context<Self>,
+    ) {
         self.spawn_job(id, req, job, cx, move |app, id, r, _| {
             let Some(page) = app.page_mut(id) else { return };
             match r {
                 Ok(p) => {
-                    page.feed = Feed { items: p.items, next: p.next, ..Default::default() };
+                    page.feed = Feed {
+                        items: p.items,
+                        next: p.next,
+                        ..Default::default()
+                    };
                     page.status = Load::Ready;
                     app.mark_if_top(id, mark);
                 }
@@ -388,8 +451,12 @@ impl NtApp {
     }
 
     pub fn load_more(&mut self, id: PageId, cx: &mut Context<Self>) {
-        let Some(page) = self.page_mut(id) else { return };
-        let Some(next) = page.feed.next.clone() else { return };
+        let Some(page) = self.page_mut(id) else {
+            return;
+        };
+        let Some(next) = page.feed.next.clone() else {
+            return;
+        };
         if page.feed.loading_more {
             return;
         }
@@ -413,7 +480,9 @@ impl NtApp {
     }
 
     pub fn load_comments(&mut self, id: PageId, cx: &mut Context<Self>) {
-        let Some(page) = self.page_mut(id) else { return };
+        let Some(page) = self.page_mut(id) else {
+            return;
+        };
         let req = page.req;
         let Some(w) = page.watch_mut() else { return };
         if w.comments_state == CommentsState::Loading {
@@ -435,7 +504,9 @@ impl NtApp {
         page.touch();
         let job = client().more_comments(&next);
         self.spawn_job(id, req, job, cx, |app, id, r, _| {
-            let Some(w) = app.page_mut(id).and_then(|p| p.watch_mut()) else { return };
+            let Some(w) = app.page_mut(id).and_then(|p| p.watch_mut()) else {
+                return;
+            };
             match r {
                 Ok(cp) => {
                     w.comments.extend(cp.items);
@@ -476,7 +547,11 @@ impl NtApp {
                     w.subscribed = library().toggle_subscription(&info.channel);
                 }
             }
-            Kind::Channel { info: Some(info), subscribed, .. } => {
+            Kind::Channel {
+                info: Some(info),
+                subscribed,
+                ..
+            } => {
                 *subscribed = library().toggle_subscription(&info.as_ref());
             }
             _ => {}
@@ -487,7 +562,11 @@ impl NtApp {
 
     pub fn toggle_watch_later(&mut self, cx: &mut Context<Self>) {
         if let Some(w) = self.top_mut().and_then(|p| p.watch_mut()) {
-            let mut v = w.info.as_ref().map(|i| i.as_video()).unwrap_or_else(|| w.video.clone());
+            let mut v = w
+                .info
+                .as_ref()
+                .map(|i| i.as_video())
+                .unwrap_or_else(|| w.video.clone());
             if v.duration.is_none() {
                 v.duration = w.video.duration.clone();
             }
@@ -541,7 +620,8 @@ impl NtApp {
             let v = (self.video.state.volume + delta).clamp(0.0, 100.0);
             p.set_volume(v);
             p.set_muted(mute_locked());
-            self.volume.update(cx, |s, cx| s.set_value(v as f32, window, cx));
+            self.volume
+                .update(cx, |s, cx| s.set_value(v as f32, window, cx));
         }
     }
 
@@ -608,13 +688,21 @@ impl NtApp {
                     if let Some(p) = self.top_mut() {
                         p.scroll.fling_start(t);
                         if trace_scroll() {
-                            eprintln!("fling_start: v={:.0} target={:.0}", p.scroll.velocity(), p.scroll.target());
+                            eprintln!(
+                                "fling_start: v={:.0} target={:.0}",
+                                p.scroll.velocity(),
+                                p.scroll.target()
+                            );
                         }
                     }
                     self.activity(t, cx);
                 } else {
                     // The backend scales wl_pointer.axis by -3; Chrome uses x12.
-                    let k = if ev.source == gpui::ScrollSource::Touch { -1.0 } else { -4.0 };
+                    let k = if ev.source == gpui::ScrollSource::Touch {
+                        -1.0
+                    } else {
+                        -4.0
+                    };
                     let px = f64::from(f32::from(d.y)) * k;
                     if px != 0.0 {
                         self.wheel_pixels(px, t, cx);
@@ -692,7 +780,9 @@ impl NtApp {
                 return;
             }
         }
-        let vh = self.geo.viewport_h(self.top().is_some_and(|p| p.has_chips())) as f64;
+        let vh = self
+            .geo
+            .viewport_h(self.top().is_some_and(|p| p.has_chips())) as f64;
         let Some(page) = self.top_mut() else { return };
         let s = &mut page.scroll;
         let delta = match key {
@@ -719,7 +809,13 @@ impl NtApp {
 
     // ---- search box ------------------------------------------------------------------------
 
-    fn on_search_event(&mut self, state: &Entity<InputState>, ev: &InputEvent, window: &mut Window, cx: &mut Context<Self>) {
+    fn on_search_event(
+        &mut self,
+        state: &Entity<InputState>,
+        ev: &InputEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         match ev {
             InputEvent::Change => {
                 let text = state.read(cx).value().to_string();
@@ -733,8 +829,13 @@ impl NtApp {
                     return;
                 }
                 cx.spawn(async move |this, cx| {
-                    cx.background_executor().timer(Duration::from_millis(150)).await;
-                    if this.read_with(cx, |app, _| app.sugg.seq != seq).unwrap_or(true) {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(150))
+                        .await;
+                    if this
+                        .read_with(cx, |app, _| app.sugg.seq != seq)
+                        .unwrap_or(true)
+                    {
                         return;
                     }
                     let result = client().suggestions(&text).await;
@@ -812,7 +913,10 @@ impl NtApp {
             }
             Command::OpenChannel => {
                 let id = self.top().and_then(|p| p.watch()).and_then(|w| {
-                    w.info.as_ref().map(|i| i.channel.id.clone()).or_else(|| w.video.channel_id.clone())
+                    w.info
+                        .as_ref()
+                        .map(|i| i.channel.id.clone())
+                        .or_else(|| w.video.channel_id.clone())
                 });
                 if let Some(id) = id {
                     self.open_channel(id, cx);
@@ -852,8 +956,13 @@ impl NtApp {
     /// Lay out the top page if its geometry or data changed; feed the animator the range.
     fn update_layout(&mut self, window: &mut Window) {
         let geo = self.geo;
-        let Some(page) = self.stack.last_mut() else { return };
-        let key = LayoutKey { geo, version: page.version };
+        let Some(page) = self.stack.last_mut() else {
+            return;
+        };
+        let key = LayoutKey {
+            geo,
+            version: page.version,
+        };
         if page.layout.as_ref().is_some_and(|(k, _)| *k == key) {
             return;
         }
@@ -867,8 +976,12 @@ impl NtApp {
 
     /// Infinite scroll and the comments trigger, checked against where motion will end.
     fn triggers(&mut self, cx: &mut Context<Self>) {
-        let vh = self.geo.viewport_h(self.top().is_some_and(|p| p.has_chips())) as f64;
-        let Some(page) = self.stack.last() else { return };
+        let vh = self
+            .geo
+            .viewport_h(self.top().is_some_and(|p| p.has_chips())) as f64;
+        let Some(page) = self.stack.last() else {
+            return;
+        };
         let Some((_, lay)) = &page.layout else { return };
         let id = page.id;
         let bottom = page.scroll.target() + vh;
@@ -880,12 +993,16 @@ impl NtApp {
         {
             self.load_more(id, cx);
         }
-        let Some(page) = self.stack.last() else { return };
+        let Some(page) = self.stack.last() else {
+            return;
+        };
         let Some((_, lay)) = &page.layout else { return };
         if let Some(w) = page.watch()
             && let Some(cy) = lay.comments_y
         {
-            let first = w.comments.is_empty() && w.comments_state == CommentsState::NotStarted && (cy as f64) - bottom < vh;
+            let first = w.comments.is_empty()
+                && w.comments_state == CommentsState::NotStarted
+                && (cy as f64) - bottom < vh;
             let more = w.comments_state == CommentsState::Idle
                 && w.comments_next.is_some()
                 && (lay.primary_end as f64) - bottom < 1.5 * vh;
@@ -901,7 +1018,9 @@ impl NtApp {
         }
         self.sb.hide_pending = true;
         cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(Duration::from_millis(1300)).await;
+            cx.background_executor()
+                .timer(Duration::from_millis(1300))
+                .await;
             let _ = this.update(cx, |app, cx| {
                 app.sb.hide_pending = false;
                 cx.notify();
@@ -938,8 +1057,21 @@ impl Measure for WindowMeasure<'_> {
         }
         let mut font = self.window.text_style().font();
         font.weight = gpui::FontWeight(weight as f32);
-        let run = gpui::TextRun { len: text.len(), font, color: text_color(), background_color: None, underline: None, strikethrough: None };
-        match self.window.text_system().shape_text(text.to_string().into(), px(font_size), &[run], Some(px(width)), None) {
+        let run = gpui::TextRun {
+            len: text.len(),
+            font,
+            color: text_color(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        match self.window.text_system().shape_text(
+            text.to_string().into(),
+            px(font_size),
+            &[run],
+            Some(px(width)),
+            None,
+        ) {
             Ok(lines) => lines.iter().map(|l| 1 + l.wrap_boundaries().len()).sum(),
             Err(_) => text.lines().count().max(1),
         }
@@ -955,7 +1087,11 @@ impl Render for NtApp {
         let t = now();
         self.images.begin_frame();
         let vp = window.viewport_size();
-        self.geo = Geo { win_w: f32::from(vp.width), win_h: f32::from(vp.height), scale: window.scale_factor() };
+        self.geo = Geo {
+            win_w: f32::from(vp.width),
+            win_h: f32::from(vp.height),
+            scale: window.scale_factor(),
+        };
 
         self.update_layout(window);
         self.triggers(cx);
@@ -979,7 +1115,10 @@ impl Render for NtApp {
         }
 
         // The newest video picture, if the watch page is up.
-        if self.top().is_some_and(|p| p.watch().is_some()) && self.video.upload(window) && self.video.started_pending {
+        if self.top().is_some_and(|p| p.watch().is_some())
+            && self.video.upload(window)
+            && self.video.started_pending
+        {
             self.video.started_pending = false;
             self.pending_marks.push(marks::PLAYBACK_STARTED);
         }
@@ -1016,7 +1155,6 @@ impl Render for NtApp {
             .bg(bg())
             .text_color(text())
             .on_key_down(cx.listener(Self::on_key_down))
-
             .on_mouse_down(
                 MouseButton::Navigate(NavigationDirection::Back),
                 cx.listener(|this, _: &MouseDownEvent, _, cx| this.back(cx)),
@@ -1076,7 +1214,11 @@ pub fn capture_search_keys(this: &mut NtApp, down: Option<bool>, cx: &mut Contex
 }
 
 pub fn search_key_handlers(div: gpui::Div, cx: &mut Context<NtApp>) -> gpui::Div {
-    div.capture_action(cx.listener(|this, _: &MoveUp, _, cx| capture_search_keys(this, Some(false), cx)))
-        .capture_action(cx.listener(|this, _: &MoveDown, _, cx| capture_search_keys(this, Some(true), cx)))
-        .capture_action(cx.listener(|this, _: &Escape, _, cx| capture_search_keys(this, None, cx)))
+    div.capture_action(
+        cx.listener(|this, _: &MoveUp, _, cx| capture_search_keys(this, Some(false), cx)),
+    )
+    .capture_action(
+        cx.listener(|this, _: &MoveDown, _, cx| capture_search_keys(this, Some(true), cx)),
+    )
+    .capture_action(cx.listener(|this, _: &Escape, _, cx| capture_search_keys(this, None, cx)))
 }

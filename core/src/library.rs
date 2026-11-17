@@ -51,8 +51,14 @@ pub fn library() -> &'static Library {
         let data = std::fs::read(&path)
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or(LibraryData { volume: default_volume(), ..Default::default() });
-        Library { data: Mutex::new(data), path }
+            .unwrap_or(LibraryData {
+                volume: default_volume(),
+                ..Default::default()
+            });
+        Library {
+            data: Mutex::new(data),
+            path,
+        }
     })
 }
 
@@ -148,7 +154,9 @@ impl Library {
     fn save(&self) {
         let (data, path) = (self.snapshot(), self.path.clone());
         crate::client::runtime().spawn_blocking(move || {
-            let Ok(json) = serde_json::to_vec_pretty(&data) else { return };
+            let Ok(json) = serde_json::to_vec_pretty(&data) else {
+                return;
+            };
             if let Some(dir) = path.parent() {
                 let _ = std::fs::create_dir_all(dir);
             }

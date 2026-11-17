@@ -14,11 +14,17 @@ fn print_videos(page: &Page<Video>) {
             v.id,
             v.title,
             v.channel,
-            v.duration.as_deref().unwrap_or(if v.is_live { "LIVE" } else { "-" }),
+            v.duration
+                .as_deref()
+                .unwrap_or(if v.is_live { "LIVE" } else { "-" }),
             v.meta_line()
         );
     }
-    println!("-- {} items, more: {}", page.items.len(), page.next.is_some());
+    println!(
+        "-- {} items, more: {}",
+        page.items.len(),
+        page.next.is_some()
+    );
 }
 
 fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -41,8 +47,20 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         }
         "watch" => {
             let w = c.watch(&arg(1)).wait()?;
-            println!("{}\n{} | {} | {} likes", w.title, w.views.as_deref().unwrap_or("-"), w.date.as_deref().unwrap_or("-"), w.likes.as_deref().unwrap_or("-"));
-            println!("channel: {} ({}) {} avatar={}", w.channel.name, w.channel.id, w.channel.subscribers.as_deref().unwrap_or("-"), w.channel.avatar.is_some());
+            println!(
+                "{}\n{} | {} | {} likes",
+                w.title,
+                w.views.as_deref().unwrap_or("-"),
+                w.date.as_deref().unwrap_or("-"),
+                w.likes.as_deref().unwrap_or("-")
+            );
+            println!(
+                "channel: {} ({}) {} avatar={}",
+                w.channel.name,
+                w.channel.id,
+                w.channel.subscribers.as_deref().unwrap_or("-"),
+                w.channel.avatar.is_some()
+            );
             println!("description: {:.200}", w.description.replace('\n', " "));
             println!("comments cursor: {}", w.comments.is_some());
             println!("related:");
@@ -54,19 +72,39 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         }
         "comments" => {
             let w = c.watch(&arg(1)).wait()?;
-            let page = c.more_comments(w.comments.as_ref().ok_or("no comments")?).wait()?;
+            let page = c
+                .more_comments(w.comments.as_ref().ok_or("no comments")?)
+                .wait()?;
             println!("total: {:?}", page.total);
             for cm in &page.items {
-                println!("{:<24.24} {:>6} likes {:>5} replies  {:.90}", cm.author, cm.likes.as_deref().unwrap_or("0"), cm.reply_count.as_deref().unwrap_or("0"), cm.text.replace('\n', " "));
+                println!(
+                    "{:<24.24} {:>6} likes {:>5} replies  {:.90}",
+                    cm.author,
+                    cm.likes.as_deref().unwrap_or("0"),
+                    cm.reply_count.as_deref().unwrap_or("0"),
+                    cm.text.replace('\n', " ")
+                );
             }
             if let Some(next) = &page.next {
                 let p2 = c.more_comments(next).wait()?;
-                println!("-- page 2: {} comments, more: {}", p2.items.len(), p2.next.is_some());
+                println!(
+                    "-- page 2: {} comments, more: {}",
+                    p2.items.len(),
+                    p2.next.is_some()
+                );
             }
         }
         "channel" => {
             let ch = c.channel(&arg(1)).wait()?;
-            println!("{} {:?} {:?} {:?} banner={} avatar={:?}", ch.name, ch.handle, ch.subscribers, ch.video_count, ch.banner.is_some(), ch.avatar);
+            println!(
+                "{} {:?} {:?} {:?} banner={} avatar={:?}",
+                ch.name,
+                ch.handle,
+                ch.subscribers,
+                ch.video_count,
+                ch.banner.is_some(),
+                ch.avatar
+            );
             print_videos(&ch.videos);
             if let Some(next) = &ch.videos.next {
                 println!("page 2:");
@@ -75,17 +113,31 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         }
         "resolve" => {
             let s = runtime().block_on(resolve::resolve(&arg(1)))?;
-            println!("video: {}  audio: {}  live: {}", s.video_desc, s.audio_desc, s.is_live);
-            println!("visitor id {:.0} ms, /player {:.0} ms", s.visitor_ms, s.player_ms);
+            println!(
+                "video: {}  audio: {}  live: {}",
+                s.video_desc, s.audio_desc, s.is_live
+            );
+            println!(
+                "visitor id {:.0} ms, /player {:.0} ms",
+                s.visitor_ms, s.player_ms
+            );
             if arg(2) == "--json" {
-                println!("{}", serde_json::json!({ "video": s.video, "audio": s.audio, "user_agent": resolve::USER_AGENT }));
+                println!(
+                    "{}",
+                    serde_json::json!({ "video": s.video, "audio": s.audio, "user_agent": resolve::USER_AGENT })
+                );
             }
         }
         "serve" => {
             // A benchmark driver: reads "open <id>" lines on stdin, prints JSON events on stdout.
             // The first `open` creates the player (as an app does on its first video).
             use std::io::BufRead;
-            let epoch = || std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64() * 1000.0).unwrap_or(0.0);
+            let epoch = || {
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs_f64() * 1000.0)
+                    .unwrap_or(0.0)
+            };
             let mut player: Option<Player> = None;
             println!("{{\"event\":\"ready\",\"epoch_ms\":{:.1}}}", epoch());
             for line in std::io::stdin().lock().lines() {
@@ -95,25 +147,48 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                     (Some("open"), Some(id)) => {
                         let t0 = Instant::now();
                         let cold = player.is_none();
-                        let p = match &player { Some(p) => p, None => player.insert(Player::new(PixelFormat::Rgba, || {})?) };
+                        let p = match &player {
+                            Some(p) => p,
+                            None => player.insert(Player::new(PixelFormat::Rgba, || {})?),
+                        };
                         p.load(id)?;
                         let deadline = Instant::now() + Duration::from_secs(45);
                         let mut failed = None;
                         while p.frame().is_none() && Instant::now() < deadline {
-                            if let Status::Failed(e) = p.state().status { failed = Some(e); break; }
+                            if let Status::Failed(e) = p.state().status {
+                                failed = Some(e);
+                                break;
+                            }
                             std::thread::sleep(Duration::from_millis(2));
                         }
                         let ms = t0.elapsed().as_secs_f64() * 1000.0;
                         let f = p.frame();
-                        println!("{{\"event\":\"first_frame\",\"id\":\"{id}\",\"cold\":{cold},\"ms\":{ms:.1},\"ok\":{},\"error\":{:?},\"size\":\"{}\",\"epoch_ms\":{:.1}}}",
-                            f.is_some() && failed.is_none(), failed.unwrap_or_default(), f.map(|f| format!("{}x{}", f.width, f.height)).unwrap_or_default(), epoch());
+                        println!(
+                            "{{\"event\":\"first_frame\",\"id\":\"{id}\",\"cold\":{cold},\"ms\":{ms:.1},\"ok\":{},\"error\":{:?},\"size\":\"{}\",\"epoch_ms\":{:.1}}}",
+                            f.is_some() && failed.is_none(),
+                            failed.unwrap_or_default(),
+                            f.map(|f| format!("{}x{}", f.width, f.height))
+                                .unwrap_or_default(),
+                            epoch()
+                        );
                     }
                     (Some("stats"), _) => {
-                        let st = player.as_ref().map(|p| p.render_stats()).unwrap_or_default();
+                        let st = player
+                            .as_ref()
+                            .map(|p| p.render_stats())
+                            .unwrap_or_default();
                         let s = player.as_ref().map(|p| p.state()).unwrap_or_default();
-                        println!("{{\"event\":\"stats\",\"frames\":{},\"render_ms_total\":{:.1},\"position\":{:.2},\"muted\":{},\"buffering\":{}}}", st.frames, st.total_render_ms, s.position, s.muted, s.buffering);
+                        println!(
+                            "{{\"event\":\"stats\",\"frames\":{},\"render_ms_total\":{:.1},\"position\":{:.2},\"muted\":{},\"buffering\":{}}}",
+                            st.frames, st.total_render_ms, s.position, s.muted, s.buffering
+                        );
                     }
-                    (Some("stop"), _) => { if let Some(p) = &player { p.stop(); } println!("{{\"event\":\"stopped\"}}"); }
+                    (Some("stop"), _) => {
+                        if let Some(p) = &player {
+                            p.stop();
+                        }
+                        println!("{{\"event\":\"stopped\"}}");
+                    }
                     (Some("quit"), _) => break,
                     _ => {}
                 }
@@ -126,13 +201,25 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             let subs = library().subscriptions();
             println!("{} subscriptions", subs.len());
             for v in c.subscription_feed(subs).wait()? {
-                println!("{}  {:<60.60}  {:<20.20}  {}", v.id, v.title, v.channel, v.meta_line());
+                println!(
+                    "{}  {:<60.60}  {:<20.20}  {}",
+                    v.id,
+                    v.title,
+                    v.channel,
+                    v.meta_line()
+                );
             }
         }
         "image" => {
             let width = arg(3).parse().unwrap_or(0);
             let img = images::image(&arg(1), width).wait()?;
-            image::save_buffer(arg(2), &img.pixels, img.width, img.height, image::ColorType::Rgba8)?;
+            image::save_buffer(
+                arg(2),
+                &img.pixels,
+                img.width,
+                img.height,
+                image::ColorType::Rgba8,
+            )?;
             println!("{}x{}", img.width, img.height);
         }
         "play" => {
@@ -150,17 +237,32 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                 }
                 if started.is_none() && player.frame().is_some() {
                     started = Some(Instant::now());
-                    println!("first frame after {:.2}s: {:?}", t.elapsed().as_secs_f64(), player.frame());
+                    println!(
+                        "first frame after {:.2}s: {:?}",
+                        t.elapsed().as_secs_f64(),
+                        player.frame()
+                    );
                 }
-                if !seeked && started.is_some() && let Some(to) = seek {
+                if !seeked
+                    && started.is_some()
+                    && let Some(to) = seek
+                {
                     let at = Instant::now();
                     player.seek(to);
                     let before = player.frame_generation();
-                    while player.state().position < to - 1.0 || player.frame_generation() <= before + 2 {
+                    while player.state().position < to - 1.0
+                        || player.frame_generation() <= before + 2
+                    {
                         std::thread::sleep(Duration::from_millis(20));
-                        if at.elapsed() > Duration::from_secs(20) { break; }
+                        if at.elapsed() > Duration::from_secs(20) {
+                            break;
+                        }
                     }
-                    println!("seek to {to:.0}s took {:.2}s (now at {:.1}s)", at.elapsed().as_secs_f64(), player.state().position);
+                    println!(
+                        "seek to {to:.0}s took {:.2}s (now at {:.1}s)",
+                        at.elapsed().as_secs_f64(),
+                        player.state().position
+                    );
                     seeked = true;
                     started = Some(Instant::now());
                 }
@@ -172,14 +274,30 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                 std::thread::sleep(Duration::from_millis(50));
             }
             let s = player.state();
-            println!("state: {:?} pos={:.1}/{:.1} paused={} muted={} size={:?} buffered={:.1}s", s.status, s.position, s.duration, s.paused, s.muted, s.video_size, s.buffered_ahead);
+            println!(
+                "state: {:?} pos={:.1}/{:.1} paused={} muted={} size={:?} buffered={:.1}s",
+                s.status, s.position, s.duration, s.paused, s.muted, s.video_size, s.buffered_ahead
+            );
             let st = player.render_stats();
-            println!("rendered {} frames, avg {:.2} ms, max {:.2} ms", st.frames, st.total_render_ms / st.frames.max(1) as f64, st.max_render_ms);
+            println!(
+                "rendered {} frames, avg {:.2} ms, max {:.2} ms",
+                st.frames,
+                st.total_render_ms / st.frames.max(1) as f64,
+                st.max_render_ms
+            );
             let f = player.frame().ok_or("no frame")?;
-            image::save_buffer(arg(2), f.pixels(), f.width, f.height, image::ColorType::Rgba8)?;
+            image::save_buffer(
+                arg(2),
+                f.pixels(),
+                f.width,
+                f.height,
+                image::ColorType::Rgba8,
+            )?;
         }
         _ => {
-            eprintln!("usage: ntctl home [topic] | search <q> | more <q> | watch <id> | comments <id> | channel <id> | suggest <p> | subs | image <url> <out.png> [w] | play <id> <out.png> [secs]");
+            eprintln!(
+                "usage: ntctl home [topic] | search <q> | more <q> | watch <id> | comments <id> | channel <id> | suggest <p> | subs | image <url> <out.png> [w] | play <id> <out.png> [secs]"
+            );
             std::process::exit(2);
         }
     }

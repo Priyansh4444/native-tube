@@ -2,9 +2,17 @@
 
 /// Seconds as "1:02:03" or "2:03". Negative and NaN inputs read as zero.
 pub fn clock(seconds: f64) -> String {
-    let total = if seconds.is_finite() && seconds > 0.0 { seconds as u64 } else { 0 };
+    let total = if seconds.is_finite() && seconds > 0.0 {
+        seconds as u64
+    } else {
+        0
+    };
     let (h, m, s) = (total / 3600, (total / 60) % 60, total % 60);
-    if h > 0 { format!("{h}:{m:02}:{s:02}") } else { format!("{m}:{s:02}") }
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
+    }
 }
 
 /// 1_311_805 as "1.3M".
@@ -15,7 +23,11 @@ pub fn short_count(n: u64) -> String {
         1_000_000..=999_999_999 => (n as f64 / 1e6, "M"),
         _ => (n as f64 / 1e9, "B"),
     };
-    if value >= 100.0 { format!("{value:.0}{suffix}") } else { format!("{value:.1}{suffix}").replace(".0", "") }
+    if value >= 100.0 {
+        format!("{value:.0}{suffix}")
+    } else {
+        format!("{value:.1}{suffix}").replace(".0", "")
+    }
 }
 
 /// An age in seconds as "3 days ago".

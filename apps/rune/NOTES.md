@@ -5,7 +5,8 @@
 - Rune `rune` 0.0.1 and `rune-kit` 0.0.1, both by git from github.com/anomalyco/rune at rev
   `4fbd2d6ac4dd12595dd8ed0b7849b28a309c7c00`, with Rune's `[patch.crates-io]` applied as its
   README asks (`winit` 0.30.13 and `wgpu-hal` 30.0.1, the copies vendored in that repo at that rev).
-- wgpu 30 on Vulkan (Intel Arc iGPU here), winit 0.30.13 (Wayland), toolchain 1.99.1.
+- wgpu 30 on Vulkan (Intel Arc iGPU here), winit 0.30.13 (Wayland), toolchain 1.99.1. On macOS,
+  Rune selects its native Metal backend.
 - rune-kit pieces used: `TextInput` (search field), `Button` (Subscribe, Watch Later, Retry,
   Clear history), `Spinner`, `Kit::from_palette` (themed from the spec's tokens).
 - About 2,500 lines of app code in `src/`.

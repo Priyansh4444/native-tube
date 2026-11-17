@@ -4,10 +4,10 @@
 //! sampling that texture inside iced's own render pass (no extra pass, no atlas, no copy on
 //! the UI thread: the primitive holds an `Arc` of the player's frame buffer).
 
+use iced::Rectangle;
 use iced::advanced::mouse;
 use iced::wgpu;
 use iced::widget::shader::{self, Viewport};
-use iced::Rectangle;
 use nt_core::VideoFrame;
 use std::sync::Arc;
 
@@ -36,7 +36,9 @@ impl<M> shader::Program<M> for VideoProgram {
     type State = ();
     type Primitive = VideoPrimitive;
     fn draw(&self, _: &(), _: mouse::Cursor, _: Rectangle) -> VideoPrimitive {
-        VideoPrimitive { frame: self.frame.clone() }
+        VideoPrimitive {
+            frame: self.frame.clone(),
+        }
     }
 }
 
@@ -98,10 +100,17 @@ impl shader::Pipeline for VideoPipeline {
             fragment: Some(wgpu::FragmentState {
                 module: &module,
                 entry_point: Some("fs"),
-                targets: &[Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             }),
-            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleStrip, ..Default::default() },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                ..Default::default()
+            },
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
@@ -113,7 +122,14 @@ impl shader::Pipeline for VideoPipeline {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
-        VideoPipeline { pipeline, layout, sampler, format, texture: None, uploaded: u64::MAX }
+        VideoPipeline {
+            pipeline,
+            layout,
+            sampler,
+            format,
+            texture: None,
+            uploaded: u64::MAX,
+        }
     }
 }
 
@@ -136,11 +152,23 @@ impl shader::Primitive for VideoPrimitive {
         if w == 0 || h == 0 {
             return;
         }
-        if !p.texture.as_ref().is_some_and(|(_, _, tw, th)| *tw == w && *th == h) {
-            let tex_format = if p.format.is_srgb() { wgpu::TextureFormat::Rgba8UnormSrgb } else { wgpu::TextureFormat::Rgba8Unorm };
+        if !p
+            .texture
+            .as_ref()
+            .is_some_and(|(_, _, tw, th)| *tw == w && *th == h)
+        {
+            let tex_format = if p.format.is_srgb() {
+                wgpu::TextureFormat::Rgba8UnormSrgb
+            } else {
+                wgpu::TextureFormat::Rgba8Unorm
+            };
             let texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("nt video frame"),
-                size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                size: wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
@@ -153,18 +181,37 @@ impl shader::Primitive for VideoPrimitive {
                 label: Some("nt video"),
                 layout: &p.layout,
                 entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&p.sampler) },
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&p.sampler),
+                    },
                 ],
             });
             p.texture = Some((texture, bind, w, h));
         }
         if let Some((texture, _, _, _)) = &p.texture {
             queue.write_texture(
-                wgpu::TexelCopyTextureInfo { texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                wgpu::TexelCopyTextureInfo {
+                    texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
                 frame.pixels(),
-                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 4), rows_per_image: Some(h) },
-                wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(w * 4),
+                    rows_per_image: Some(h),
+                },
+                wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
             );
             p.uploaded = frame.generation;
         }

@@ -84,16 +84,25 @@ pub async fn turn() -> Result<SemaphorePermit<'static>> {
 
 fn pause(for_: Duration, why: &'static str) {
     let until = Instant::now() + for_;
-    let mut p = gate().paused_until.lock().unwrap_or_else(|e| e.into_inner());
+    let mut p = gate()
+        .paused_until
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let later = p.is_none_or(|(cur, _)| until > cur);
     if later {
         *p = Some((until, why));
-        eprintln!("nt-core: YouTube signalled {why}; pausing all requests to it for {} min", for_.as_secs() / 60);
+        eprintln!(
+            "nt-core: YouTube signalled {why}; pausing all requests to it for {} min",
+            for_.as_secs() / 60
+        );
     }
 }
 
 /// Look at a response status before using it. Turns throttling signals into a cooldown.
-pub fn check_status(status: reqwest::StatusCode, retry_after: Option<&reqwest::header::HeaderValue>) -> Result<()> {
+pub fn check_status(
+    status: reqwest::StatusCode,
+    retry_after: Option<&reqwest::header::HeaderValue>,
+) -> Result<()> {
     if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
         let wait = retry_after
             .and_then(|v| v.to_str().ok())

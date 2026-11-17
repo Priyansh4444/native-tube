@@ -28,7 +28,12 @@ pub struct Feed {
 
 impl Default for Feed {
     fn default() -> Self {
-        Feed { items: Vec::new(), next: None, status: Load::Loading, more: Load::Idle }
+        Feed {
+            items: Vec::new(),
+            next: None,
+            status: Load::Loading,
+            more: Load::Idle,
+        }
     }
 }
 
@@ -50,12 +55,23 @@ pub struct Watch {
     pub comment_h: RefCell<Vec<(u32, f32)>>,
 }
 
+// A handful of pages exist at a time; boxing the big variants would only add indirection.
+#[allow(clippy::large_enum_variant)]
 pub enum Kind {
-    Home { topic: usize },
-    Search { query: String },
+    Home {
+        topic: usize,
+    },
+    Search {
+        query: String,
+    },
     Watch(Box<Watch>),
-    Channel { id: String, info: Option<ChannelInfo> },
-    Subs { channels: Vec<ChannelRef> },
+    Channel {
+        id: String,
+        info: Option<ChannelInfo>,
+    },
+    Subs {
+        channels: Vec<ChannelRef>,
+    },
     History,
     Later,
 }
@@ -173,7 +189,10 @@ impl Plan {
     pub fn visible(&self, top: f32, bottom: f32) -> impl Iterator<Item = &Block> {
         let from = top - self.max_h;
         let start = self.blocks.partition_point(|b| b.y < from);
-        self.blocks[start..].iter().take_while(move |b| b.y < bottom).filter(move |b| b.y + b.h > top)
+        self.blocks[start..]
+            .iter()
+            .take_while(move |b| b.y < bottom)
+            .filter(move |b| b.y + b.h > top)
     }
 
     fn push(&mut self, b: Block) {
@@ -215,46 +234,100 @@ fn grid(p: &mut Plan, y0: f32, x0: f32, w: f32, n: usize) -> f32 {
     let ch = cw * 9.0 / 16.0 + CARD_TEXT;
     for i in 0..n {
         let (r, c) = (i / cols, i % cols);
-        p.push(Block { x: x0 + c as f32 * (cw + GRID_GAP), y: y0 + r as f32 * (ch + GRID_ROW_GAP), w: cw, h: ch, kind: B::Card(i) });
+        p.push(Block {
+            x: x0 + c as f32 * (cw + GRID_GAP),
+            y: y0 + r as f32 * (ch + GRID_ROW_GAP),
+            w: cw,
+            h: ch,
+            kind: B::Card(i),
+        });
     }
     let rows = n.div_ceil(cols);
-    if rows == 0 { y0 } else { y0 + rows as f32 * (ch + GRID_ROW_GAP) - GRID_ROW_GAP }
+    if rows == 0 {
+        y0
+    } else {
+        y0 + rows as f32 * (ch + GRID_ROW_GAP) - GRID_ROW_GAP
+    }
 }
 
 fn rows(p: &mut Plan, y0: f32, x0: f32, w: f32, n: usize) -> f32 {
-    let tw = if w >= 760.0 { 360.0 } else { (w * 0.42).max(140.0) };
+    let tw = if w >= 760.0 {
+        360.0
+    } else {
+        (w * 0.42).max(140.0)
+    };
     let th = (tw * 202.0 / 360.0).round();
     p.row_thumb = (tw, th);
     for i in 0..n {
-        p.push(Block { x: x0, y: y0 + i as f32 * (th + ROW_GAP), w, h: th, kind: B::Row(i) });
+        p.push(Block {
+            x: x0,
+            y: y0 + i as f32 * (th + ROW_GAP),
+            w,
+            h: th,
+            kind: B::Row(i),
+        });
     }
-    if n == 0 { y0 } else { y0 + n as f32 * (th + ROW_GAP) - ROW_GAP }
+    if n == 0 {
+        y0
+    } else {
+        y0 + n as f32 * (th + ROW_GAP) - ROW_GAP
+    }
 }
 
 /// The first-load, error, empty and load-more status blocks for a feed.
 fn feed_status(p: &mut Plan, feed: &Feed, y: f32, x: f32, w: f32, empty: bool) -> f32 {
     match &feed.status {
         Load::Loading => {
-            p.push(Block { x, y, w, h: STATUS_H, kind: B::Status(St::Loading) });
+            p.push(Block {
+                x,
+                y,
+                w,
+                h: STATUS_H,
+                kind: B::Status(St::Loading),
+            });
             return y + STATUS_H;
         }
         Load::Error(_) => {
-            p.push(Block { x, y, w, h: STATUS_H, kind: B::Status(St::Error) });
+            p.push(Block {
+                x,
+                y,
+                w,
+                h: STATUS_H,
+                kind: B::Status(St::Error),
+            });
             return y + STATUS_H;
         }
         Load::Idle => {}
     }
     if empty && feed.items.is_empty() {
-        p.push(Block { x, y, w, h: STATUS_H, kind: B::Status(St::Empty) });
+        p.push(Block {
+            x,
+            y,
+            w,
+            h: STATUS_H,
+            kind: B::Status(St::Empty),
+        });
         return y + STATUS_H;
     }
     match feed.more {
         Load::Loading => {
-            p.push(Block { x, y: y + 8.0, w, h: MORE_H, kind: B::Status(St::MoreLoading) });
+            p.push(Block {
+                x,
+                y: y + 8.0,
+                w,
+                h: MORE_H,
+                kind: B::Status(St::MoreLoading),
+            });
             y + 8.0 + MORE_H
         }
         Load::Error(_) => {
-            p.push(Block { x, y: y + 8.0, w, h: MORE_H, kind: B::Status(St::MoreError) });
+            p.push(Block {
+                x,
+                y: y + 8.0,
+                w,
+                h: MORE_H,
+                kind: B::Status(St::MoreError),
+            });
             y + 8.0 + MORE_H
         }
         Load::Idle => y,
@@ -273,48 +346,118 @@ fn compute(page: &Page, vw: f32, wh: f32) -> Plan {
     let feed = &page.feed;
     match &page.kind {
         Kind::Home { .. } => {
-            p.push(Block { x, y, w, h: CHIPS_H, kind: B::Chips });
+            p.push(Block {
+                x,
+                y,
+                w,
+                h: CHIPS_H,
+                kind: B::Chips,
+            });
             y += CHIPS_H + PAD;
             let end = grid(&mut p, y, x, w, feed.items.len());
             p.list_end = end;
-            feed_status(&mut p, feed, if feed.items.is_empty() { y } else { end + PAD }, x, w, true);
+            feed_status(
+                &mut p,
+                feed,
+                if feed.items.is_empty() { y } else { end + PAD },
+                x,
+                w,
+                true,
+            );
         }
         Kind::Subs { channels } => {
             if channels.is_empty() {
-                p.push(Block { x, y, w, h: STATUS_H, kind: B::Status(St::Empty) });
+                p.push(Block {
+                    x,
+                    y,
+                    w,
+                    h: STATUS_H,
+                    kind: B::Status(St::Empty),
+                });
             } else {
-                p.push(Block { x, y, w, h: 112.0, kind: B::Strip });
+                p.push(Block {
+                    x,
+                    y,
+                    w,
+                    h: 112.0,
+                    kind: B::Strip,
+                });
                 y += 112.0 + PAD;
                 let end = grid(&mut p, y, x, w, feed.items.len());
                 p.list_end = end;
-                feed_status(&mut p, feed, if feed.items.is_empty() { y } else { end + PAD }, x, w, true);
+                feed_status(
+                    &mut p,
+                    feed,
+                    if feed.items.is_empty() { y } else { end + PAD },
+                    x,
+                    w,
+                    true,
+                );
             }
         }
         Kind::Channel { info, .. } => {
             if let Some(info) = info {
                 if info.banner.is_some() {
-                    p.push(Block { x, y, w, h: 160.0, kind: B::Banner });
+                    p.push(Block {
+                        x,
+                        y,
+                        w,
+                        h: 160.0,
+                        kind: B::Banner,
+                    });
                     y += 160.0 + PAD;
                 }
-                p.push(Block { x, y, w, h: 112.0, kind: B::ChannelHead });
+                p.push(Block {
+                    x,
+                    y,
+                    w,
+                    h: 112.0,
+                    kind: B::ChannelHead,
+                });
                 y += 112.0 + PAD;
             }
             let end = grid(&mut p, y, x, w, feed.items.len());
             p.list_end = end;
-            feed_status(&mut p, feed, if feed.items.is_empty() { y } else { end + PAD }, x, w, true);
+            feed_status(
+                &mut p,
+                feed,
+                if feed.items.is_empty() { y } else { end + PAD },
+                x,
+                w,
+                true,
+            );
         }
         Kind::Search { .. } => {
             let end = rows(&mut p, y, x, w.min(1100.0), feed.items.len());
             p.list_end = end;
-            feed_status(&mut p, feed, if feed.items.is_empty() { y } else { end + PAD }, x, w.min(1100.0), true);
+            feed_status(
+                &mut p,
+                feed,
+                if feed.items.is_empty() { y } else { end + PAD },
+                x,
+                w.min(1100.0),
+                true,
+            );
         }
         Kind::History | Kind::Later => {
-            p.push(Block { x, y, w: w.min(1100.0), h: 40.0, kind: B::LibHead });
+            p.push(Block {
+                x,
+                y,
+                w: w.min(1100.0),
+                h: 40.0,
+                kind: B::LibHead,
+            });
             y += 40.0 + PAD;
             let end = rows(&mut p, y, x, w.min(1100.0), feed.items.len());
             p.list_end = end;
             if feed.items.is_empty() {
-                p.push(Block { x, y, w, h: STATUS_H, kind: B::Status(St::Empty) });
+                p.push(Block {
+                    x,
+                    y,
+                    w,
+                    h: STATUS_H,
+                    kind: B::Status(St::Empty),
+                });
             }
         }
         Kind::Watch(wt) => watch_plan(&mut p, page, wt, vw, wh),
@@ -330,29 +473,69 @@ fn watch_plan(p: &mut Plan, page: &Page, wt: &Watch, vw: f32, wh: f32) {
     let x = PAD;
     let wide = vw >= 1000.0;
     let w = (vw - 2.0 * PAD).max(100.0);
-    let pw = if wide { (w - RELATED_W - PAD).max(300.0) } else { w };
+    let pw = if wide {
+        (w - RELATED_W - PAD).max(300.0)
+    } else {
+        w
+    };
     let mut y = PAD;
     let ph = (pw * 9.0 / 16.0).min(wh * 0.7).round();
     p.player = [x, y, pw, ph];
-    p.push(Block { x, y, w: pw, h: ph, kind: B::Player });
+    p.push(Block {
+        x,
+        y,
+        w: pw,
+        h: ph,
+        kind: B::Player,
+    });
     y += ph + 12.0;
-    let title = wt.info.as_ref().map(|i| i.title.as_str()).unwrap_or(&wt.video.title);
+    let title = wt
+        .info
+        .as_ref()
+        .map(|i| i.title.as_str())
+        .unwrap_or(&wt.video.title);
     let title_h = measure(title, S20, pw).max(28.0);
     let info_h = title_h + 12.0 + 40.0;
-    p.push(Block { x, y, w: pw, h: info_h, kind: B::Info });
+    p.push(Block {
+        x,
+        y,
+        w: pw,
+        h: info_h,
+        kind: B::Info,
+    });
     y += info_h + 16.0;
     match (&wt.info, &wt.error) {
         (Some(info), _) => {
             let inner = pw - 24.0;
-            let full = if info.description.is_empty() { 0.0 } else { measure(&info.description, S14, inner) };
+            let full = if info.description.is_empty() {
+                0.0
+            } else {
+                measure(&info.description, S14, inner)
+            };
             let clamped = full.min(20.0 * DESC_LINES as f32);
             let more = full > clamped + 1.0;
             let text_h = if wt.desc_open { full } else { clamped };
-            let h = 12.0 + 20.0 + if text_h > 0.0 { 4.0 + text_h } else { 0.0 } + if more || wt.desc_open { 24.0 } else { 0.0 } + 12.0;
-            p.push(Block { x, y, w: pw, h, kind: B::Desc });
+            let h = 12.0
+                + 20.0
+                + if text_h > 0.0 { 4.0 + text_h } else { 0.0 }
+                + if more || wt.desc_open { 24.0 } else { 0.0 }
+                + 12.0;
+            p.push(Block {
+                x,
+                y,
+                w: pw,
+                h,
+                kind: B::Desc,
+            });
             y += h + PAD;
             p.comments_top = y;
-            p.push(Block { x, y, w: pw, h: 48.0, kind: B::CommentsHead });
+            p.push(Block {
+                x,
+                y,
+                w: pw,
+                h: 48.0,
+                kind: B::CommentsHead,
+            });
             y += 48.0;
             let tw = pw - 52.0;
             let wbits = tw.to_bits();
@@ -364,41 +547,85 @@ fn watch_plan(p: &mut Plan, page: &Page, wt: &Watch, vw: f32, wh: f32) {
                         Some((b, h)) if *b == wbits => *h,
                         _ => {
                             let h = measure(&c.text, S14, tw).max(20.0);
-                            if i < cache.len() { cache[i] = (wbits, h) } else { cache.push((wbits, h)) }
+                            if i < cache.len() {
+                                cache[i] = (wbits, h)
+                            } else {
+                                cache.push((wbits, h))
+                            }
                             h
                         }
                     };
                     let h = 18.0 + 4.0 + th + 6.0 + 18.0;
-                    p.push(Block { x, y, w: pw, h, kind: B::Comment(i) });
+                    p.push(Block {
+                        x,
+                        y,
+                        w: pw,
+                        h,
+                        kind: B::Comment(i),
+                    });
                     y += h + 20.0;
                 }
             }
             p.list_end = y;
             match wt.comments_state {
                 Load::Loading => {
-                    p.push(Block { x, y, w: pw, h: MORE_H, kind: B::Status(St::CommentsLoading) });
+                    p.push(Block {
+                        x,
+                        y,
+                        w: pw,
+                        h: MORE_H,
+                        kind: B::Status(St::CommentsLoading),
+                    });
                     y += MORE_H;
                 }
                 Load::Error(_) => {
-                    p.push(Block { x, y, w: pw, h: MORE_H, kind: B::Status(St::CommentsError) });
+                    p.push(Block {
+                        x,
+                        y,
+                        w: pw,
+                        h: MORE_H,
+                        kind: B::Status(St::CommentsError),
+                    });
                     y += MORE_H;
                 }
                 Load::Idle => {}
             }
         }
         (None, Some(_)) => {
-            p.push(Block { x, y, w: pw, h: STATUS_H, kind: B::Status(St::Error) });
+            p.push(Block {
+                x,
+                y,
+                w: pw,
+                h: STATUS_H,
+                kind: B::Status(St::Error),
+            });
             y += STATUS_H;
         }
         (None, None) => {
-            p.push(Block { x, y, w: pw, h: STATUS_H, kind: B::Status(St::Loading) });
+            p.push(Block {
+                x,
+                y,
+                w: pw,
+                h: STATUS_H,
+                kind: B::Status(St::Loading),
+            });
             y += STATUS_H;
         }
     }
-    let (rx, mut ry) = if wide { (x + pw + PAD, PAD) } else { (x, y + PAD) };
+    let (rx, mut ry) = if wide {
+        (x + pw + PAD, PAD)
+    } else {
+        (x, y + PAD)
+    };
     let rw = if wide { RELATED_W } else { pw };
     for i in 0..page.feed.items.len() {
-        p.push(Block { x: rx, y: ry, w: rw, h: COMPACT_H, kind: B::Compact(i) });
+        p.push(Block {
+            x: rx,
+            y: ry,
+            w: rw,
+            h: COMPACT_H,
+            kind: B::Compact(i),
+        });
         ry += COMPACT_H + COMPACT_GAP;
     }
 }

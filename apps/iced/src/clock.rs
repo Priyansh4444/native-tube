@@ -10,7 +10,8 @@ pub fn init() {
 }
 
 pub fn secs(t: Instant) -> f64 {
-    t.saturating_duration_since(*EPOCH.get_or_init(Instant::now)).as_secs_f64()
+    t.saturating_duration_since(*EPOCH.get_or_init(Instant::now))
+        .as_secs_f64()
 }
 
 pub fn now() -> f64 {
