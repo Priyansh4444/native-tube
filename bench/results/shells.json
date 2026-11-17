@@ -1,0 +1,292 @@
+{
+  "runs": 8,
+  "idle_s": 5.0,
+  "static": {
+    "shell-iced": {
+      "stripped_mb": 12.496304,
+      "needed_libs": 4,
+      "crates": 319
+    },
+    "shell-iced-lowpower": {
+      "stripped_mb": 12.496304,
+      "needed_libs": 4,
+      "crates": 319
+    },
+    "shell-gpui": {
+      "stripped_mb": 27.662736,
+      "needed_libs": 5,
+      "crates": 640
+    },
+    "shell-rune": {
+      "stripped_mb": 34.055496,
+      "needed_libs": 4,
+      "crates": 434
+    }
+  },
+  "results": {
+    "shell-iced": [
+      {
+        "target": "shell-iced",
+        "window_ms": 461.03385699825594,
+        "idle_cpu_percent": 0.39877961172365095,
+        "idle_wakeups_per_s": 105.6765971067677,
+        "pss_mb": 134.5771484375,
+        "threads": 28
+      },
+      {
+        "target": "shell-iced",
+        "window_ms": 297.06661800446454,
+        "idle_cpu_percent": 0.39883430607504733,
+        "idle_wakeups_per_s": 106.88759402811259,
+        "pss_mb": 112.5693359375,
+        "threads": 28
+      },
+      {
+        "target": "shell-iced",
+        "window_ms": 306.5143630010425,
+        "idle_cpu_percent": 0.39879836016295694,
+        "idle_wakeups_per_s": 106.67856134359089,
+        "pss_mb": 112.744140625,
+        "threads": 28
+      },
+      {
+        "target": "shell-iced",
+        "window_ms": 365.5775920051383,
+        "idle_cpu_percent": 0.19953736746539472,
+        "idle_wakeups_per_s": 107.15156632891689,
+        "pss_mb": 112.625,
+        "threads": 28
+      },
+      {
+        "target": "shell-iced",
+        "window_ms": 526.6856960006407,
+        "idle_cpu_percent": 0.0,
+        "idle_wakeups_per_s": 107.04064248304365,
+        "pss_mb": 112.5634765625,
+        "threads": 28
+      },
+      {
+        "target": "shell-iced",
+        "window_ms": 930.0135790035711,
+        "idle_cpu_percent": 0.19891775073960652,
+        "idle_wakeups_per_s": 107.0177498979082,
+        "pss_mb": 127.341796875,
+        "threads": 28
+      },
+      {
+        "target": "shell-iced",
+        "window_ms": 541.9094870012486,
+        "idle_cpu_percent": 0.0,
+        "idle_wakeups_per_s": 106.60132540025617,
+        "pss_mb": 105.005859375,
+        "threads": 28
+      },
+      {
+        "target": "shell-iced",
+        "window_ms": 458.84750700497534,
+        "idle_cpu_percent": 0.1991041427366491,
+        "idle_wakeups_per_s": 107.1180287923171,
+        "pss_mb": 105.091796875,
+        "threads": 28
+      }
+    ],
+    "shell-iced-lowpower": [
+      {
+        "target": "shell-iced-lowpower",
+        "window_ms": 140.0181889985106,
+        "idle_cpu_percent": 0.0,
+        "idle_wakeups_per_s": 2.7914530764909378,
+        "pss_mb": 61.931640625,
+        "threads": 20
+      },
+      {
+        "target": "shell-iced-lowpower",
+        "window_ms": 171.22086299787043,
+        "idle_cpu_percent": 0.0,
+        "idle_wakeups_per_s": 1.7916061517503619,
+        "pss_mb": 50.1826171875,
+        "threads": 20
+      },
+      {
+        "target": "shell-iced-lowpower",
+        "window_ms": 184.88571100169793,
+        "idle_cpu_percent": 0.0,
+        "idle_wakeups_per_s": 1.7949822549114496,
+        "pss_mb": 50.240234375,
+        "threads": 20
+      },
+      {
+        "target": "shell-iced-lowpower",
+        "window_ms": 153.16976699978113,
+        "idle_cpu_percent": 0.0,
+        "idle_wakeups_per_s": 1.9887321665158737,
+        "pss_mb": 50.05859375,
+        "threads": 20
+      },
+      {
+        "target": "shell-iced-lowpower",
+        "window_ms": 579.574635004974,
+        "idle_cpu_percent": 0.0,
+        "idle_wakeups_per_s": 4.584151404968151,
+        "pss_mb": 50.25,
+        "threads": 20
+      },
+      {
+        "target": "shell-iced-lowpower",
+        "window_ms": 179.4933420023881,
+        "idle_cpu_percent": 0.0,
+        "idle_wakeups_per_s": 1.993622601455998,
+        "pss_mb": 50.0908203125,
+        "threads": 20
+      },
+      {
+        "target": "shell-iced-lowpower",
+        "window_ms": 178.67929799831472,
+        "idle_cpu_percent": 0.0,
+        "idle_wakeups_per_s": 2.5915239694144767,
+        "pss_mb": 42.1103515625,
+        "threads": 20
+      },
+      {
+        "target": "shell-iced-lowpower",
+        "window_ms": 168.87221000069985,
+        "idle_cpu_percent": 0.0,
+        "idle_wakeups_per_s": 3.5817325287036756,
+        "pss_mb": 42.17578125,
+        "threads": 20
+      }
+    ],
+    "shell-gpui": [
+      {
+        "target": "shell-gpui",
+        "window_ms": 262.9261270049028,
+        "idle_cpu_percent": 0.0,
+        "idle_wakeups_per_s": 4.774187505449195,
+        "pss_mb": 95.7314453125,
+        "threads": 32
+      },
+      {
+        "target": "shell-gpui",
+        "window_ms": 235.25461299868766,
+        "idle_cpu_percent": 0.0,
+        "idle_wakeups_per_s": 4.585241124913484,
+        "pss_mb": 97.755859375,
+        "threads": 32
+      },
+      {
+        "target": "shell-gpui",
+        "window_ms": 242.70992699894123,
+        "idle_cpu_percent": 0.0,
+        "idle_wakeups_per_s": 4.586107216441039,
+        "pss_mb": 97.8759765625,
+        "threads": 32
+      },
+      {
+        "target": "shell-gpui",
+        "window_ms": 222.88217899767915,
+        "idle_cpu_percent": 0.0,
+        "idle_wakeups_per_s": 4.777557948972727,
+        "pss_mb": 97.7900390625,
+        "threads": 32
+      },
+      {
+        "target": "shell-gpui",
+        "window_ms": 1277.9257240035804,
+        "idle_cpu_percent": 0.0,
+        "idle_wakeups_per_s": 2.9890187784159936,
+        "pss_mb": 94.2236328125,
+        "threads": 31
+      },
+      {
+        "target": "shell-gpui",
+        "window_ms": 291.2416140025016,
+        "idle_cpu_percent": 0.0,
+        "idle_wakeups_per_s": 4.7841853814936,
+        "pss_mb": 96.8046875,
+        "threads": 32
+      },
+      {
+        "target": "shell-gpui",
+        "window_ms": 235.44748299900675,
+        "idle_cpu_percent": 0.0,
+        "idle_wakeups_per_s": 4.585227922511739,
+        "pss_mb": 83.6259765625,
+        "threads": 32
+      },
+      {
+        "target": "shell-gpui",
+        "window_ms": 341.64462899934733,
+        "idle_cpu_percent": 0.39870667806862753,
+        "idle_wakeups_per_s": 6.778013527166662,
+        "pss_mb": 83.33984375,
+        "threads": 32
+      }
+    ],
+    "shell-rune": [
+      {
+        "target": "shell-rune",
+        "window_ms": 248.1089850043645,
+        "idle_cpu_percent": 0.0,
+        "idle_wakeups_per_s": 2.9870883298111788,
+        "pss_mb": 79.755859375,
+        "threads": 11
+      },
+      {
+        "target": "shell-rune",
+        "window_ms": 195.9391870041145,
+        "idle_cpu_percent": 0.0,
+        "idle_wakeups_per_s": 2.587633986475505,
+        "pss_mb": 82.1669921875,
+        "threads": 11
+      },
+      {
+        "target": "shell-rune",
+        "window_ms": 234.50056699948618,
+        "idle_cpu_percent": 0.0,
+        "idle_wakeups_per_s": 2.592036715770489,
+        "pss_mb": 81.947265625,
+        "threads": 11
+      },
+      {
+        "target": "shell-rune",
+        "window_ms": 230.92854000424268,
+        "idle_cpu_percent": 0.0,
+        "idle_wakeups_per_s": 2.588001795414922,
+        "pss_mb": 81.7568359375,
+        "threads": 11
+      },
+      {
+        "target": "shell-rune",
+        "window_ms": 857.0163929980481,
+        "idle_cpu_percent": 0.0,
+        "idle_wakeups_per_s": 3.1626985444716165,
+        "pss_mb": 76.9609375,
+        "threads": 11
+      },
+      {
+        "target": "shell-rune",
+        "window_ms": 324.4385739963036,
+        "idle_cpu_percent": 0.0,
+        "idle_wakeups_per_s": 2.992661985032967,
+        "pss_mb": 76.84375,
+        "threads": 11
+      },
+      {
+        "target": "shell-rune",
+        "window_ms": 270.62710899917874,
+        "idle_cpu_percent": 0.0,
+        "idle_wakeups_per_s": 2.791252278442898,
+        "pss_mb": 65.48046875,
+        "threads": 11
+      },
+      {
+        "target": "shell-rune",
+        "window_ms": 295.6071200023871,
+        "idle_cpu_percent": 0.0,
+        "idle_wakeups_per_s": 2.5874314492742356,
+        "pss_mb": 63.384765625,
+        "threads": 11
+      }
+    ]
+  }
+}

@@ -1,0 +1,16 @@
+[package]
+name = "shell-iced"
+version = "0.1.0"
+edition = "2024"
+description = "The bare iced shell: one window, one label."
+
+[dependencies]
+iced = { version = "0.14", default-features = false, features = ["wgpu", "crisp", "thread-pool"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+iced = { version = "0.14", default-features = false, features = ["wayland"] }
+
+[profile.release]
+debug = false
+
+[workspace]
