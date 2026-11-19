@@ -14,6 +14,9 @@ use std::sync::Arc;
 const SHADER: &str = r#"
 @group(0) @binding(0) var tex: texture_2d<f32>;
 @group(0) @binding(1) var samp: sampler;
+// origin.xy and size.zw of the picture in framebuffer pixels; radius in .x of the second row.
+struct Shape { rect: vec4<f32>, extra: vec4<f32> };
+@group(0) @binding(2) var<uniform> shape: Shape;
 struct VOut { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
 @vertex fn vs(@builtin(vertex_index) i: u32) -> VOut {
     let uv = vec2<f32>(f32(i & 1u), f32((i >> 1u) & 1u));
@@ -23,13 +26,22 @@ struct VOut { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
     return o;
 }
 @fragment fn fs(v: VOut) -> @location(0) vec4<f32> {
-    return vec4<f32>(textureSample(tex, samp, v.uv).rgb, 1.0);
+    let rgb = textureSample(tex, samp, v.uv).rgb;
+    let r = shape.extra.x;
+    let half = shape.rect.zw * 0.5;
+    let p = v.pos.xy - (shape.rect.xy + half);
+    let q = abs(p) - half + vec2<f32>(r, r);
+    let d = length(max(q, vec2<f32>(0.0, 0.0))) + min(max(q.x, q.y), 0.0) - r;
+    let a = clamp(0.5 - d, 0.0, 1.0);
+    return vec4<f32>(rgb * a, a);
 }
 "#;
 
 /// The shader program: draws the newest frame the app took from the player.
 pub struct VideoProgram {
     pub frame: Option<Arc<VideoFrame>>,
+    /// Corner radius in physical pixels (0 for square corners).
+    pub radius: f32,
 }
 
 impl<M> shader::Program<M> for VideoProgram {
@@ -38,6 +50,7 @@ impl<M> shader::Program<M> for VideoProgram {
     fn draw(&self, _: &(), _: mouse::Cursor, _: Rectangle) -> VideoPrimitive {
         VideoPrimitive {
             frame: self.frame.clone(),
+            radius: self.radius,
         }
     }
 }
@@ -45,6 +58,7 @@ impl<M> shader::Program<M> for VideoProgram {
 #[derive(Debug)]
 pub struct VideoPrimitive {
     frame: Option<Arc<VideoFrame>>,
+    radius: f32,
 }
 
 pub struct VideoPipeline {
@@ -53,6 +67,7 @@ pub struct VideoPipeline {
     sampler: wgpu::Sampler,
     format: wgpu::TextureFormat,
     texture: Option<(wgpu::Texture, wgpu::BindGroup, u32, u32)>,
+    shape: wgpu::Buffer,
     uploaded: u64,
 }
 
@@ -81,6 +96,16 @@ impl shader::Pipeline for VideoPipeline {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
         let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -102,7 +127,7 @@ impl shader::Pipeline for VideoPipeline {
                 entry_point: Some("fs"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
-                    blend: None,
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
@@ -122,12 +147,19 @@ impl shader::Pipeline for VideoPipeline {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
+        let shape = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("nt video shape"),
+            size: 32,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         VideoPipeline {
             pipeline,
             layout,
             sampler,
             format,
             texture: None,
+            shape,
             uploaded: u64::MAX,
         }
     }
@@ -141,10 +173,23 @@ impl shader::Primitive for VideoPrimitive {
         p: &mut VideoPipeline,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        _bounds: &Rectangle,
-        _viewport: &Viewport,
+        bounds: &Rectangle,
+        viewport: &Viewport,
     ) {
         let Some(frame) = &self.frame else { return };
+        let s = viewport.scale_factor();
+        let shape: [f32; 8] = [
+            bounds.x * s,
+            bounds.y * s,
+            bounds.width * s,
+            bounds.height * s,
+            self.radius,
+            0.0,
+            0.0,
+            0.0,
+        ];
+        let bytes: Vec<u8> = shape.iter().flat_map(|v| v.to_ne_bytes()).collect();
+        queue.write_buffer(&p.shape, 0, &bytes);
         if frame.generation == p.uploaded && p.texture.is_some() {
             return;
         }
@@ -188,6 +233,10 @@ impl shader::Primitive for VideoPrimitive {
                     wgpu::BindGroupEntry {
                         binding: 1,
                         resource: wgpu::BindingResource::Sampler(&p.sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: p.shape.as_entire_binding(),
                     },
                 ],
             });

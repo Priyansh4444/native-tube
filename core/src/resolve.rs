@@ -149,6 +149,10 @@ pub async fn resolve(video_id: &str, max_height: u32) -> Result<Streams> {
     )?;
     let v: Value = resp.json().await?;
     let player_ms = started.elapsed().as_secs_f64() * 1000.0;
+    // Debugging aid: NT_DUMP_PLAYER=<file> saves the raw /player answer.
+    if let Some(path) = std::env::var_os("NT_DUMP_PLAYER") {
+        let _ = std::fs::write(path, v.to_string());
+    }
     let mut streams = pick(&v, max_height)?;
     streams.visitor_ms = visitor_ms;
     streams.player_ms = player_ms;

@@ -7,6 +7,7 @@ mod scroller;
 mod theme;
 mod video;
 mod view;
+mod watch;
 
 use rune::{AppSpec, FrameOutcome, KeyEvent, Tx};
 
@@ -18,21 +19,46 @@ fn on_key(s: &mut app::App, ev: &KeyEvent, tx: &mut Tx) -> bool {
     s.on_key(ev, tx)
 }
 
+/// Logs a panic's message and location to stderr, then runs the default hook.
+fn install_panic_hook() {
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let at = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "unknown location".into());
+        let msg = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "(no message)".into());
+        eprintln!("nt-rune: panic at {at}: {msg}");
+        default(info);
+    }));
+}
+
 fn main() {
     nt_core::metrics::init("rune");
     nt_core::autopilot::start();
+    install_panic_hook();
+    // Test runs (tools/headless.sh) name the window through NT_APP_ID.
     rune::set_app_id(Box::leak(
         std::env::var("NT_APP_ID")
             .unwrap_or_else(|_| "nt-rune".to_string())
             .into_boxed_str(),
     ));
     let spec = AppSpec {
-        min_size: Some((640.0, 480.0)),
+        min_size: Some((480.0, 360.0)),
         poll: Some(poll),
         on_key: Some(on_key),
+        fonts: theme::FONTS,
+        families: theme::FAMILIES,
         ..AppSpec::new("NativeTube", (1280.0, 800.0), app::init, view::view)
     };
-    let app = rune::App::new(spec);
+    // macOS: winit's application menu (About, Hide, Quit ⌘Q) stays; standard_menus adds Edit
+    // and Window (Close ⌘W). Closing the window quits on every platform (rune::App's default).
+    let app = rune::App::new(spec).standard_menus();
     app::set_handle(app.handle());
     if let Some(h) = app::handle() {
         let h = h.clone();

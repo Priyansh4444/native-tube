@@ -1,21 +1,58 @@
 //! Page state and page layout.
 //!
-//! Every page's content is a list of absolutely positioned [`Block`]s whose heights are
-//! known up front (fixed for cards and rows, measured once with GPUI's text shaper for
-//! comments, titles and the description). The scroller then only has to binary-search
-//! the blocks that intersect the viewport plus one viewport of overscan, so no per-frame
-//! work scales with the number of loaded items.
+//! Every page's content is a list of absolutely positioned [`Block`]s whose heights are known
+//! before drawing: fixed for thumbnails and rows, measured once with GPUI's text shaper for
+//! titles, the description and comments (at bucketed widths, so a resize re-measures only every
+//! few pixels). The scroller binary-searches the blocks that intersect the viewport plus a band
+//! of overscan, so no per-frame work grows with the number of loaded items.
 
-use crate::theme::*;
 use nt_core::scroll::ScrollAnimator;
 use nt_core::{ChannelInfo, ChannelRef, Comment, Continuation, Video, WatchInfo};
+use std::collections::HashSet;
 
 pub type PageId = u64;
+
+/// What the user sees when something fails. The raw error goes to the log only.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Problem {
+    pub title: &'static str,
+    pub detail: &'static str,
+    pub offline: bool,
+}
+
+impl Problem {
+    pub fn from_error(e: &nt_core::Error, what: &str) -> Problem {
+        eprintln!("nt-gpui: {what} failed: {e}");
+        use nt_core::Error as E;
+        match e {
+            E::Network(_) => Problem {
+                title: "Couldn't reach YouTube",
+                detail: "Check your connection and try again.",
+                offline: true,
+            },
+            E::Fixture(_) => Problem {
+                title: "Something went wrong",
+                detail: "This page isn't in the recorded test data.",
+                offline: false,
+            },
+            E::Player(_) => Problem {
+                title: "This video is unavailable",
+                detail: "It can't be played here. Try another video.",
+                offline: false,
+            },
+            _ => Problem {
+                title: "Something went wrong",
+                detail: "YouTube sent an answer this app doesn't understand.",
+                offline: false,
+            },
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Load {
     Loading,
-    Failed(String),
+    Failed(Problem),
     Ready,
 }
 
@@ -24,7 +61,7 @@ pub struct Feed {
     pub items: Vec<Video>,
     pub next: Option<Continuation>,
     pub loading_more: bool,
-    pub more_error: Option<String>,
+    pub more_error: Option<Problem>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,7 +77,7 @@ pub enum CommentsState {
     NotStarted,
     Loading,
     Idle,
-    Failed(String),
+    Failed(Problem),
 }
 
 pub struct WatchState {
@@ -50,20 +87,18 @@ pub struct WatchState {
     pub comments_next: Option<Continuation>,
     pub comments_total: Option<String>,
     pub comments_state: CommentsState,
+    /// Bumped for each comments request, so a stale answer is dropped.
+    pub comments_req: u64,
     /// LoadMoreComments arrived before the watch info (and its comments cursor).
     pub want_comments: bool,
     pub desc_expanded: bool,
+    pub expanded_comments: HashSet<usize>,
     pub subscribed: bool,
     pub saved: bool,
-    /// Where to seek once the video is playing again after Back.
+    /// Where to seek once the video plays again (Back, or a remembered position).
     pub resume_at: Option<f64>,
-    /// Measured comment heights for `comment_h_width`.
-    pub comment_h: Vec<f32>,
-    pub comment_h_width: f32,
 }
 
-// A handful of pages exist at a time; boxing the big variants would only add indirection.
-#[allow(clippy::large_enum_variant)]
 pub enum Kind {
     Home {
         topic: usize,
@@ -74,8 +109,9 @@ pub enum Kind {
     Watch(Box<WatchState>),
     Channel {
         id: String,
-        info: Option<ChannelInfo>,
+        info: Option<Box<ChannelInfo>>,
         subscribed: bool,
+        desc_expanded: bool,
     },
     Subscriptions {
         channels: Vec<ChannelRef>,
@@ -84,19 +120,35 @@ pub enum Kind {
     WatchLater,
 }
 
+/// Measured line counts, reused until the width bucket changes.
+#[derive(Default)]
+pub struct TextCache {
+    titles_w: u32,
+    titles: Vec<u8>,
+    comments_w: u32,
+    comments: Vec<u16>,
+}
+
+impl TextCache {
+    pub fn clear_titles(&mut self) {
+        self.titles.clear();
+    }
+}
+
 pub struct Page {
     pub id: PageId,
     pub kind: Kind,
     pub status: Load,
-    /// The page's main video list: home/search/channel/subscription grid, library list,
-    /// or the related list on a watch page.
+    /// The page's main video list: home/search/channel/subscription grid, library list, or the
+    /// related list on a watch page.
     pub feed: Feed,
     pub scroll: ScrollAnimator,
     /// Bumped whenever something that affects layout changes.
     pub version: u64,
-    /// Bumped for every (re)load, so stale answers are dropped.
+    /// Bumped for every (re)load and "more" request, so stale answers are dropped.
     pub req: u64,
     pub layout: Option<(LayoutKey, Layout)>,
+    pub text: TextCache,
 }
 
 impl Page {
@@ -110,6 +162,7 @@ impl Page {
             version: 0,
             req: 0,
             layout: None,
+            text: TextCache::default(),
         }
     }
 
@@ -124,11 +177,15 @@ impl Page {
     }
 
     pub fn touch(&mut self) {
-        self.version += 1;
+        self.version = self.version.wrapping_add(1);
     }
 
-    pub fn has_chips(&self) -> bool {
+    pub fn is_home(&self) -> bool {
         matches!(self.kind, Kind::Home { .. })
+    }
+
+    pub fn is_watch(&self) -> bool {
+        matches!(self.kind, Kind::Watch(_))
     }
 
     pub fn watch(&self) -> Option<&WatchState> {
@@ -156,61 +213,167 @@ pub struct Geo {
     pub scale: f32,
 }
 
+pub const TOP_BAR_H: f32 = 56.0;
+pub const RAIL_W: f32 = 72.0;
+pub const CHIPS_H: f32 = 56.0;
+
 impl Geo {
-    pub fn content_w(&self) -> f32 {
-        (self.win_w - RAIL_W).max(100.0)
+    pub fn rail(&self, watch: bool) -> bool {
+        !watch && self.win_w >= crate::theme::RAIL_MIN_WINDOW
     }
-    pub fn inner_w(&self) -> f32 {
-        (self.content_w() - 2.0 * PAD).max(100.0)
+    pub fn content_x(&self, watch: bool) -> f32 {
+        if self.rail(watch) { RAIL_W } else { 0.0 }
     }
-    pub fn scroller_top(&self, chips: bool) -> f32 {
-        TOP_BAR_H + if chips { CHIPS_H } else { 0.0 }
+    pub fn content_w(&self, watch: bool) -> f32 {
+        (self.win_w - self.content_x(watch)).max(100.0)
     }
-    pub fn viewport_h(&self, chips: bool) -> f32 {
-        (self.win_h - self.scroller_top(chips)).max(50.0)
+    pub fn scroller_top(&self, home: bool) -> f32 {
+        TOP_BAR_H + if home { CHIPS_H } else { 0.0 }
     }
-    pub fn wide_watch(&self) -> bool {
-        self.win_w >= 1000.0
+    pub fn viewport_h(&self, home: bool) -> f32 {
+        (self.win_h - self.scroller_top(home)).max(50.0)
+    }
+    /// Content padding: 24, 16 below 600.
+    pub fn pad(&self) -> f32 {
+        if self.win_w < 600.0 { 16.0 } else { 24.0 }
     }
 }
 
 pub const COL_GAP: f32 = 16.0;
-pub const ROW_GAP: f32 = 32.0;
-pub const CARD_MIN: f32 = 300.0;
-pub const CARD_MAX: f32 = 420.0;
-/// Below the thumbnail: 12 gap, then title (2 x 22) + 4 + channel 20 + meta 20.
-pub const CARD_TEXT_H: f32 = 12.0 + 44.0 + 4.0 + 20.0 + 20.0;
+pub const ROW_GAP: f32 = 40.0;
+pub const AVATAR: f32 = 36.0;
+/// Room the "⋮" button takes at the right of a card's text column.
+pub const MENU_W: f32 = 24.0;
 
-/// As many columns as fit with a card width between 300 and 420.
-pub fn grid(inner_w: f32) -> (usize, f32) {
-    let fit = ((inner_w + COL_GAP) / (CARD_MIN + COL_GAP))
-        .floor()
-        .max(1.0) as usize;
-    let cols = fit.max(1);
-    let w = ((inner_w - COL_GAP * (cols as f32 - 1.0)) / cols as f32).min(CARD_MAX);
-    (cols, w)
-}
-
-pub fn card_h(card_w: f32) -> f32 {
-    card_w * 9.0 / 16.0 + CARD_TEXT_H
-}
-
-/// Search-style list row: thumbnail 360x202 (narrower when the window is narrow).
-pub fn list_thumb_w(inner_w: f32) -> f32 {
-    if inner_w >= 760.0 {
-        360.0
-    } else {
-        (inner_w * 0.45).floor()
+/// Columns = 1 below 600, 2 below 900, 3 below 1600, 4 below 2300, otherwise 5.
+pub fn grid_cols(win_w: f32) -> usize {
+    match win_w {
+        w if w < 600.0 => 1,
+        w if w < 900.0 => 2,
+        w if w < 1600.0 => 3,
+        w if w < 2300.0 => 4,
+        _ => 5,
     }
 }
+
+/// Cards fill the row exactly.
+pub fn card_w(inner: f32, cols: usize) -> f32 {
+    let cols = cols.max(1) as f32;
+    ((inner - COL_GAP * (cols - 1.0)) / cols).max(80.0)
+}
+
+/// Text column width of a card, bucketed to 8 px so measurement and drawing agree.
+pub fn card_text_w(card_w: f32, avatar: bool) -> f32 {
+    let w = card_w - MENU_W - if avatar { AVATAR + 12.0 } else { 0.0 };
+    bucket8(w)
+}
+
+pub fn bucket8(w: f32) -> f32 {
+    ((w.max(40.0) / 8.0).floor() * 8.0).max(40.0)
+}
+
+/// Search, History and Watch Later rows: content centered, max 1096 wide.
+pub fn list_geometry(content_w: f32, pad: f32) -> (f32, f32) {
+    let w = (content_w - 2.0 * pad).clamp(100.0, 1096.0);
+    let x = ((content_w - w) / 2.0).max(pad.min(content_w / 2.0));
+    (x, w)
+}
+
+pub fn list_thumb_w(list_w: f32) -> f32 {
+    (list_w * 0.4).clamp(240.0, 500.0).min(list_w * 0.6).floor()
+}
+
+/// The text column of a list row needs title 52 + meta 18 + channel row 48 + snippet 18.
+pub const LIST_TEXT_H: f32 = 136.0;
 pub const LIST_GAP: f32 = 16.0;
 
 pub const COMPACT_THUMB_W: f32 = 168.0;
 pub const COMPACT_THUMB_H: f32 = 94.0;
 pub const COMPACT_GAP: f32 = 8.0;
-pub const RELATED_W: f32 = 400.0;
-
 pub const SPINNER_H: f32 = 72.0;
+pub const EMPTY_H: f32 = 320.0;
+pub const ERROR_H: f32 = 240.0;
+
+/// The watch page's columns and player box, in content coordinates.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WatchGeo {
+    pub wide: bool,
+    pub px: f32,
+    pub pw: f32,
+    pub sx: f32,
+    pub sw: f32,
+    /// Player box: x, y, w, h.
+    pub player: (f32, f32, f32, f32),
+    /// Where the columns start below the player.
+    pub below: f32,
+    /// Where the secondary column starts (wide layout).
+    pub side_top: f32,
+}
+
+pub fn watch_geo(geo: &Geo, theatre: bool) -> WatchGeo {
+    let w = geo.win_w;
+    let h = geo.win_h;
+    let pad = if w < 600.0 { 16.0 } else { 24.0 };
+    let pmax = ((h - 169.0) * 16.0 / 9.0).max(320.0);
+    let wide = w >= 1017.0;
+    let (px, pw, sx, sw) = if wide {
+        let avail = w - 2.0 * pad - 24.0;
+        let sw = (avail * 0.29).clamp(300.0, 402.0);
+        let pw = (avail - sw).min(pmax).max(200.0);
+        let total = pw + 24.0 + sw;
+        let left = ((w - total) / 2.0).max(pad);
+        (left, pw, left + pw + 24.0, sw)
+    } else {
+        let pw = (w - 2.0 * pad).min(pmax).max(100.0);
+        let left = ((w - pw) / 2.0).max(pad.min(w / 2.0));
+        (left, pw, left, pw)
+    };
+    if theatre {
+        let th = (w * 0.5625).min(h - 169.0).max(120.0).floor();
+        WatchGeo {
+            wide,
+            px,
+            pw,
+            sx,
+            sw,
+            player: (0.0, 0.0, w, th),
+            below: th + 24.0,
+            side_top: th + 24.0,
+        }
+    } else {
+        let ph = (pw * 9.0 / 16.0).floor();
+        WatchGeo {
+            wide,
+            px,
+            pw,
+            sx,
+            sw,
+            player: (px, pad, pw, ph),
+            below: pad + ph,
+            side_top: pad,
+        }
+    }
+}
+
+/// The channel header's text column, next to the avatar.
+pub fn channel_text_w(w: f32, avatar: f32) -> f32 {
+    bucket8(w - avatar - 24.0)
+}
+
+/// Channel content: centered, max 1284.
+pub fn channel_geometry(content_w: f32, pad: f32) -> (f32, f32) {
+    let w = (content_w - 2.0 * pad).clamp(100.0, 1284.0);
+    ((content_w - w) / 2.0, w)
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Empty {
+    NoSubscriptions,
+    History,
+    WatchLater,
+    NoResults,
+    NoVideos,
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum BlockKind {
@@ -218,20 +381,23 @@ pub enum BlockKind {
         first: usize,
         count: usize,
         card_w: f32,
+        avatar: bool,
     },
     SkeletonRow {
         cols: usize,
         card_w: f32,
     },
+    SkeletonList,
     ListRow(usize),
     CompactRow(usize),
     Spinner,
     MoreError,
     LoadError,
-    Empty(&'static str),
+    Empty(Empty),
     PageTitle,
     ChannelBanner,
     ChannelHeader,
+    ChannelTabs,
     SubsStrip,
     Player,
     WatchMeta {
@@ -242,7 +408,11 @@ pub enum BlockKind {
         shown: usize,
     },
     CommentsHeader,
-    Comment(usize),
+    Comment {
+        i: usize,
+        lines: usize,
+        shown: usize,
+    },
     CommentsSpinner,
     CommentsError,
 }
@@ -260,6 +430,7 @@ pub struct Block {
 pub struct LayoutKey {
     pub geo: Geo,
     pub version: u64,
+    pub theatre: bool,
 }
 
 #[derive(Default, Debug)]
@@ -269,11 +440,11 @@ pub struct Layout {
     pub content_h: f32,
     /// Watch page: where the comments section starts and the primary column ends.
     pub comments_y: Option<f32>,
-    pub primary_end: f32,
+    pub comments_end: f32,
     /// Where the main video list ends (infinite scroll triggers near it).
     pub main_end: f32,
-    /// Index of the column that holds the page's main video list.
-    pub main_column: usize,
+    /// Watch page: the player box in content coordinates.
+    pub player: Option<(f32, f32, f32, f32)>,
 }
 
 impl Layout {
@@ -281,457 +452,548 @@ impl Layout {
     pub fn visible(&self, top: f32, bottom: f32) -> impl Iterator<Item = &Block> {
         self.columns.iter().flat_map(move |col| {
             let start = col.partition_point(|b| b.y + b.h <= top);
-            col[start..].iter().take_while(move |b| b.y < bottom)
+            col.get(start..)
+                .unwrap_or_default()
+                .iter()
+                .take_while(move |b| b.y < bottom)
         })
     }
 }
 
-/// Measures how many lines `text` wraps to at `font_size`/`bold` within `width`.
+/// Measures how many lines `text` wraps to at `size`/`weight` within `width`.
 pub trait Measure {
-    fn lines(&mut self, text: &str, font_size: f32, weight: u16, width: f32) -> usize;
+    fn lines(&mut self, text: &str, size: f32, weight: u16, width: f32) -> usize;
 }
 
-pub const TITLE_LH: f32 = 28.0;
 pub const BODY_LH: f32 = 20.0;
 pub const DESC_CLAMP: usize = 3;
+pub const COMMENT_CLAMP: usize = 4;
 
-pub fn watch_columns(geo: &Geo) -> (f32, Option<f32>) {
-    let inner = geo.inner_w();
-    if geo.wide_watch() {
-        let pw = (inner - RELATED_W - PAD).max(320.0);
-        (pw, Some(PAD + pw + PAD))
-    } else {
-        (inner, None)
-    }
-}
-
-pub fn player_h(geo: &Geo, pw: f32) -> f32 {
-    (pw * 9.0 / 16.0).min(geo.win_h * 0.7).floor()
-}
-
-/// Comment block: avatar 40 + 12, then "@author • published" (18), the text, likes/replies (20).
-pub fn comment_h(lines: usize) -> f32 {
-    (18.0 + 4.0 + lines.max(1) as f32 * BODY_LH + 6.0 + 20.0).max(40.0) + 20.0
-}
-
+/// Comment text column: avatar 40 + 16 gap.
 pub fn comment_text_w(pw: f32) -> f32 {
-    (pw - 52.0).max(50.0)
+    ((pw - 56.0).max(60.0) / 16.0).floor() * 16.0
 }
 
-pub fn build_layout(page: &mut Page, geo: &Geo, m: &mut dyn Measure) -> Layout {
-    let inner = geo.inner_w();
-    let mut lay = Layout {
-        columns: vec![Vec::new()],
-        ..Default::default()
-    };
-    let mut y = PAD;
-    match &mut page.kind {
-        Kind::Watch(w) => {
-            let (pw, related_x) = watch_columns(geo);
-            let ph = player_h(geo, pw);
-            let mut col: Vec<Block> = Vec::new();
-            col.push(Block {
-                x: PAD,
-                y,
-                w: pw,
-                h: ph,
-                kind: BlockKind::Player,
-            });
-            y += ph;
-            match (&page.status, &w.info) {
-                (Load::Failed(_), _) => {
-                    col.push(Block {
-                        x: PAD,
-                        y: y + 16.0,
-                        w: pw,
-                        h: 160.0,
-                        kind: BlockKind::LoadError,
-                    });
-                    y += 176.0;
-                }
-                (_, None) => {
-                    col.push(Block {
-                        x: PAD,
-                        y,
-                        w: pw,
-                        h: SPINNER_H,
-                        kind: BlockKind::Spinner,
-                    });
-                    y += SPINNER_H;
-                }
-                (_, Some(info)) => {
-                    let title_lines = m.lines(&info.title, 20.0, 600, pw).max(1);
-                    let title_h = title_lines as f32 * TITLE_LH;
-                    let meta_h = 12.0 + title_h + 12.0 + 48.0;
-                    col.push(Block {
-                        x: PAD,
-                        y,
-                        w: pw,
-                        h: meta_h,
-                        kind: BlockKind::WatchMeta { title_h },
-                    });
-                    y += meta_h + 12.0;
-                    let lines = if info.description.trim().is_empty() {
-                        0
-                    } else {
-                        m.lines(info.description.trim_end(), 14.0, 400, pw - 24.0)
-                    };
-                    let shown = if w.desc_expanded {
-                        lines
-                    } else {
-                        lines.min(DESC_CLAMP)
-                    };
-                    let toggle = if lines > DESC_CLAMP { 4.0 + 20.0 } else { 0.0 };
-                    let desc_h = 12.0
-                        + 20.0
-                        + if shown > 0 {
-                            4.0 + shown as f32 * BODY_LH
-                        } else {
-                            0.0
-                        }
-                        + toggle
-                        + 12.0;
-                    col.push(Block {
-                        x: PAD,
-                        y,
-                        w: pw,
-                        h: desc_h,
-                        kind: BlockKind::WatchDesc { lines, shown },
-                    });
-                    y += desc_h + 24.0;
-                    if info.comments.is_some() || !w.comments.is_empty() {
-                        lay.comments_y = Some(y);
-                        col.push(Block {
-                            x: PAD,
-                            y,
-                            w: pw,
-                            h: 40.0,
-                            kind: BlockKind::CommentsHeader,
-                        });
-                        y += 40.0 + 12.0;
-                        let tw = comment_text_w(pw);
-                        if w.comment_h_width != tw {
-                            w.comment_h.clear();
-                            w.comment_h_width = tw;
-                        }
-                        for i in w.comment_h.len()..w.comments.len() {
-                            let lines = m.lines(w.comments[i].text.trim_end(), 14.0, 400, tw);
-                            w.comment_h.push(comment_h(lines));
-                        }
-                        for (i, h) in w.comment_h.iter().enumerate() {
-                            col.push(Block {
-                                x: PAD,
-                                y,
-                                w: pw,
-                                h: *h,
-                                kind: BlockKind::Comment(i),
-                            });
-                            y += h;
-                        }
-                        match w.comments_state {
-                            CommentsState::Loading => {
-                                col.push(Block {
-                                    x: PAD,
-                                    y,
-                                    w: pw,
-                                    h: SPINNER_H,
-                                    kind: BlockKind::CommentsSpinner,
-                                });
-                                y += SPINNER_H;
-                            }
-                            CommentsState::Failed(_) => {
-                                col.push(Block {
-                                    x: PAD,
-                                    y,
-                                    w: pw,
-                                    h: 96.0,
-                                    kind: BlockKind::CommentsError,
-                                });
-                                y += 96.0;
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-            }
-            lay.primary_end = y;
-            // Related videos: their own column when wide, otherwise below the comments.
-            let (rx, rw, mut ry, column) = match related_x {
-                Some(x) => (x, RELATED_W, PAD, 1),
-                None => (PAD, pw, y + 24.0, 0),
-            };
-            let mut rel: Vec<Block> = Vec::new();
-            for i in 0..page.feed.items.len() {
-                rel.push(Block {
-                    x: rx,
-                    y: ry,
-                    w: rw,
-                    h: COMPACT_THUMB_H,
-                    kind: BlockKind::CompactRow(i),
-                });
-                ry += COMPACT_THUMB_H + COMPACT_GAP;
-            }
-            if page.feed.loading_more {
-                rel.push(Block {
-                    x: rx,
-                    y: ry,
-                    w: rw,
-                    h: SPINNER_H,
-                    kind: BlockKind::Spinner,
-                });
-                ry += SPINNER_H;
-            } else if page.feed.more_error.is_some() {
-                rel.push(Block {
-                    x: rx,
-                    y: ry,
-                    w: rw,
-                    h: 96.0,
-                    kind: BlockKind::MoreError,
-                });
-                ry += 96.0;
-            }
-            if column == 1 {
-                lay.columns = vec![col, rel];
-                lay.main_column = 1;
-            } else {
-                col.extend(rel);
-                lay.columns = vec![col];
-            }
-            lay.main_end = ry;
-            lay.content_h = y.max(ry) + PAD;
-            return lay;
-        }
-        Kind::Channel { info, .. } => {
-            if let Some(info) = info {
-                if info.banner.is_some() {
-                    let bh = 160.0;
-                    lay.columns[0].push(Block {
-                        x: PAD,
-                        y,
-                        w: inner,
-                        h: bh,
-                        kind: BlockKind::ChannelBanner,
-                    });
-                    y += bh + 16.0;
-                }
-                let hh = 168.0;
-                lay.columns[0].push(Block {
-                    x: PAD,
-                    y,
-                    w: inner,
-                    h: hh,
-                    kind: BlockKind::ChannelHeader,
-                });
-                y += hh + 16.0;
-            }
-            y = grid_section(
-                page.status.clone(),
-                &page.feed,
-                inner,
-                y,
-                &mut lay.columns[0],
-                "This channel has no videos",
-            );
-        }
-        Kind::Subscriptions { channels } => {
-            if page.status == Load::Ready && channels.is_empty() {
-                lay.columns[0].push(Block {
-                    x: PAD,
-                    y,
-                    w: inner,
-                    h: 200.0,
-                    kind: BlockKind::Empty("You haven't subscribed to any channels yet"),
-                });
-                y += 200.0;
-            } else {
-                if !channels.is_empty() {
-                    lay.columns[0].push(Block {
-                        x: PAD,
-                        y,
-                        w: inner,
-                        h: 112.0,
-                        kind: BlockKind::SubsStrip,
-                    });
-                    y += 112.0 + 16.0;
-                }
-                y = grid_section(
-                    page.status.clone(),
-                    &page.feed,
-                    inner,
-                    y,
-                    &mut lay.columns[0],
-                    "No recent uploads",
-                );
-            }
-        }
-        Kind::Home { .. } => {
-            y = grid_section(
-                page.status.clone(),
-                &page.feed,
-                inner,
-                y,
-                &mut lay.columns[0],
-                "No videos",
-            );
-        }
-        Kind::Search { .. } | Kind::History | Kind::WatchLater => {
-            let col = &mut lay.columns[0];
-            if matches!(page.kind, Kind::History | Kind::WatchLater) {
+pub fn comment_h(shown: usize, clamped: bool) -> f32 {
+    let text = shown.max(1) as f32 * BODY_LH;
+    let more = if clamped { 24.0 } else { 0.0 };
+    (18.0 + 2.0 + text + more + 4.0 + 32.0).max(40.0) + 16.0
+}
+
+/// Title lines of every card in the feed, measured at `text_w`, cached on the page.
+fn title_lines(page: &mut Page, text_w: f32, m: &mut dyn Measure) {
+    let key = text_w as u32;
+    if page.text.titles_w != key {
+        page.text.titles.clear();
+        page.text.titles_w = key;
+    }
+    let start = page.text.titles.len().min(page.feed.items.len());
+    for v in page.feed.items.get(start..).unwrap_or_default() {
+        let n = m.lines(&v.title, 16.0, 500, text_w).clamp(1, 2);
+        page.text.titles.push(n as u8);
+    }
+}
+
+#[allow(clippy::too_many_arguments)] // a private layout helper; the arguments are the section's geometry
+fn grid_section(
+    page: &mut Page,
+    geo: &Geo,
+    x: f32,
+    inner: f32,
+    mut y: f32,
+    avatar: bool,
+    empty: Empty,
+    col: &mut Vec<Block>,
+    m: &mut dyn Measure,
+) -> f32 {
+    let cols = grid_cols(geo.win_w);
+    let cw = card_w(inner, cols);
+    let thumb_h = cw * 9.0 / 16.0;
+    match &page.status {
+        Load::Loading => {
+            for _ in 0..3 {
+                let h = thumb_h + 12.0 + 64.0;
                 col.push(Block {
-                    x: PAD,
+                    x,
                     y,
                     w: inner,
-                    h: 48.0,
-                    kind: BlockKind::PageTitle,
+                    h,
+                    kind: BlockKind::SkeletonRow { cols, card_w: cw },
                 });
-                y += 48.0 + 8.0;
+                y += h + ROW_GAP;
             }
-            let empty = match page.kind {
-                Kind::History => "Videos you watch will show up here",
-                Kind::WatchLater => "Save videos to watch later and they'll show up here",
-                _ => "No results",
-            };
-            match &page.status {
-                Load::Loading => {
-                    col.push(Block {
-                        x: PAD,
-                        y,
-                        w: inner,
-                        h: SPINNER_H * 2.0,
-                        kind: BlockKind::Spinner,
-                    });
-                    y += SPINNER_H * 2.0;
-                }
-                Load::Failed(_) => {
-                    col.push(Block {
-                        x: PAD,
-                        y,
-                        w: inner,
-                        h: 160.0,
-                        kind: BlockKind::LoadError,
-                    });
-                    y += 160.0;
-                }
-                Load::Ready if page.feed.items.is_empty() => {
-                    col.push(Block {
-                        x: PAD,
-                        y,
-                        w: inner,
-                        h: 200.0,
-                        kind: BlockKind::Empty(empty),
-                    });
-                    y += 200.0;
-                }
-                Load::Ready => {
-                    let th = list_thumb_w(inner) * 9.0 / 16.0;
-                    let th = th.round();
-                    for i in 0..page.feed.items.len() {
-                        col.push(Block {
-                            x: PAD,
-                            y,
-                            w: inner,
-                            h: th,
-                            kind: BlockKind::ListRow(i),
-                        });
-                        y += th + LIST_GAP;
-                    }
-                    y = feed_tail(&page.feed, inner, y, col);
-                }
+        }
+        Load::Failed(_) => {
+            col.push(Block {
+                x,
+                y,
+                w: inner,
+                h: ERROR_H,
+                kind: BlockKind::LoadError,
+            });
+            y += ERROR_H;
+        }
+        Load::Ready if page.feed.items.is_empty() => {
+            col.push(Block {
+                x,
+                y,
+                w: inner,
+                h: EMPTY_H,
+                kind: BlockKind::Empty(empty),
+            });
+            y += EMPTY_H;
+        }
+        Load::Ready => {
+            let tw = card_text_w(cw, avatar);
+            title_lines(page, tw, m);
+            let n = page.feed.items.len();
+            let mut first = 0;
+            while first < n {
+                let count = cols.min(n - first);
+                let max_lines = page
+                    .text
+                    .titles
+                    .get(first..first + count)
+                    .and_then(|s| s.iter().max().copied())
+                    .unwrap_or(2) as f32;
+                let text_h = max_lines * 22.0 + if avatar { 40.0 } else { 20.0 };
+                let h = thumb_h + 12.0 + text_h.max(if avatar { AVATAR } else { 0.0 });
+                col.push(Block {
+                    x,
+                    y,
+                    w: inner,
+                    h,
+                    kind: BlockKind::GridRow {
+                        first,
+                        count,
+                        card_w: cw,
+                        avatar,
+                    },
+                });
+                y += h + ROW_GAP;
+                first += count;
             }
+            y = feed_tail(&page.feed, x, inner, y, col);
         }
     }
-    lay.content_h = y + PAD;
-    lay.primary_end = lay.content_h;
-    lay.main_end = lay.content_h;
-    lay
+    y
 }
 
-fn feed_tail(feed: &Feed, inner: f32, mut y: f32, col: &mut Vec<Block>) -> f32 {
+fn feed_tail(feed: &Feed, x: f32, w: f32, mut y: f32, col: &mut Vec<Block>) -> f32 {
     if feed.loading_more {
         col.push(Block {
-            x: PAD,
+            x,
             y,
-            w: inner,
+            w,
             h: SPINNER_H,
             kind: BlockKind::Spinner,
         });
         y += SPINNER_H;
     } else if feed.more_error.is_some() {
         col.push(Block {
-            x: PAD,
+            x,
             y,
-            w: inner,
-            h: 96.0,
+            w,
+            h: ERROR_H,
             kind: BlockKind::MoreError,
         });
-        y += 96.0;
+        y += ERROR_H;
     }
     y
 }
 
-fn grid_section(
-    status: Load,
-    feed: &Feed,
-    inner: f32,
-    mut y: f32,
-    col: &mut Vec<Block>,
-    empty: &'static str,
-) -> f32 {
-    let (cols, cw) = grid(inner);
-    let ch = card_h(cw);
-    match status {
-        Load::Loading => {
-            for _ in 0..3 {
+pub fn build_layout(page: &mut Page, geo: &Geo, theatre: bool, m: &mut dyn Measure) -> Layout {
+    let pad = geo.pad();
+    let watch = page.is_watch();
+    let content_w = geo.content_w(watch);
+    let mut lay = Layout {
+        columns: vec![Vec::new()],
+        ..Default::default()
+    };
+    let mut col: Vec<Block> = Vec::new();
+    let mut y = if page.is_home() { 0.0 } else { pad.min(16.0) };
+    match &page.kind {
+        Kind::Watch(_) => return watch_layout(page, geo, theatre, m),
+        Kind::Home { .. } => {
+            let inner = content_w - 2.0 * pad;
+            y = grid_section(
+                page,
+                geo,
+                pad,
+                inner,
+                y + 8.0,
+                true,
+                Empty::NoVideos,
+                &mut col,
+                m,
+            );
+        }
+        Kind::Channel {
+            info,
+            desc_expanded,
+            ..
+        } => {
+            let (x, w) = channel_geometry(content_w, pad);
+            if let Some(info) = info {
+                if info.banner.is_some() {
+                    let bh = (w / 6.2).floor();
+                    col.push(Block {
+                        x,
+                        y,
+                        w,
+                        h: bh,
+                        kind: BlockKind::ChannelBanner,
+                    });
+                    y += bh + 16.0;
+                }
+                let small = geo.win_w < 600.0;
+                let avatar = if small { 72.0 } else { 160.0 };
+                let extra = if *desc_expanded && !info.description.trim().is_empty() {
+                    let n = m.lines(
+                        info.description.trim(),
+                        14.0,
+                        400,
+                        channel_text_w(w, avatar),
+                    );
+                    n.saturating_sub(1) as f32 * BODY_LH
+                } else {
+                    0.0
+                };
+                let hh = 192.0 + extra;
                 col.push(Block {
-                    x: PAD,
+                    x,
+                    y,
+                    w,
+                    h: hh,
+                    kind: BlockKind::ChannelHeader,
+                });
+                y += hh;
+                col.push(Block {
+                    x,
+                    y,
+                    w,
+                    h: 48.0,
+                    kind: BlockKind::ChannelTabs,
+                });
+                y += 48.0 + 24.0;
+            }
+            y = grid_section(page, geo, x, w, y, false, Empty::NoVideos, &mut col, m);
+        }
+        Kind::Subscriptions { channels } => {
+            let inner = content_w - 2.0 * pad;
+            if page.status == Load::Ready && channels.is_empty() {
+                col.push(Block {
+                    x: pad,
                     y,
                     w: inner,
-                    h: ch,
-                    kind: BlockKind::SkeletonRow { cols, card_w: cw },
+                    h: EMPTY_H,
+                    kind: BlockKind::Empty(Empty::NoSubscriptions),
                 });
-                y += ch + ROW_GAP;
+                y += EMPTY_H;
+            } else {
+                if !channels.is_empty() {
+                    col.push(Block {
+                        x: pad,
+                        y,
+                        w: inner,
+                        h: 120.0,
+                        kind: BlockKind::SubsStrip,
+                    });
+                    y += 120.0 + 16.0;
+                }
+                y = grid_section(page, geo, pad, inner, y, true, Empty::NoVideos, &mut col, m);
             }
         }
-        Load::Failed(_) => {
-            col.push(Block {
-                x: PAD,
-                y,
-                w: inner,
-                h: 160.0,
-                kind: BlockKind::LoadError,
-            });
-            y += 160.0;
-        }
-        Load::Ready if feed.items.is_empty() => {
-            col.push(Block {
-                x: PAD,
-                y,
-                w: inner,
-                h: 200.0,
-                kind: BlockKind::Empty(empty),
-            });
-            y += 200.0;
-        }
-        Load::Ready => {
-            let mut first = 0;
-            while first < feed.items.len() {
-                let count = cols.min(feed.items.len() - first);
+        Kind::Search { .. } | Kind::History | Kind::WatchLater => {
+            let (x, w) = list_geometry(content_w, pad);
+            let library = !matches!(page.kind, Kind::Search { .. });
+            if library {
                 col.push(Block {
-                    x: PAD,
+                    x,
                     y,
-                    w: inner,
-                    h: ch,
-                    kind: BlockKind::GridRow {
-                        first,
-                        count,
-                        card_w: cw,
-                    },
+                    w,
+                    h: 56.0,
+                    kind: BlockKind::PageTitle,
                 });
-                y += ch + ROW_GAP;
-                first += count;
+                y += 56.0 + 8.0;
             }
-            y = feed_tail(feed, inner, y, col);
+            let empty = match page.kind {
+                Kind::History => Empty::History,
+                Kind::WatchLater => Empty::WatchLater,
+                _ => Empty::NoResults,
+            };
+            let th = (list_thumb_w(w) * 9.0 / 16.0).round();
+            let row_h = th.max(LIST_TEXT_H);
+            match &page.status {
+                Load::Loading => {
+                    for _ in 0..4 {
+                        col.push(Block {
+                            x,
+                            y,
+                            w,
+                            h: row_h,
+                            kind: BlockKind::SkeletonList,
+                        });
+                        y += row_h + LIST_GAP;
+                    }
+                }
+                Load::Failed(_) => {
+                    col.push(Block {
+                        x,
+                        y,
+                        w,
+                        h: ERROR_H,
+                        kind: BlockKind::LoadError,
+                    });
+                    y += ERROR_H;
+                }
+                Load::Ready if page.feed.items.is_empty() => {
+                    col.push(Block {
+                        x,
+                        y,
+                        w,
+                        h: EMPTY_H,
+                        kind: BlockKind::Empty(empty),
+                    });
+                    y += EMPTY_H;
+                }
+                Load::Ready => {
+                    for i in 0..page.feed.items.len() {
+                        col.push(Block {
+                            x,
+                            y,
+                            w,
+                            h: row_h,
+                            kind: BlockKind::ListRow(i),
+                        });
+                        y += row_h + LIST_GAP;
+                    }
+                    y = feed_tail(&page.feed, x, w, y, &mut col);
+                }
+            }
         }
     }
-    y
+    lay.columns = vec![col];
+    lay.content_h = y + pad;
+    lay.main_end = y;
+    lay
+}
+
+fn watch_layout(page: &mut Page, geo: &Geo, theatre: bool, m: &mut dyn Measure) -> Layout {
+    let wg = watch_geo(geo, theatre);
+    let mut lay = Layout {
+        player: Some(wg.player),
+        ..Default::default()
+    };
+    let (x, pw) = (wg.px, wg.pw);
+    let mut col: Vec<Block> = Vec::new();
+    let (px_, py, pww, ph) = wg.player;
+    col.push(Block {
+        x: px_,
+        y: py,
+        w: pww,
+        h: ph,
+        kind: BlockKind::Player,
+    });
+    let mut y = wg.below;
+    let mut comments_at: Option<usize> = None;
+    let status = page.status.clone();
+    let related_n = page.feed.items.len();
+    let Kind::Watch(w) = &mut page.kind else {
+        return lay;
+    };
+    match (&status, &w.info) {
+        (Load::Failed(_), _) => {
+            col.push(Block {
+                x,
+                y: y + 16.0,
+                w: pw,
+                h: ERROR_H,
+                kind: BlockKind::LoadError,
+            });
+            y += 16.0 + ERROR_H;
+        }
+        (_, None) => {
+            col.push(Block {
+                x,
+                y,
+                w: pw,
+                h: SPINNER_H,
+                kind: BlockKind::Spinner,
+            });
+            y += SPINNER_H;
+        }
+        (_, Some(info)) => {
+            let title_lines = m.lines(&info.title, 20.0, 700, bucket8(pw)).max(1);
+            let title_h = title_lines as f32 * 28.0;
+            let meta_h = 12.0 + title_h + 12.0 + 40.0;
+            col.push(Block {
+                x,
+                y,
+                w: pw,
+                h: meta_h,
+                kind: BlockKind::WatchMeta { title_h },
+            });
+            y += meta_h + 12.0;
+            let desc = info.description.trim();
+            let lines = if desc.is_empty() {
+                0
+            } else {
+                m.lines(desc, 14.0, 400, bucket8(pw - 24.0))
+            };
+            let shown = if w.desc_expanded {
+                lines
+            } else {
+                lines.min(DESC_CLAMP)
+            };
+            let toggle = if w.desc_expanded && lines > DESC_CLAMP {
+                28.0
+            } else {
+                0.0
+            };
+            let desc_h = 12.0 + 20.0 + shown as f32 * BODY_LH + toggle + 12.0;
+            col.push(Block {
+                x,
+                y,
+                w: pw,
+                h: desc_h,
+                kind: BlockKind::WatchDesc { lines, shown },
+            });
+            y += desc_h;
+            if info.comments.is_some() || !w.comments.is_empty() {
+                comments_at = Some(col.len());
+            }
+        }
+    }
+    // Comments, measured at a 16 px bucketed width (a live resize re-measures every 16 px).
+    let mut comment_blocks: Vec<Block> = Vec::new();
+    let mut cy = 0.0;
+    if comments_at.is_some() {
+        cy += 24.0;
+        comment_blocks.push(Block {
+            x,
+            y: cy,
+            w: pw,
+            h: 52.0,
+            kind: BlockKind::CommentsHeader,
+        });
+        cy += 52.0;
+        let tw = comment_text_w(pw);
+        let key = tw as u32;
+        if page.text.comments_w != key {
+            page.text.comments.clear();
+            page.text.comments_w = key;
+        }
+        let start = page.text.comments.len().min(w.comments.len());
+        for c in w.comments.get(start..).unwrap_or_default() {
+            let n = m.lines(c.text.trim_end(), 14.0, 400, tw).max(1);
+            page.text.comments.push(n.min(u16::MAX as usize) as u16);
+        }
+        for (i, n) in page.text.comments.iter().enumerate() {
+            let lines = *n as usize;
+            let expanded = w.expanded_comments.contains(&i);
+            let shown = if expanded {
+                lines
+            } else {
+                lines.min(COMMENT_CLAMP)
+            };
+            let h = comment_h(shown, lines > COMMENT_CLAMP);
+            comment_blocks.push(Block {
+                x,
+                y: cy,
+                w: pw,
+                h,
+                kind: BlockKind::Comment { i, lines, shown },
+            });
+            cy += h;
+        }
+        match w.comments_state {
+            CommentsState::Loading => {
+                comment_blocks.push(Block {
+                    x,
+                    y: cy,
+                    w: pw,
+                    h: SPINNER_H,
+                    kind: BlockKind::CommentsSpinner,
+                });
+                cy += SPINNER_H;
+            }
+            CommentsState::Failed(_) => {
+                comment_blocks.push(Block {
+                    x,
+                    y: cy,
+                    w: pw,
+                    h: ERROR_H,
+                    kind: BlockKind::CommentsError,
+                });
+                cy += ERROR_H;
+            }
+            _ => {}
+        }
+    }
+    // Related videos: their own column when wide; below 1017 after the description and before
+    // the comments.
+    let mut related: Vec<Block> = Vec::new();
+    let (rx, rw) = if wg.wide { (wg.sx, wg.sw) } else { (x, pw) };
+    let mut ry = if wg.wide { wg.side_top } else { y + 24.0 };
+    for i in 0..related_n {
+        related.push(Block {
+            x: rx,
+            y: ry,
+            w: rw,
+            h: COMPACT_THUMB_H,
+            kind: BlockKind::CompactRow(i),
+        });
+        ry += COMPACT_THUMB_H + COMPACT_GAP;
+    }
+    if page.feed.loading_more {
+        related.push(Block {
+            x: rx,
+            y: ry,
+            w: rw,
+            h: SPINNER_H,
+            kind: BlockKind::Spinner,
+        });
+        ry += SPINNER_H;
+    } else if page.feed.more_error.is_some() {
+        related.push(Block {
+            x: rx,
+            y: ry,
+            w: rw,
+            h: ERROR_H,
+            kind: BlockKind::MoreError,
+        });
+        ry += ERROR_H;
+    }
+    if wg.wide {
+        lay.main_end = ry;
+        let base = y;
+        if comments_at.is_some() {
+            lay.comments_y = Some(base + 24.0);
+        }
+        for mut b in comment_blocks {
+            b.y += base;
+            col.push(b);
+        }
+        y = base + cy;
+        lay.comments_end = y;
+        lay.columns = vec![col, related];
+        lay.content_h = y.max(ry) + 24.0;
+    } else {
+        col.extend(related);
+        let base = if related_n > 0 { ry } else { y };
+        lay.main_end = base;
+        if comments_at.is_some() {
+            lay.comments_y = Some(base + 24.0);
+        }
+        for mut b in comment_blocks {
+            b.y += base;
+            col.push(b);
+        }
+        y = base + cy;
+        lay.comments_end = y;
+        lay.columns = vec![col];
+        lay.content_h = y + 24.0;
+    }
+    lay
 }

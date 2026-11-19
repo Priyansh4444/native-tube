@@ -5,7 +5,7 @@
 //! of blocks (the viewport plus at least one viewport above and below) has to change.
 
 use nt_core::scroll::ScrollAnimator;
-use rune::{Live, Spring};
+use rune::Live;
 use std::time::Instant;
 
 static T0: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
@@ -46,6 +46,8 @@ pub struct Scroller {
     pub grab: f32,
     /// The pointer is over the scrollbar's track: keep it shown.
     hovered: bool,
+    band_dirty: bool,
+    scale: f32,
 }
 
 impl Default for Scroller {
@@ -63,14 +65,22 @@ impl Default for Scroller {
             bar_shown: false,
             grab: 0.0,
             hovered: false,
+            band_dirty: false,
+            scale: 1.0,
         }
     }
 }
 
 impl Scroller {
-    /// The smoothing the scrollbar's fade uses.
-    pub fn bar_spring() -> Spring {
-        Spring::new(0.25, 0.0)
+    /// Device pixels per point, so the published offset lands on whole device pixels (text
+    /// doesn't shimmer at fractional offsets during slow scrolls).
+    pub fn set_scale(&mut self, scale: f32) {
+        self.scale = scale.max(0.5);
+    }
+
+    /// The band changed outside `poll` (an input handler presented): the view must re-run.
+    pub fn take_band_dirty(&mut self) -> bool {
+        std::mem::take(&mut self.band_dirty)
     }
 
     pub fn viewport(&self) -> f32 {
@@ -114,13 +124,15 @@ impl Scroller {
         let band = self.band_of(y);
         if band != self.band {
             self.band = band;
+            self.band_dirty = true;
             return true;
         }
         false
     }
 
     fn publish(&mut self, y: f64, frame: f64) {
-        self.live.set([0.0, -(y as f32)]);
+        let snapped = (y as f32 * self.scale).round() / self.scale;
+        self.live.set([0.0, -snapped]);
         let max = self.anim.max_offset() as f32;
         if self.vh > 0.0 && max > 0.0 {
             let h =

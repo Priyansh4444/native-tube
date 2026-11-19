@@ -34,6 +34,21 @@ const SCROLLBAR_LINGER: f64 = 0.9;
 const SCROLLBAR_W: f32 = 6.0;
 const SCROLLBAR_HIT_W: f32 = 14.0;
 
+/// Round an offset to whole physical pixels, so text doesn't shimmer during slow scrolls.
+fn snap(offset: f32, scale: f32) -> f32 {
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    (offset * scale).round() / scale
+}
+
+thread_local! {
+    /// The last cursor position in window coordinates (menus anchor to it).
+    pub static LAST_CURSOR: Cell<iced::Point> = const { Cell::new(iced::Point::ORIGIN) };
+}
+
 /// Everything a page keeps about its scroll position. Lives in the page, outside the widget
 /// tree, so Back restores it exactly.
 pub struct ScrollModel {
@@ -46,6 +61,8 @@ pub struct ScrollModel {
     content_h: Cell<f32>,
     heights: RefCell<HashMap<u64, f32>>,
     heights_width: Cell<f32>,
+    /// Bumped whenever a measured height changes, so views can cache prefix sums.
+    heights_version: Cell<u64>,
     last_motion: Cell<f64>,
     near_end_sent: Cell<bool>,
     drag: Cell<Option<f32>>,
@@ -62,6 +79,7 @@ impl Default for ScrollModel {
             content_h: Cell::new(0.0),
             heights: RefCell::new(HashMap::new()),
             heights_width: Cell::new(0.0),
+            heights_version: Cell::new(1),
             last_motion: Cell::new(f64::NEG_INFINITY),
             near_end_sent: Cell::new(false),
             drag: Cell::new(None),
@@ -86,6 +104,9 @@ impl ScrollModel {
     /// The measured height of an item, if it has been laid out at the current width.
     pub fn height(&self, key: u64) -> Option<f32> {
         self.heights.borrow().get(&key).copied()
+    }
+    pub fn heights_version(&self) -> u64 {
+        self.heights_version.get()
     }
     /// Lets the next near-end check fire again (after a page was appended or a load failed).
     pub fn rearm_near_end(&self) {
@@ -286,27 +307,36 @@ impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for Scroller<'a, M> {
         }
         let mut nodes = Vec::with_capacity(self.children.len());
         let mut content_h: f32 = 0.0;
-        let mut i = 0;
         let mut heights = self.model.heights.borrow_mut();
+        let mut changed = false;
+        let mut items = self
+            .children
+            .iter_mut()
+            .zip(tree.children.iter_mut())
+            .zip(self.keys.iter().zip(self.assumed.iter()));
         for &(x, width, top, assumed_total, count) in &self.lanes {
             let mut y = top;
             let mut total = assumed_total;
             let item_limits =
                 layout::Limits::new(Size::new(width, 0.0), Size::new(width, f32::INFINITY));
-            for _ in 0..count {
-                let node = self.children[i].as_widget_mut().layout(
-                    &mut tree.children[i],
-                    renderer,
-                    &item_limits,
-                );
+            for ((child, child_tree), (key, assumed)) in items.by_ref().take(count) {
+                let node = child
+                    .as_widget_mut()
+                    .layout(child_tree, renderer, &item_limits);
                 let h = node.size().height;
-                heights.insert(self.keys[i], h);
-                total += h - self.assumed[i];
+                if heights.insert(*key, h) != Some(h) {
+                    changed = true;
+                }
+                total += h - assumed;
                 nodes.push(node.move_to((x, y)));
                 y += h;
-                i += 1;
             }
             content_h = content_h.max(total.max(y));
+        }
+        if changed {
+            self.model
+                .heights_version
+                .set(self.model.heights_version.get().wrapping_add(1));
         }
         drop(heights);
         let content_h = content_h + self.bottom;
@@ -315,7 +345,7 @@ impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for Scroller<'a, M> {
         let mut a = self.model.anim.borrow_mut();
         a.set_viewport(size.height as f64);
         a.set_max_offset((content_h - size.height) as f64);
-        self.model.offset.set(a.offset() as f32);
+        self.model.offset.set(snap(a.offset() as f32, self.scale));
         layout::Node::with_children(size, nodes)
     }
 
@@ -337,7 +367,7 @@ impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for Scroller<'a, M> {
             let now = clock::secs(*at);
             let mut a = model.anim.borrow_mut();
             if a.needs_frame() {
-                let off = a.tick(now) as f32;
+                let off = snap(a.tick(now) as f32, self.scale);
                 if off != model.offset.get() {
                     model.offset.set(off);
                     model.last_motion.set(now);
@@ -449,7 +479,7 @@ impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for Scroller<'a, M> {
         }
 
         match event {
-            Event::Mouse(mouse::Event::WheelScrolled { delta }) if cursor.is_over(bounds) => {
+            Event::Mouse(mouse::Event::WheelScrolled { delta }) if cursor.position().is_some() => {
                 let now = clock::now();
                 let mut a = model.anim.borrow_mut();
                 match *delta {
@@ -661,6 +691,15 @@ thread_local! {
     static PENDING_MARKS: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
 }
 
+/// With `NT_TRACE` set, print every occurrence of an event (the core prints only the first of
+/// each mark), so repeated opens can be timed from the log.
+pub fn trace_event(name: &str) {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *ON.get_or_init(|| std::env::var_os("NT_TRACE").is_some()) {
+        eprintln!("NT_EVENT {name} {:.1}", nt_core::metrics::now() * 1000.0);
+    }
+}
+
 /// Emit `name` with the next presented frame.
 pub fn mark_on_next_frame(name: &'static str) {
     PENDING_MARKS.with(|p| {
@@ -726,6 +765,9 @@ impl<'a, M: 'a> Widget<M, Theme, Renderer> for FrameHook<'a, M> {
         shell: &mut Shell<'_, M>,
         viewport: &Rectangle,
     ) {
+        if let Event::Mouse(mouse::Event::CursorMoved { position }) = event {
+            LAST_CURSOR.with(|c| c.set(*position));
+        }
         self.inner.as_widget_mut().update(
             tree, event, layout, cursor, renderer, clipboard, shell, viewport,
         )
@@ -747,6 +789,7 @@ impl<'a, M: 'a> Widget<M, Theme, Renderer> for FrameHook<'a, M> {
         PENDING_MARKS.with(|p| {
             for name in p.borrow_mut().drain(..) {
                 nt_core::metrics::mark(name);
+                trace_event(name);
             }
         });
     }

@@ -1,20 +1,33 @@
-//! Design tokens from the spec, text styles, the app's own icons and the rune-kit theme.
+//! Design tokens (spec v2), text styles, the bundled Roboto faces, the shared Material Symbols
+//! icons and the rune-kit theme.
 
 use rune::{Color, Icon, TextStyle};
 use std::sync::LazyLock;
 
 pub struct Tok {
     pub bg: Color,
-    pub raised: Color,
-    pub hover: Color,
+    /// Dropdowns (suggestions).
+    pub surface: Color,
+    /// Menus (settings, card menus).
+    pub menu: Color,
+    /// Chips, pills, inputs, the description box: white at 10 %.
+    pub fill: Color,
+    /// Hover over a fill: white at 20 %.
+    pub fill_hover: Color,
+    pub field_bg: Color,
+    pub field_border: Color,
+    pub field_focus: Color,
+    pub button_bg: Color,
     pub chip_sel_bg: Color,
     pub chip_sel_fg: Color,
     pub text: Color,
     pub text2: Color,
-    pub accent: Color,
+    pub link: Color,
+    pub divider: Color,
+    pub red: Color,
     pub badge: Color,
-    /// A light wash for hovered cards and rows.
-    pub wash: Color,
+    /// Skeleton placeholders.
+    pub skeleton: Color,
 }
 
 fn hex(s: &str) -> Color {
@@ -23,49 +36,70 @@ fn hex(s: &str) -> Color {
 
 static TOK: LazyLock<Tok> = LazyLock::new(|| Tok {
     bg: hex("#0f0f0f"),
-    raised: hex("#272727"),
-    hover: hex("#3f3f3f"),
+    surface: hex("#212121"),
+    menu: hex("#282828"),
+    fill: hex("#ffffff1a"),
+    fill_hover: hex("#ffffff33"),
+    field_bg: hex("#121212"),
+    field_border: hex("#303030"),
+    field_focus: hex("#1c62b9"),
+    button_bg: hex("#222222"),
     chip_sel_bg: hex("#f1f1f1"),
     chip_sel_fg: hex("#0f0f0f"),
     text: hex("#f1f1f1"),
     text2: hex("#aaaaaa"),
-    accent: hex("#ff3b30"),
-    badge: hex("#000000cc"),
-    wash: hex("#ffffff12"),
+    link: hex("#3ea6ff"),
+    divider: hex("#ffffff33"),
+    red: hex("#ff0033"),
+    badge: hex("#00000099"),
+    skeleton: hex("#272727"),
 });
 
 pub fn t() -> &'static Tok {
     &TOK
 }
 
+// The spec's text styles.
+pub const S10: TextStyle = TextStyle::new(10.0, 400.0).lh(14.0);
 pub const S12: TextStyle = TextStyle::new(12.0, 400.0).lh(18.0);
 pub const S12M: TextStyle = TextStyle::new(12.0, 500.0).lh(18.0);
+pub const S13M: TextStyle = TextStyle::new(13.0, 500.0).lh(18.0);
+pub const S13_TNUM: TextStyle = TextStyle::new(13.0, 400.0).lh(18.0).features("'tnum' 1");
 pub const S14: TextStyle = TextStyle::new(14.0, 400.0).lh(20.0);
 pub const S14M: TextStyle = TextStyle::new(14.0, 500.0).lh(20.0);
-pub const S14B: TextStyle = TextStyle::new(14.0, 600.0).lh(20.0);
+pub const S16: TextStyle = TextStyle::new(16.0, 400.0).lh(22.0);
 pub const S16M: TextStyle = TextStyle::new(16.0, 500.0).lh(22.0);
 pub const S18: TextStyle = TextStyle::new(18.0, 400.0).lh(26.0);
-pub const S20: TextStyle = TextStyle::new(20.0, 600.0).lh(28.0);
 pub const S20B: TextStyle = TextStyle::new(20.0, 700.0).lh(28.0);
-pub const S12_TNUM: TextStyle = TextStyle::new(12.0, 500.0).lh(18.0).features("'tnum' 1");
+pub const S36B: TextStyle = TextStyle::new(36.0, 700.0).lh(44.0);
 
-pub const PAD: f32 = 24.0;
 pub const TOP_BAR: f32 = 56.0;
 pub const RAIL: f32 = 72.0;
+pub const CHIP_BAR: f32 = 56.0;
 
-/// rune-kit's theme from the spec's tokens: flat raised controls, pill buttons, red accent.
+/// Roboto, embedded (assets/fonts, Apache-2.0). Never a system font.
+pub static FONTS: &[&[u8]] = &[
+    include_bytes!("../../../assets/fonts/Roboto-Regular.ttf"),
+    include_bytes!("../../../assets/fonts/Roboto-Medium.ttf"),
+    include_bytes!("../../../assets/fonts/Roboto-Bold.ttf"),
+];
+pub const FAMILIES: (&str, &str) = ("Roboto", "Roboto");
+
+/// rune-kit's theme from the spec's tokens.
 pub fn kit() -> &'static rune_kit::Kit {
     static KIT: LazyLock<rune_kit::Kit> = LazyLock::new(|| {
         let tok = t();
         let mut k = rune_kit::Kit::from_palette(rune_kit::PaletteSeed {
             bg: tok.bg,
             fg: tok.text,
-            accent: tok.accent,
+            accent: tok.red,
         });
         k.radius.xl = 18.0;
-        k.c.bg_button_neutral = tok.raised;
+        k.c.bg_button_neutral = tok.fill;
+        k.c.hover = hex("#ffffff1a");
         k.c.bg_contrast = tok.chip_sel_bg;
         k.c.text_contrast = tok.chip_sel_fg;
+        k.c.border_focus = tok.text;
         k.elevation.button_neutral = Vec::new();
         k.elevation.button_contrast = Vec::new();
         k
@@ -73,84 +107,67 @@ pub fn kit() -> &'static rune_kit::Kit {
     &KIT
 }
 
-macro_rules! icon {
-    ($name:ident, $id:literal, $body:literal) => {
-        pub static $name: Icon = Icon {
-            name: $id,
-            view: 24.0,
-            body: $body,
-        };
-    };
-}
-
-icon!(
-    BACK,
-    "nt-back",
-    r#"<path d="M20 12H5M11 5L4 12L11 19" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>"#
-);
-icon!(
-    SEARCH,
-    "nt-search",
-    r#"<circle cx="10.5" cy="10.5" r="6.5" stroke="currentColor" stroke-width="2" fill="none"/><path d="M15.5 15.5L21 21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>"#
-);
-icon!(
-    HOME,
-    "nt-home",
-    r#"<path d="M4 10.5L12 4L20 10.5V20H14.5V14.5H9.5V20H4Z" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linejoin="round"/>"#
-);
-icon!(
-    SUBS,
-    "nt-subs",
-    r#"<rect x="3" y="8" width="18" height="13" rx="2" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M6 5H18M8 2.5H16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M10 11.5V17.5L15 14.5Z" fill="currentColor"/>"#
-);
-icon!(
-    HISTORY,
-    "nt-history",
-    r#"<circle cx="12" cy="12" r="8.5" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M12 7V12L15.5 14" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round"/>"#
-);
-icon!(
-    LATER,
-    "nt-later",
-    r#"<path d="M6 3.5H18V21L12 16.5L6 21Z" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linejoin="round"/>"#
-);
-icon!(
-    SAVED,
-    "nt-saved",
-    r#"<path d="M6 3.5H18V21L12 16.5L6 21Z" fill="currentColor"/>"#
-);
-icon!(
-    PLAY,
-    "nt-play",
-    r#"<path d="M7 4.5V19.5L19.5 12Z" fill="currentColor"/>"#
-);
-icon!(
-    PAUSE,
-    "nt-pause",
-    r#"<rect x="6" y="4.5" width="4" height="15" rx="1" fill="currentColor"/><rect x="14" y="4.5" width="4" height="15" rx="1" fill="currentColor"/>"#
-);
-icon!(
-    VOLUME,
-    "nt-volume",
-    r#"<path d="M4 9.5H8L13 5V19L8 14.5H4Z" fill="currentColor"/><path d="M16 8.5C17.3 10.3 17.3 13.7 16 15.5M18.5 6C21 9.5 21 14.5 18.5 18" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round"/>"#
-);
-icon!(
-    MUTED,
-    "nt-muted",
-    r#"<path d="M4 9.5H8L13 5V19L8 14.5H4Z" fill="currentColor"/><path d="M16 9L21 15M21 9L16 15" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>"#
-);
-icon!(
-    LIKE,
-    "nt-like",
-    r#"<path d="M7 10.5V20H4V10.5ZM7 10.5L11 3.5C12.5 3.5 13.5 4.5 13 6.5L12.3 9.5H18.5C19.8 9.5 20.6 10.7 20.2 11.9L18.2 18.6C17.9 19.4 17.2 20 16.3 20H7" stroke="currentColor" stroke-width="1.7" fill="none" stroke-linejoin="round"/>"#
-);
-
-/// The kit for the search field: a raised pill.
+/// The search field's kit: no fill of its own (the field's box draws it), no focus ring (the
+/// box's border turns blue instead).
 pub fn input_kit() -> &'static rune_kit::Kit {
     static KIT: LazyLock<rune_kit::Kit> = LazyLock::new(|| {
         let mut k = kit().clone();
-        k.c.bg_base = t().raised;
-        k.radius.md = 20.0;
+        k.c.bg_base = Color::TRANSPARENT;
         k
     });
     &KIT
 }
+
+/// Material Symbols Outlined (assets/icons): their viewBox is `0 -960 960 960`, so the body is
+/// moved down by 960 to put it in Rune's `0 0 view view` box. The paths are black; `icon(..)
+/// .color(..)` tints them.
+macro_rules! symbol {
+    ($name:ident, $file:literal) => {
+        pub static $name: Icon = Icon {
+            name: concat!("ms-", $file),
+            view: 960.0,
+            body: concat!(
+                "<g transform=\"translate(0 960)\">",
+                include_str!(concat!("../../../assets/icons/", $file, ".svg")),
+                "</g>"
+            ),
+        };
+    };
+}
+
+symbol!(BACK, "arrow_back");
+symbol!(SEARCH, "search");
+symbol!(HOME, "home");
+symbol!(HOME_FILL, "home_fill1");
+symbol!(SUBS, "subscriptions");
+symbol!(SUBS_FILL, "subscriptions_fill1");
+symbol!(HISTORY, "history");
+symbol!(HISTORY_FILL, "history_fill1");
+symbol!(LATER, "schedule");
+symbol!(LATER_FILL, "schedule_fill1");
+symbol!(MORE, "more_vert");
+symbol!(PLAY, "play_arrow_fill1");
+symbol!(PLAY_OUTLINE, "play_arrow");
+symbol!(PAUSE, "pause_fill1");
+symbol!(REPLAY, "replay");
+symbol!(NEXT, "skip_next_fill1");
+symbol!(VOLUME, "volume_up_fill1");
+symbol!(VOLUME_LOW, "volume_down_fill1");
+symbol!(MUTED, "volume_off_fill1");
+symbol!(SETTINGS, "settings");
+symbol!(THEATRE, "width_wide");
+symbol!(FULLSCREEN, "fullscreen");
+symbol!(FULLSCREEN_EXIT, "fullscreen_exit");
+symbol!(LIKE, "thumb_up");
+symbol!(LIKE_FILL, "thumb_up_fill1");
+symbol!(DISLIKE, "thumb_down");
+symbol!(DISLIKE_FILL, "thumb_down_fill1");
+symbol!(SHARE, "share");
+symbol!(BELL, "notifications");
+symbol!(CHEVRON_LEFT, "chevron_left");
+symbol!(CHEVRON_RIGHT, "chevron_right");
+symbol!(CHECK, "check");
+symbol!(ERROR, "error");
+symbol!(OFFLINE, "wifi_off");
+symbol!(LIBRARY, "video_library");
+symbol!(DELETE, "delete");

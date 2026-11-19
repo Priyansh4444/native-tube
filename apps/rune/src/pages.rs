@@ -1,14 +1,17 @@
 //! Pages on the navigation stack and their layout plans.
 //!
-//! A plan is the page's content laid out as absolutely placed blocks with known sizes
-//! (computed from the width, fixed row metrics and `rune::text::measure` for wrapped text).
-//! The view builds only the blocks inside the scroller's mounted range, so nothing a frame
-//! or a commit does scales with the number of loaded items beyond a binary search.
+//! A plan is the page's content laid out as absolutely placed blocks with known sizes (from the
+//! window size, fixed row metrics and `rune::text::measure` for wrapped text). The view builds
+//! only the blocks inside the scroller's mounted range, so nothing a frame or a commit does
+//! scales with the number of loaded items beyond a binary search. Text is measured at a width
+//! rounded down to 16 points, so a live resize re-measures once per 16 points rather than per
+//! pixel, and the measured height is never short of what the wider box draws.
 
 use crate::scroller::Scroller;
 use crate::theme::*;
 use nt_core::{ChannelInfo, ChannelRef, Comment, Continuation, Video, WatchInfo};
 use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Load {
@@ -24,6 +27,8 @@ pub struct Feed {
     pub status: Load,
     /// The next page (infinite scroll).
     pub more: Load,
+    /// Ids already in `items`: continuation pages repeat videos, and a list must not.
+    seen: HashSet<String>,
 }
 
 impl Default for Feed {
@@ -33,7 +38,34 @@ impl Default for Feed {
             next: None,
             status: Load::Loading,
             more: Load::Idle,
+            seen: HashSet::new(),
         }
+    }
+}
+
+impl Feed {
+    pub fn set(&mut self, items: Vec<Video>, next: Option<Continuation>) {
+        self.items.clear();
+        self.seen.clear();
+        self.append(items);
+        self.next = next;
+        self.status = Load::Idle;
+        self.more = Load::Idle;
+    }
+
+    /// Appends the videos not already listed; returns how many were new.
+    pub fn append(&mut self, items: Vec<Video>) -> usize {
+        let before = self.items.len();
+        for v in items {
+            if self.seen.insert(v.id.clone()) {
+                self.items.push(v);
+            }
+        }
+        self.items.len() - before
+    }
+
+    pub fn reset(&mut self) {
+        *self = Feed::default();
     }
 }
 
@@ -49,10 +81,73 @@ pub struct Watch {
     pub comments_state: Load,
     pub comments_started: bool,
     pub desc_open: bool,
+    /// Comments expanded past four lines ("Read more").
+    pub comments_open: HashSet<String>,
+    /// The viewer's own like / dislike (local only: the app never signs in).
+    pub rating: Option<bool>,
     /// Playback position to restore when the page shows again (Back).
     pub resume_at: Option<f64>,
-    /// Measured comment text heights: (width bits, height).
+    /// Measured comment text heights: (width bits, full height).
     pub comment_h: RefCell<Vec<(u32, f32)>>,
+    /// Where the collapsed description is cut for its inline "…more": (width bits, byte index).
+    pub desc_cut: RefCell<Option<(u32, Option<usize>)>>,
+}
+
+impl Watch {
+    pub fn new(v: Video) -> Watch {
+        Watch {
+            id: v.id.clone(),
+            video: v,
+            info: None,
+            error: None,
+            comments: Vec::new(),
+            comments_next: None,
+            comments_total: None,
+            comments_state: Load::Idle,
+            comments_started: false,
+            desc_open: false,
+            comments_open: HashSet::new(),
+            rating: None,
+            resume_at: None,
+            comment_h: RefCell::default(),
+            desc_cut: RefCell::default(),
+        }
+    }
+
+    /// The channel: the watch info's, with anything it lacks taken from the card.
+    pub fn channel(&self) -> ChannelRef {
+        let mut c = self
+            .info
+            .as_ref()
+            .map(|i| i.channel.clone())
+            .unwrap_or_default();
+        if c.id.is_empty() {
+            c.id = self.video.channel_id.clone().unwrap_or_default();
+        }
+        if c.name.is_empty() {
+            c.name = self.video.channel.clone();
+        }
+        if c.avatar.as_deref().unwrap_or("").is_empty() {
+            c.avatar = self.video.channel_avatar.clone();
+        }
+        c
+    }
+
+    /// The video as a library entry: the watch info's when loaded, else the card's.
+    pub fn as_video(&self) -> Video {
+        match &self.info {
+            Some(i) => {
+                let mut v = i.as_video();
+                let c = self.channel();
+                v.channel = c.name;
+                v.channel_id = Some(c.id).filter(|id| !id.is_empty());
+                v.channel_avatar = c.avatar;
+                v.duration = self.video.duration.clone();
+                v
+            }
+            None => self.video.clone(),
+        }
+    }
 }
 
 // A handful of pages exist at a time; boxing the big variants would only add indirection.
@@ -68,6 +163,7 @@ pub enum Kind {
     Channel {
         id: String,
         info: Option<ChannelInfo>,
+        desc_open: bool,
     },
     Subs {
         channels: Vec<ChannelRef>,
@@ -84,6 +180,9 @@ pub struct Page {
     pub scroll: Scroller,
     /// Bumped whenever something the plan depends on changes.
     pub version: Cell<u64>,
+    /// The request token: bumped by every (re)load of the page's data. An answer carries the
+    /// token it was asked with and is dropped unless it still matches.
+    pub req: u64,
     pub plan: RefCell<Plan>,
 }
 
@@ -96,6 +195,7 @@ impl Page {
             feed: Feed::default(),
             scroll: Scroller::default(),
             version: Cell::new(1),
+            req: 0,
             plan: RefCell::new(Plan::default()),
         }
     }
@@ -118,20 +218,61 @@ impl Page {
         }
     }
 
-    /// The plan for this width and window height, recomputed only when either or the data changed.
-    pub fn plan(&self, vw: f32, wh: f32) -> std::cell::Ref<'_, Plan> {
-        let key = (vw.to_bits(), wh.to_bits(), self.version.get());
-        if self.plan.borrow().key != key {
-            let p = compute(self, vw, wh);
-            *self.plan.borrow_mut() = Plan { key, ..p };
+    /// Whether the navigation rail shows beside this page in a window `win_w` wide.
+    pub fn has_rail(&self, win_w: f32) -> bool {
+        !matches!(self.kind, Kind::Watch(_)) && win_w >= 792.0
+    }
+
+    pub fn has_chips(&self) -> bool {
+        matches!(self.kind, Kind::Home { .. })
+    }
+
+    /// The plan for this geometry, recomputed only when it or the data changed.
+    pub fn plan(&self, g: Geo) -> std::cell::Ref<'_, Plan> {
+        let key = (g.key(), self.version.get());
+        // Never a borrow panic: if the plan is in use (a caller still holds it), the new one waits
+        // for the next call. Only this function borrows it mutably, and only for the store.
+        let stale = self.plan.try_borrow().is_ok_and(|p| p.key != key);
+        if stale {
+            let p = compute(self, g);
+            if let Ok(mut slot) = self.plan.try_borrow_mut() {
+                *slot = Plan { key, ..p };
+            }
         }
         self.plan.borrow()
     }
 }
 
+/// The window and scroller geometry a plan is laid out for.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Geo {
+    pub win_w: f32,
+    pub win_h: f32,
+    /// The scroller's viewport.
+    pub vw: f32,
+    pub vh: f32,
+    pub theatre: bool,
+}
+
+impl Geo {
+    fn key(&self) -> [u32; 5] {
+        [
+            self.win_w.to_bits(),
+            self.win_h.to_bits(),
+            self.vw.to_bits(),
+            self.vh.to_bits(),
+            self.theatre as u32,
+        ]
+    }
+
+    /// Content padding: 24, or 16 below 600.
+    pub fn pad(&self) -> f32 {
+        if self.win_w < 600.0 { 16.0 } else { 24.0 }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum St {
-    Loading,
     Error,
     Empty,
     MoreLoading,
@@ -142,17 +283,21 @@ pub enum St {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum B {
-    Chips,
     Card(usize),
+    SkelCard(usize),
     Row(usize),
+    SkelRow(usize),
     Compact(usize),
+    SkelCompact(usize),
     Status(St),
     ChannelHead,
     Banner,
+    Tabs,
     Strip,
     LibHead,
     Player,
     Info,
+    SkelInfo,
     Desc,
     CommentsHead,
     Comment(usize),
@@ -169,17 +314,19 @@ pub struct Block {
 
 #[derive(Default)]
 pub struct Plan {
-    key: (u32, u32, u64),
+    key: ([u32; 5], u64),
     /// Sorted by `y`.
     pub blocks: Vec<Block>,
     pub height: f32,
     max_h: f32,
-    /// Grid card metrics (for thumbnails' pixel widths).
-    pub card_w: f32,
+    /// Grid cards: whether they show the channel (avatar and name).
+    pub card_channel: bool,
     pub row_thumb: (f32, f32),
-    /// The watch page's player box and where its comments start.
+    /// The watch page's player box, in content coordinates, and where its comments start.
     pub player: [f32; 4],
     pub comments_top: f32,
+    /// The description is clamped with an inline "…more" (or is open with "Show less").
+    pub desc_more: bool,
     /// Where the infinite list ends (the trigger compares against this).
     pub list_end: f32,
 }
@@ -189,7 +336,9 @@ impl Plan {
     pub fn visible(&self, top: f32, bottom: f32) -> impl Iterator<Item = &Block> {
         let from = top - self.max_h;
         let start = self.blocks.partition_point(|b| b.y < from);
-        self.blocks[start..]
+        self.blocks
+            .get(start..)
+            .unwrap_or(&[])
             .iter()
             .take_while(move |b| b.y < bottom)
             .filter(move |b| b.y + b.h > top)
@@ -201,37 +350,46 @@ impl Plan {
         self.blocks.push(b);
     }
 
-    fn finish(&mut self) {
+    fn finish(&mut self, pad: f32) {
         self.blocks.sort_by(|a, b| a.y.total_cmp(&b.y));
-        self.height += PAD;
+        self.height += pad;
     }
 }
 
 pub const GRID_GAP: f32 = 16.0;
-pub const GRID_ROW_GAP: f32 = 32.0;
-pub const CARD_TEXT: f32 = 100.0;
-pub const CHIPS_H: f32 = 32.0;
-pub const STATUS_H: f32 = 160.0;
+pub const GRID_ROW_GAP: f32 = 40.0;
+/// Below the thumbnail: 12 + two title lines (44) + channel (20) + meta (20).
+pub const CARD_TEXT: f32 = 96.0;
+/// The same without the channel line (a channel's own grid).
+pub const CARD_TEXT_NO_CHANNEL: f32 = 76.0;
 pub const MORE_H: f32 = 64.0;
 pub const ROW_GAP: f32 = 16.0;
 pub const COMPACT_H: f32 = 94.0;
 pub const COMPACT_GAP: f32 = 8.0;
-pub const RELATED_W: f32 = 400.0;
+pub const SEARCH_MAX: f32 = 1096.0;
+pub const CHANNEL_MAX: f32 = 1284.0;
+const SKELETONS: usize = 12;
 
-/// Columns and card width for a grid `w` wide: as many as fit with cards 300 to 420 wide.
-pub fn grid_metrics(w: f32) -> (usize, f32) {
-    let mut cols = (((w + GRID_GAP) / (300.0 + GRID_GAP)).floor() as usize).max(1);
-    let card = |c: usize| (w - GRID_GAP * (c as f32 - 1.0)) / c as f32;
-    while card(cols) > 420.0 {
-        cols += 1;
+/// Grid columns for a window `win_w` wide (spec v2).
+pub fn grid_cols(win_w: f32) -> usize {
+    match win_w {
+        w if w < 600.0 => 1,
+        w if w < 900.0 => 2,
+        w if w < 1600.0 => 3,
+        w if w < 2300.0 => 4,
+        _ => 5,
     }
-    (cols, card(cols).max(1.0))
 }
 
-fn grid(p: &mut Plan, y0: f32, x0: f32, w: f32, n: usize) -> f32 {
-    let (cols, cw) = grid_metrics(w);
-    p.card_w = cw;
-    let ch = cw * 9.0 / 16.0 + CARD_TEXT;
+fn grid(p: &mut Plan, y0: f32, x0: f32, w: f32, cols: usize, n: usize, skeleton: bool) -> f32 {
+    let cols = cols.max(1);
+    let cw = ((w - GRID_GAP * (cols as f32 - 1.0)) / cols as f32).max(1.0);
+    let text = if p.card_channel {
+        CARD_TEXT
+    } else {
+        CARD_TEXT_NO_CHANNEL
+    };
+    let ch = cw * 9.0 / 16.0 + text;
     for i in 0..n {
         let (r, c) = (i / cols, i % cols);
         p.push(Block {
@@ -239,7 +397,7 @@ fn grid(p: &mut Plan, y0: f32, x0: f32, w: f32, n: usize) -> f32 {
             y: y0 + r as f32 * (ch + GRID_ROW_GAP),
             w: cw,
             h: ch,
-            kind: B::Card(i),
+            kind: if skeleton { B::SkelCard(i) } else { B::Card(i) },
         });
     }
     let rows = n.div_ceil(cols);
@@ -250,13 +408,10 @@ fn grid(p: &mut Plan, y0: f32, x0: f32, w: f32, n: usize) -> f32 {
     }
 }
 
-fn rows(p: &mut Plan, y0: f32, x0: f32, w: f32, n: usize) -> f32 {
-    let tw = if w >= 760.0 {
-        360.0
-    } else {
-        (w * 0.42).max(140.0)
-    };
-    let th = (tw * 202.0 / 360.0).round();
+/// Search-style rows: thumbnail clamp(240, 40 % of the width, 500), 16:9.
+fn rows(p: &mut Plan, y0: f32, x0: f32, w: f32, n: usize, skeleton: bool) -> f32 {
+    let tw = (w * 0.4).clamp(240.0_f32.min(w * 0.45), 500.0).round();
+    let th = (tw * 9.0 / 16.0).round();
     p.row_thumb = (tw, th);
     for i in 0..n {
         p.push(Block {
@@ -264,7 +419,7 @@ fn rows(p: &mut Plan, y0: f32, x0: f32, w: f32, n: usize) -> f32 {
             y: y0 + i as f32 * (th + ROW_GAP),
             w,
             h: th,
-            kind: B::Row(i),
+            kind: if skeleton { B::SkelRow(i) } else { B::Row(i) },
         });
     }
     if n == 0 {
@@ -274,228 +429,351 @@ fn rows(p: &mut Plan, y0: f32, x0: f32, w: f32, n: usize) -> f32 {
     }
 }
 
-/// The first-load, error, empty and load-more status blocks for a feed.
-fn feed_status(p: &mut Plan, feed: &Feed, y: f32, x: f32, w: f32, empty: bool) -> f32 {
+/// The error, empty and load-more blocks for a feed; returns the y below them.
+fn feed_status(p: &mut Plan, feed: &Feed, y: f32, x: f32, w: f32, vh: f32) -> f32 {
+    let page_h = (vh - y - 24.0).max(320.0);
     match &feed.status {
-        Load::Loading => {
-            p.push(Block {
-                x,
-                y,
-                w,
-                h: STATUS_H,
-                kind: B::Status(St::Loading),
-            });
-            return y + STATUS_H;
-        }
         Load::Error(_) => {
             p.push(Block {
                 x,
                 y,
                 w,
-                h: STATUS_H,
+                h: page_h,
                 kind: B::Status(St::Error),
             });
-            return y + STATUS_H;
+            return y + page_h;
         }
-        Load::Idle => {}
-    }
-    if empty && feed.items.is_empty() {
-        p.push(Block {
-            x,
-            y,
-            w,
-            h: STATUS_H,
-            kind: B::Status(St::Empty),
-        });
-        return y + STATUS_H;
-    }
-    match feed.more {
-        Load::Loading => {
-            p.push(Block {
-                x,
-                y: y + 8.0,
-                w,
-                h: MORE_H,
-                kind: B::Status(St::MoreLoading),
-            });
-            y + 8.0 + MORE_H
-        }
-        Load::Error(_) => {
-            p.push(Block {
-                x,
-                y: y + 8.0,
-                w,
-                h: MORE_H,
-                kind: B::Status(St::MoreError),
-            });
-            y + 8.0 + MORE_H
-        }
-        Load::Idle => y,
-    }
-}
-
-fn measure(text: &str, style: rune::TextStyle, w: f32) -> f32 {
-    rune::text::measure(text, &[], style, Some(w.max(10.0))).1
-}
-
-fn compute(page: &Page, vw: f32, wh: f32) -> Plan {
-    let mut p = Plan::default();
-    let x = PAD;
-    let w = (vw - 2.0 * PAD).max(100.0);
-    let mut y = PAD;
-    let feed = &page.feed;
-    match &page.kind {
-        Kind::Home { .. } => {
+        Load::Idle if feed.items.is_empty() => {
             p.push(Block {
                 x,
                 y,
                 w,
-                h: CHIPS_H,
-                kind: B::Chips,
+                h: page_h,
+                kind: B::Status(St::Empty),
             });
-            y += CHIPS_H + PAD;
-            let end = grid(&mut p, y, x, w, feed.items.len());
+            return y + page_h;
+        }
+        _ => {}
+    }
+    let kind = match feed.more {
+        Load::Loading => St::MoreLoading,
+        Load::Error(_) => St::MoreError,
+        Load::Idle => return y,
+    };
+    p.push(Block {
+        x,
+        y: y + 16.0,
+        w,
+        h: MORE_H,
+        kind: B::Status(kind),
+    });
+    y + 16.0 + MORE_H
+}
+
+/// The measuring width for a box `w` wide: rounded down to 16 points (see the module docs).
+fn bucket(w: f32) -> f32 {
+    ((w / 16.0).floor() * 16.0).max(16.0)
+}
+
+pub fn measure(text: &str, style: rune::TextStyle, w: f32) -> f32 {
+    rune::text::measure(text, &[], style, Some(bucket(w))).1
+}
+
+/// Centers a box at most `max` wide in `[pad, vw - pad]`: (x, width).
+fn centered(vw: f32, pad: f32, max: f32) -> (f32, f32) {
+    let w = (vw - 2.0 * pad).max(100.0).min(max);
+    (((vw - w) / 2.0).max(pad.min(vw / 2.0)), w)
+}
+
+fn compute(page: &Page, g: Geo) -> Plan {
+    let mut p = Plan::default();
+    let pad = g.pad();
+    let x = pad;
+    let w = (g.vw - 2.0 * pad).max(100.0);
+    let mut y = if page.has_chips() { 0.0 } else { pad };
+    let feed = &page.feed;
+    let cols = grid_cols(g.win_w);
+    p.card_channel = true;
+    match &page.kind {
+        Kind::Home { .. } => {
+            y += 8.0;
+            let loading = feed.status == Load::Loading;
+            let n = if loading { SKELETONS } else { feed.items.len() };
+            let end = grid(&mut p, y, x, w, cols, n, loading);
             p.list_end = end;
-            feed_status(
-                &mut p,
-                feed,
-                if feed.items.is_empty() { y } else { end + PAD },
-                x,
-                w,
-                true,
-            );
+            if !loading {
+                feed_status(
+                    &mut p,
+                    feed,
+                    if n == 0 { y } else { end + 24.0 },
+                    x,
+                    w,
+                    g.vh,
+                );
+            }
         }
         Kind::Subs { channels } => {
             if channels.is_empty() {
-                p.push(Block {
-                    x,
+                feed_status(
+                    &mut p,
+                    &Feed {
+                        status: Load::Idle,
+                        ..Feed::default()
+                    },
                     y,
+                    x,
                     w,
-                    h: STATUS_H,
-                    kind: B::Status(St::Empty),
-                });
+                    g.vh,
+                );
             } else {
                 p.push(Block {
                     x,
                     y,
                     w,
-                    h: 112.0,
+                    h: 118.0,
                     kind: B::Strip,
                 });
-                y += 112.0 + PAD;
-                let end = grid(&mut p, y, x, w, feed.items.len());
+                y += 118.0 + 16.0;
+                let loading = feed.status == Load::Loading;
+                let n = if loading { SKELETONS } else { feed.items.len() };
+                let end = grid(&mut p, y, x, w, cols, n, loading);
                 p.list_end = end;
+                if !loading {
+                    feed_status(
+                        &mut p,
+                        feed,
+                        if n == 0 { y } else { end + 24.0 },
+                        x,
+                        w,
+                        g.vh,
+                    );
+                }
+            }
+        }
+        Kind::Channel {
+            info, desc_open, ..
+        } => {
+            let (cx, cw) = centered(g.vw, pad, CHANNEL_MAX);
+            if let Some(info) = info {
+                if info.banner.is_some() {
+                    let bh = (cw / 6.2).round();
+                    p.push(Block {
+                        x: cx,
+                        y,
+                        w: cw,
+                        h: bh,
+                        kind: B::Banner,
+                    });
+                    y += bh + 16.0;
+                }
+                let small = g.win_w < 600.0;
+                let av = if small { 72.0 } else { 160.0 };
+                let text_w = (cw - av - 24.0).max(120.0);
+                let desc_h = if info.description.is_empty() {
+                    0.0
+                } else if *desc_open {
+                    measure(&info.description, S14, text_w) + 8.0
+                } else {
+                    20.0 + 8.0
+                };
+                let name_h = measure(&info.name, S36B, text_w).min(88.0);
+                let head = (name_h + 8.0 + 20.0 + desc_h + 12.0 + 36.0).max(av);
+                p.push(Block {
+                    x: cx,
+                    y,
+                    w: cw,
+                    h: head,
+                    kind: B::ChannelHead,
+                });
+                y += head + 8.0;
+                p.push(Block {
+                    x: cx,
+                    y,
+                    w: cw,
+                    h: 48.0,
+                    kind: B::Tabs,
+                });
+                y += 48.0 + 24.0;
+            }
+            p.card_channel = false;
+            let loading = feed.status == Load::Loading;
+            let n = if loading { SKELETONS } else { feed.items.len() };
+            let end = grid(&mut p, y, cx, cw, cols, n, loading);
+            p.list_end = end;
+            if !loading {
                 feed_status(
                     &mut p,
                     feed,
-                    if feed.items.is_empty() { y } else { end + PAD },
-                    x,
-                    w,
-                    true,
+                    if n == 0 { y } else { end + 24.0 },
+                    cx,
+                    cw,
+                    g.vh,
                 );
             }
         }
-        Kind::Channel { info, .. } => {
-            if let Some(info) = info {
-                if info.banner.is_some() {
-                    p.push(Block {
-                        x,
-                        y,
-                        w,
-                        h: 160.0,
-                        kind: B::Banner,
-                    });
-                    y += 160.0 + PAD;
-                }
-                p.push(Block {
-                    x,
-                    y,
-                    w,
-                    h: 112.0,
-                    kind: B::ChannelHead,
-                });
-                y += 112.0 + PAD;
-            }
-            let end = grid(&mut p, y, x, w, feed.items.len());
-            p.list_end = end;
-            feed_status(
-                &mut p,
-                feed,
-                if feed.items.is_empty() { y } else { end + PAD },
-                x,
-                w,
-                true,
-            );
-        }
         Kind::Search { .. } => {
-            let end = rows(&mut p, y, x, w.min(1100.0), feed.items.len());
+            let (cx, cw) = centered(g.vw, pad, SEARCH_MAX);
+            let loading = feed.status == Load::Loading;
+            let n = if loading { 6 } else { feed.items.len() };
+            let end = rows(&mut p, y, cx, cw, n, loading);
             p.list_end = end;
-            feed_status(
-                &mut p,
-                feed,
-                if feed.items.is_empty() { y } else { end + PAD },
-                x,
-                w.min(1100.0),
-                true,
-            );
+            if !loading {
+                feed_status(
+                    &mut p,
+                    feed,
+                    if n == 0 { y } else { end + 24.0 },
+                    cx,
+                    cw,
+                    g.vh,
+                );
+            }
         }
         Kind::History | Kind::Later => {
+            let (cx, cw) = centered(g.vw, pad, SEARCH_MAX);
             p.push(Block {
-                x,
+                x: cx,
                 y,
-                w: w.min(1100.0),
-                h: 40.0,
+                w: cw,
+                h: 44.0,
                 kind: B::LibHead,
             });
-            y += 40.0 + PAD;
-            let end = rows(&mut p, y, x, w.min(1100.0), feed.items.len());
+            y += 44.0 + 24.0;
+            let end = rows(&mut p, y, cx, cw, feed.items.len(), false);
             p.list_end = end;
-            if feed.items.is_empty() {
-                p.push(Block {
-                    x,
-                    y,
-                    w,
-                    h: STATUS_H,
-                    kind: B::Status(St::Empty),
-                });
-            }
+            feed_status(
+                &mut p,
+                feed,
+                if feed.items.is_empty() { y } else { end },
+                cx,
+                cw,
+                g.vh,
+            );
         }
-        Kind::Watch(wt) => watch_plan(&mut p, page, wt, vw, wh),
+        Kind::Watch(wt) => watch_plan(&mut p, page, wt, g),
     }
-    p.finish();
+    p.finish(pad);
     p
 }
 
-/// Height of the description box for a primary column `pw` wide.
-pub const DESC_LINES: usize = 3;
+/// Where the watch page's parts go (spec v2: YouTube's formula).
+#[derive(Clone, Copy, Debug)]
+pub struct WatchGeo {
+    pub two_cols: bool,
+    /// Primary column x and width; secondary column x and width (two columns only).
+    pub px: f32,
+    pub pw: f32,
+    pub sx: f32,
+    pub sw: f32,
+    /// The player box in content coordinates.
+    pub player: [f32; 4],
+    /// Where the columns start.
+    pub top: f32,
+}
 
-fn watch_plan(p: &mut Plan, page: &Page, wt: &Watch, vw: f32, wh: f32) {
-    let x = PAD;
-    let wide = vw >= 1000.0;
-    let w = (vw - 2.0 * PAD).max(100.0);
-    let pw = if wide {
-        (w - RELATED_W - PAD).max(300.0)
+pub fn watch_geo(g: Geo) -> WatchGeo {
+    let (vw, win_h) = (g.vw, g.win_h);
+    let pad = if vw < 600.0 { 16.0 } else { 24.0 };
+    let avail = (vw - 2.0 * pad).max(100.0);
+    let pmax = ((win_h - 169.0) * 16.0 / 9.0).max(320.0);
+    let two_cols = vw >= 1017.0;
+    let (pw, sw) = if two_cols {
+        let sw = (avail * 0.29).clamp(300.0, 402.0);
+        ((avail - sw - 24.0).min(pmax), sw)
     } else {
-        w
+        (avail.min(pmax.max(avail.min(640.0))), 0.0)
     };
-    let mut y = PAD;
-    let ph = (pw * 9.0 / 16.0).min(wh * 0.7).round();
-    p.player = [x, y, pw, ph];
+    let block = if two_cols { pw + 24.0 + sw } else { pw };
+    let px = ((vw - block) / 2.0).max(pad.min(vw / 2.0));
+    let sx = px + pw + 24.0;
+    if g.theatre {
+        let th = (vw * 0.5625).min(win_h - 169.0).max(180.0).round();
+        WatchGeo {
+            two_cols,
+            px,
+            pw,
+            sx,
+            sw,
+            player: [0.0, 0.0, vw, th],
+            top: th + 24.0,
+        }
+    } else {
+        let ph = (pw * 9.0 / 16.0).round();
+        WatchGeo {
+            two_cols,
+            px,
+            pw,
+            sx,
+            sw,
+            player: [px, pad, pw, ph],
+            top: pad,
+        }
+    }
+}
+
+/// The owner row wraps its actions under the channel below this primary width.
+pub const OWNER_WRAP: f32 = 720.0;
+
+/// The collapsed description's cut: the byte index where "…more" goes so that the text plus it
+/// fits three lines, or None when the whole description fits.
+fn desc_cut(text: &str, w: f32) -> Option<usize> {
+    let w = bucket(w);
+    let fits = |s: &str| rune::text::measure(s, &[], S14, Some(w)).1 <= 60.5;
+    if fits(text) {
+        return None;
+    }
+    // Binary search over char boundaries for the longest prefix that fits with the suffix.
+    let bounds: Vec<usize> = text.char_indices().map(|(i, _)| i).collect();
+    let (mut lo, mut hi) = (0usize, bounds.len());
+    while lo + 1 < hi {
+        let mid = (lo + hi) / 2;
+        let cut = bounds.get(mid).copied().unwrap_or(text.len());
+        let candidate = format!("{}…more", text.get(..cut).unwrap_or("").trim_end());
+        if fits(&candidate) { lo = mid } else { hi = mid }
+    }
+    Some(bounds.get(lo).copied().unwrap_or(0))
+}
+
+pub fn description_cut(wt: &Watch, w: f32) -> Option<usize> {
+    let key = bucket(w).to_bits();
+    if let Some((k, cut)) = *wt.desc_cut.borrow()
+        && k == key
+    {
+        return cut;
+    }
+    let cut = wt.info.as_ref().and_then(|i| desc_cut(&i.description, w));
+    *wt.desc_cut.borrow_mut() = Some((key, cut));
+    cut
+}
+
+/// The text column of a comment in a primary column `pw` wide.
+pub fn comment_text_w(pw: f32) -> f32 {
+    (pw - 56.0).max(60.0)
+}
+
+fn watch_plan(p: &mut Plan, page: &Page, wt: &Watch, g: Geo) {
+    let wg = watch_geo(g);
+    let (x, pw) = (wg.px, wg.pw);
+    p.player = wg.player;
     p.push(Block {
-        x,
-        y,
-        w: pw,
-        h: ph,
+        x: wg.player[0],
+        y: wg.player[1],
+        w: wg.player[2],
+        h: wg.player[3],
         kind: B::Player,
     });
-    y += ph + 12.0;
+    let mut y = if g.theatre {
+        wg.top
+    } else {
+        wg.player[1] + wg.player[3] + 12.0
+    };
     let title = wt
         .info
         .as_ref()
         .map(|i| i.title.as_str())
         .unwrap_or(&wt.video.title);
-    let title_h = measure(title, S20, pw).max(28.0);
-    let info_h = title_h + 12.0 + 40.0;
+    let title_h = measure(title, S20B, pw).max(28.0);
+    let wrap = pw < OWNER_WRAP;
+    let info_h = title_h + 12.0 + 40.0 + if wrap { 12.0 + 36.0 } else { 0.0 };
     p.push(Block {
         x,
         y,
@@ -504,22 +782,20 @@ fn watch_plan(p: &mut Plan, page: &Page, wt: &Watch, vw: f32, wh: f32) {
         kind: B::Info,
     });
     y += info_h + 16.0;
+    let related_below = !wg.two_cols;
     match (&wt.info, &wt.error) {
         (Some(info), _) => {
             let inner = pw - 24.0;
-            let full = if info.description.is_empty() {
+            let text_h = if info.description.is_empty() {
                 0.0
+            } else if wt.desc_open {
+                p.desc_more = true;
+                measure(&info.description, S14, inner) + 20.0 + 8.0
             } else {
-                measure(&info.description, S14, inner)
+                p.desc_more = description_cut(wt, inner).is_some();
+                measure(&info.description, S14, inner).min(60.0)
             };
-            let clamped = full.min(20.0 * DESC_LINES as f32);
-            let more = full > clamped + 1.0;
-            let text_h = if wt.desc_open { full } else { clamped };
-            let h = 12.0
-                + 20.0
-                + if text_h > 0.0 { 4.0 + text_h } else { 0.0 }
-                + if more || wt.desc_open { 24.0 } else { 0.0 }
-                + 12.0;
+            let h = 12.0 + 20.0 + if text_h > 0.0 { 4.0 + text_h } else { 0.0 } + 12.0;
             p.push(Block {
                 x,
                 y,
@@ -527,68 +803,64 @@ fn watch_plan(p: &mut Plan, page: &Page, wt: &Watch, vw: f32, wh: f32) {
                 h,
                 kind: B::Desc,
             });
-            y += h + PAD;
+            y += h + 24.0;
+            if related_below {
+                y = related(p, page, x, y, pw) + 24.0;
+            }
             p.comments_top = y;
             p.push(Block {
                 x,
                 y,
                 w: pw,
-                h: 48.0,
+                h: 52.0,
                 kind: B::CommentsHead,
             });
-            y += 48.0;
-            let tw = pw - 52.0;
-            let wbits = tw.to_bits();
-            {
-                let mut cache = wt.comment_h.borrow_mut();
-                cache.truncate(wt.comments.len());
-                for (i, c) in wt.comments.iter().enumerate() {
-                    let th = match cache.get(i) {
-                        Some((b, h)) if *b == wbits => *h,
-                        _ => {
-                            let h = measure(&c.text, S14, tw).max(20.0);
-                            if i < cache.len() {
-                                cache[i] = (wbits, h)
-                            } else {
-                                cache.push((wbits, h))
-                            }
-                            h
+            y += 52.0 + 8.0;
+            let tw = comment_text_w(pw);
+            let wbits = bucket(tw).to_bits();
+            let mut cache = wt.comment_h.borrow_mut();
+            cache.truncate(wt.comments.len());
+            for (i, c) in wt.comments.iter().enumerate() {
+                let full = match cache.get(i) {
+                    Some((b, h)) if *b == wbits => *h,
+                    _ => {
+                        let h = measure(&c.text, S14, tw).max(20.0);
+                        if let Some(slot) = cache.get_mut(i) {
+                            *slot = (wbits, h);
+                        } else {
+                            cache.push((wbits, h));
                         }
-                    };
-                    let h = 18.0 + 4.0 + th + 6.0 + 18.0;
-                    p.push(Block {
-                        x,
-                        y,
-                        w: pw,
-                        h,
-                        kind: B::Comment(i),
-                    });
-                    y += h + 20.0;
-                }
+                        h
+                    }
+                };
+                let open = wt.comments_open.contains(&c.id);
+                let clamped = full > 80.5;
+                let text_h = if open || !clamped { full } else { 80.0 };
+                let more = if clamped { 4.0 + 20.0 } else { 0.0 };
+                let h = 18.0 + 2.0 + text_h + more + 8.0 + 32.0;
+                p.push(Block {
+                    x,
+                    y,
+                    w: pw,
+                    h,
+                    kind: B::Comment(i),
+                });
+                y += h + 16.0;
             }
             p.list_end = y;
-            match wt.comments_state {
-                Load::Loading => {
-                    p.push(Block {
-                        x,
-                        y,
-                        w: pw,
-                        h: MORE_H,
-                        kind: B::Status(St::CommentsLoading),
-                    });
-                    y += MORE_H;
-                }
-                Load::Error(_) => {
-                    p.push(Block {
-                        x,
-                        y,
-                        w: pw,
-                        h: MORE_H,
-                        kind: B::Status(St::CommentsError),
-                    });
-                    y += MORE_H;
-                }
-                Load::Idle => {}
+            let st = match wt.comments_state {
+                Load::Loading => Some(St::CommentsLoading),
+                Load::Error(_) => Some(St::CommentsError),
+                Load::Idle => None,
+            };
+            if let Some(st) = st {
+                p.push(Block {
+                    x,
+                    y,
+                    w: pw,
+                    h: MORE_H,
+                    kind: B::Status(st),
+                });
             }
         }
         (None, Some(_)) => {
@@ -596,36 +868,67 @@ fn watch_plan(p: &mut Plan, page: &Page, wt: &Watch, vw: f32, wh: f32) {
                 x,
                 y,
                 w: pw,
-                h: STATUS_H,
+                h: 200.0,
                 kind: B::Status(St::Error),
             });
-            y += STATUS_H;
+            y += 224.0;
+            if related_below {
+                related(p, page, x, y, pw);
+            }
         }
         (None, None) => {
             p.push(Block {
                 x,
                 y,
                 w: pw,
-                h: STATUS_H,
-                kind: B::Status(St::Loading),
+                h: 120.0,
+                kind: B::SkelInfo,
             });
-            y += STATUS_H;
         }
     }
-    let (rx, mut ry) = if wide {
-        (x + pw + PAD, PAD)
-    } else {
-        (x, y + PAD)
-    };
-    let rw = if wide { RELATED_W } else { pw };
-    for i in 0..page.feed.items.len() {
+    if wg.two_cols {
+        related(p, page, wg.sx, wg.top, wg.sw);
+    }
+}
+
+/// The related list (or its skeleton while the watch info loads); returns the y below it.
+fn related(p: &mut Plan, page: &Page, x: f32, mut y: f32, w: f32) -> f32 {
+    let loading = page
+        .watch()
+        .is_some_and(|w| w.info.is_none() && w.error.is_none());
+    let n = if loading { 8 } else { page.feed.items.len() };
+    for i in 0..n {
+        let kind = if loading {
+            B::SkelCompact(i)
+        } else {
+            B::Compact(i)
+        };
         p.push(Block {
-            x: rx,
-            y: ry,
-            w: rw,
+            x,
+            y,
+            w,
             h: COMPACT_H,
-            kind: B::Compact(i),
+            kind,
         });
-        ry += COMPACT_H + COMPACT_GAP;
+        y += COMPACT_H + COMPACT_GAP;
+    }
+    y
+}
+
+/// Positions remembered for watched videos this session: fraction played, for the red bar
+/// along the bottom of a thumbnail.
+#[derive(Default)]
+pub struct Progress(HashMap<String, f32>);
+
+impl Progress {
+    pub fn get(&self, id: &str) -> Option<f32> {
+        self.0.get(id).copied()
+    }
+
+    pub fn set(&mut self, id: &str, frac: f32) {
+        if self.0.len() > 2000 {
+            self.0.clear();
+        }
+        self.0.insert(id.to_string(), frac.clamp(0.0, 1.0));
     }
 }

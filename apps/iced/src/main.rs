@@ -3,7 +3,10 @@
 mod app;
 mod clock;
 mod ext;
+mod icons;
 mod imgcache;
+mod player_view;
+mod prefs;
 mod scroller;
 mod theme;
 mod video;
@@ -31,78 +34,80 @@ impl iced::Executor for CoreExecutor {
     }
 }
 
-/// Core workaround (see NOTES.md, "Core requests"): `bench/scenario.json` writes single commands
-/// as `{ "do": { "cmd": ... } }`, but `autopilot::Step::Do(Command)` is an untagged newtype that
-/// only accepts the bare command object, so the whole scenario is rejected. Unwrap those steps
-/// into a copy and point `NT_AUTOPILOT` at it. Does nothing when the file already parses as is.
-fn normalize_scenario() {
-    let Some(path) = std::env::var_os("NT_AUTOPILOT") else {
-        return;
-    };
-    let Ok(bytes) = std::fs::read(&path) else {
-        return;
-    };
-    if serde_json::from_slice::<Vec<nt_core::autopilot::Step>>(&bytes).is_ok() {
-        return;
-    }
-    let Ok(serde_json::Value::Array(steps)) = serde_json::from_slice::<serde_json::Value>(&bytes)
-    else {
-        return;
-    };
-    let steps: Vec<serde_json::Value> = steps
-        .into_iter()
-        .map(|step| match step {
-            serde_json::Value::Object(mut m) if m.len() == 1 && m.contains_key("do") => {
-                m.remove("do").unwrap_or_default()
-            }
-            other => other,
-        })
-        .collect();
-    let dir = std::env::var_os("XDG_RUNTIME_DIR")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
-    let out = dir.join(format!("nt-iced-scenario-{}.json", std::process::id()));
-    if serde_json::to_vec(&steps)
-        .ok()
-        .and_then(|b| std::fs::write(&out, b).ok())
-        .is_some()
-    {
-        // SAFETY: called at the very start of `main`; the only other thread (the metrics
-        // sampler) never reads the environment.
-        unsafe { std::env::set_var("NT_AUTOPILOT", &out) };
+/// iced asks wgpu for the high-performance adapter and probes every backend. On a hybrid Linux
+/// laptop that wakes the discrete GPU (and the compositor then copies every frame to the
+/// integrated one that scans out) and loads GL drivers we never use. A UI wants the low-power
+/// adapter on Vulkan. Both knobs are wgpu's own env variables, so a user setting wins. Other
+/// platforms keep wgpu's defaults (Metal on macOS).
+#[cfg(target_os = "linux")]
+fn prefer_integrated_gpu() {
+    for (key, value) in [("WGPU_POWER_PREF", "low"), ("WGPU_BACKEND", "vulkan")] {
+        if std::env::var_os(key).is_none() {
+            // SAFETY: start of `main`, before iced or any thread that reads the environment.
+            unsafe { std::env::set_var(key, value) };
+        }
     }
 }
 
-/// iced asks wgpu for the high-performance adapter and probes every backend. On a hybrid
-/// laptop that wakes the discrete GPU (and the compositor then has to copy every frame to the
-/// integrated one that scans out), and loads GL drivers we never use. A UI wants the low-power
-/// adapter; on Linux, also select Vulkan so wgpu does not probe GL drivers. Both knobs are
-/// wgpu's own env variables, so a user setting wins. macOS keeps wgpu's native Metal backend.
-fn prefer_integrated_gpu() {
-    if std::env::var_os("WGPU_POWER_PREF").is_none() {
-        // SAFETY: start of `main`, before iced or any thread that reads the environment.
-        unsafe { std::env::set_var("WGPU_POWER_PREF", "low") };
-    }
-    #[cfg(target_os = "linux")]
-    if std::env::var_os("WGPU_BACKEND").is_none() {
-        // SAFETY: start of `main`, before iced or any thread that reads the environment.
-        unsafe { std::env::set_var("WGPU_BACKEND", "vulkan") };
-    }
+/// Log every panic's message and location before the default behaviour.
+fn install_panic_hook() {
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_else(|| "unknown location".into());
+        let message = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "(no message)".into());
+        eprintln!("nt-iced: panic at {location}: {message}");
+        default(info);
+    }));
+}
+
+/// Build iced's font database (a scan of the system fonts, used as fallback for scripts Roboto
+/// lacks) and load the bundled Roboto faces on a thread of their own, while the window and the
+/// GPU device are being created. Without this, the scan runs inside the first layout, on the
+/// UI thread, before the first frame. iced's own `.font()` loads later are no-ops (it skips
+/// bytes it has already loaded).
+fn prewarm_fonts() {
+    let _ = std::thread::Builder::new()
+        .name("nt-fonts".into())
+        .spawn(|| {
+            let fs = iced::advanced::graphics::text::font_system();
+            if let Ok(mut fs) = fs.write() {
+                for bytes in [
+                    theme::ROBOTO_REGULAR,
+                    theme::ROBOTO_MEDIUM,
+                    theme::ROBOTO_BOLD,
+                ] {
+                    fs.load_font(std::borrow::Cow::Borrowed(bytes));
+                }
+            }
+            scroller::trace_event("fonts_ready");
+        });
 }
 
 fn main() -> iced::Result {
     nt_core::metrics::init("iced");
-    normalize_scenario();
+    install_panic_hook();
+    #[cfg(target_os = "linux")]
     prefer_integrated_gpu();
     nt_core::autopilot::start();
     clock::init();
+    scroller::trace_event("main");
+    prewarm_fonts();
 
     let window = window::Settings {
         size: Size::new(1280.0, 800.0),
-        min_size: Some(Size::new(640.0, 480.0)),
+        min_size: Some(Size::new(480.0, 360.0)),
         resizable: true,
+        exit_on_close_request: false,
+        #[cfg(target_os = "linux")]
         platform_specific: window::settings::PlatformSpecific {
-            #[cfg(target_os = "linux")]
             application_id: std::env::var("NT_APP_ID").unwrap_or_else(|_| "nt-iced".to_string()),
             ..Default::default()
         },
@@ -117,6 +122,10 @@ fn main() -> iced::Result {
             background_color: theme::BG,
             text_color: theme::TEXT,
         })
+        .font(theme::ROBOTO_REGULAR)
+        .font(theme::ROBOTO_MEDIUM)
+        .font(theme::ROBOTO_BOLD)
+        .default_font(theme::REGULAR)
         .executor::<CoreExecutor>()
         .window(window)
         .antialiasing(false)

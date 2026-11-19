@@ -3956,12 +3956,14 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "zbus 6.2.1",
 ]
 
 [[package]]
 name = "nt-gpui"
 version = "0.1.0"
 dependencies = [
+ "ashpd",
  "async-channel",
  "gpui-component",
  "gpui-kit-assets",
@@ -6520,6 +6522,7 @@ dependencies = [
  "libc",
  "mio",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2",
  "tokio-macros",
  "windows-sys 0.61.2",
@@ -8278,6 +8281,7 @@ dependencies = [
  "serde",
  "serde_repr",
  "socket2",
+ "tokio",
  "uds_windows",
  "uuid",
  "windows-sys 0.61.2",

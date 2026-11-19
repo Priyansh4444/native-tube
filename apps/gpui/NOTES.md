@@ -2,182 +2,208 @@
 
 ## Versions
 
-- `gpui-pre` 0.3.12 (Zed's gpui, snapshot of zed@d2a4fb6), with `gpui-pre-platform` 0.3.12
-  (`wayland` feature) for Linux. On macOS, the platform crate selects its native backend. The
-  platform lives in its own crates now (`gpui-pre-platform` → `gpui-pre-linux` → `gpui-pre-wgpu`);
-  `gpui-pre` alone has no backend.
-- `gpui-component` 0.9.1 (GPUI Kit) and `gpui-kit-assets` 0.9.1 for the Lucide icons.
-- `gpui-pre-linux` 0.3.12 is **vendored with a ~30-line patch** (`vendor/gpui-pre-linux`, see
-  "Workarounds").
-- About 3,000 lines of app code in `src/`.
+- `gpui-pre` 0.3.12 (Zed's gpui, zed@d2a4fb6), `gpui-pre-platform` 0.3.12 (`wayland` feature on
+  Linux only), `gpui-component` 0.9.1 (search `Input`, `Spinner`), `gpui-kit-assets` 0.9.1 (only
+  for the kit's own internal icons).
+- `gpui-pre-linux` 0.3.12 is vendored with a ~30-line patch (`vendor/gpui-pre-linux`): it reports
+  the touchpad finger lift (`wl_pointer.axis_stop`) as a `TouchPhase::Ended` scroll, which the
+  Chromium fling model needs. Upstream GPUI drops that event.
+- Fonts: the shared Roboto Regular/Medium/Bold, embedded with `include_bytes!` and registered with
+  `text_system().add_fonts`; the root and the kit theme use "Roboto". Icons: the shared Material
+  Symbols SVGs, embedded and served by our `AssetSource` (`icons.rs`), tinted with `text_color`.
 
-## Architecture
+## What changed in the v2 round
 
-- **One root view, `NtApp` (`app.rs`).** It holds the navigation stack (`Vec<Page>`), the search
-  `InputState` and suggestion state, the image cache, the video state, the volume
-  `SliderState`, and scrollbar and seek-drag state. gpui-component's `Root` wraps it, because
-  the kit's inputs need it.
-- **Pages (`pages.rs`).** Each `Page` has a `Kind` (Home, Search, Watch, Channel, Subscriptions,
-  History, WatchLater), a load `status`, a `Feed`, its own `ScrollAnimator` and a cached
-  `Layout`. Pages stay in the stack, so Back restores items and offset without a refetch.
-  `req` counts (re)loads so stale answers are dropped, and `version` invalidates the layout.
-- **Actions** are plain methods on `NtApp` (`push`, `back`, `replace_root`, `open_video`,
-  `submit_search`, `load_more`, `load_comments`, …), called from element listeners
-  (`cx.listener`) and from the autopilot. The autopilot is a `cx.spawn_in(window, …)` loop over
-  `autopilot::next_command()`, and every command calls the same method a real input reaches.
-- **Async results.** `nt_core` `Job`s are awaited in `cx.spawn` tasks on GPUI's foreground
-  executor, which then `this.update(...)` the page if it is still there with the same `req`, and
-  `cx.notify()`. Search suggestions are debounced with a 150 ms GPUI timer plus a sequence
-  number, so stale answers are dropped. The image BGRA swizzle and `RenderImage` construction
-  run on GPUI's background executor.
-- **Views (`views.rs`)** are free functions that build elements for the top bar, rail, chips, the
-  scroller and each block kind. From the kit: `Input` (search), `Button` (back, search, Retry,
-  Subscribe, Watch Later, Clear history, play/pause, mute), `Slider` (volume), `Spinner`,
-  `Skeleton` (first-load cards), `Icon`. Everything else is GPUI `div`s, `img` and `canvas`.
+**Stability**
+- **The "PlayerView is already being updated" panic.**
+  - What happened: when the player controls auto-hide under the pointer, `PlayerView::render`
+    scheduled the cursor hide with `cx.defer_in(window, …)`. A deferred closure runs *inside*
+    `update_entity(PlayerView)`. The hide works by dispatching a synthetic keystroke, and
+    GPUI's `dispatch_key_event` first draws the window when it is dirty. That draw rendered
+    PlayerView again while it was still leased, which panics.
+  - The fix: the hide now goes through `Window::defer`, which holds only the window and no
+    entity.
+  - Audit: every `defer_in`, `dispatch_*` and self-handle update was checked. Nothing else
+    dispatches input or draws from inside an update. Each other update goes from one entity
+    into a different one, and emits are deferred by GPUI.
+  - Checked with three back-to-back stress sessions of about 2 minutes each (below): no panic.
+- Panic hook: logs message and location to stderr, then runs the default hook.
+- Quit: Ctrl+Q and Cmd+Q (`Quit` action, also handled at the root to save watch positions),
+  Cmd+W, and closing the window. On macOS `set_menus` gives the app menu a "Quit NativeTube"
+  item; About and Hide aren't added (not verified on macOS).
+- Every async answer is checked against a token before it is applied: pages (`req`), "more"
+  pages (`req`), comments (`comments_req`), suggestions (`seq`, plus a focus check), images (keyed
+  by URL and width; answers for evicted entries are dropped), and the up-next thumbnail
+  (`next_req`).
+- Playback: a failed `Player::new` (libmpv missing) or a failed video shows "This video can't be
+  played" with Retry. The start is retried on the next load, never disabled for the session. A new
+  video never shows the previous video's picture: `load` drops it, and the upload compares frame
+  generations.
+- Bounded:
+  - images: 160 ready entries, 48 MB, and 600 entries in total, evicted least recently drawn,
+    with atlas tiles freed;
+  - navigation stack: 30 pages (the oldest one above the root is dropped);
+  - Forward stack: 20 pages;
+  - watch positions: 400 entries.
+- Error states show a plain line ("Couldn't reach YouTube", "This video is unavailable") with
+  Retry. Retry reruns only what failed: page data, a "more" page, or comments. Retrying page
+  data never restarts the video. Raw errors go to stderr.
+
+**Structure (review G2)**
+- The window is now five views. `TopBar` and `Rail` are cached views (`Entity::cached`), reused
+  unless notified.
+- `PageView` (chips, blocks, scrollbar) is cached and notified explicitly (`content_changed`)
+  whenever page data, the scroll offset or images change. It renders through `NtApp`, so every
+  listener still acts on the app.
+- `PlayerView` is a sibling of the page, positioned over the page's player block and clipped to
+  the page area. A video frame notifies only it (and the cheap root), never the page.
+- When the player is scrolled out of view it isn't drawn at all, so its frames cost nothing (G5).
+- The scroll animation ticks in a `Window::on_next_frame` callback before each draw, so the page
+  and the player move in the same frame.
+
+**Look and feel**
+- All of spec v2's tokens, type scale (Roboto with real 500/700 weights), Material Symbols icons,
+  top bar (collapsed search below 656 px, focused search icon, suggestions with the typed prefix
+  at 400 and the completion at 500), rail (74 px entries, 10 px labels, filled icon on the page on
+  screen only, hidden below 792 px and on Watch).
+- Home grid columns follow spec v2 (1/2/3/4/5), with cards filling the row. Title heights are
+  measured, so a one-line title doesn't reserve a second line. The chip bar is sticky and scrolls
+  horizontally (wheel and arrow buttons, with a fade).
+- Cards have no hover background; a "⋮" button shows on hover. Thumbnails darken while pressed,
+  and watched videos get the red progress bar.
+- Search rows are centered (max 1096) with flexible thumbnails, and the snippet bolds the query
+  terms.
+- Watch has no rail. It switches to two columns at 1017 px; the primary column is capped at
+  `(h−169)×16/9` and centered. It has white Subscribe (Subscribed shows a bell), a like | dislike
+  pill, Share (copies the link) and Watch later. The description has links, #tags and
+  timestamps that seek, plus an inline "...more". Comments are clamped to 4 lines with Read more.
+- Channel content is max 1284 wide, with a /6.2 banner, a 160 px avatar, a 36 px name, the
+  description on one line with an inline "...more", and a Videos tab. The grid has no avatars.
+- Empty and error states: a 120 px icon, a title, a line of text and an action.
+
+**Right-click / "⋮" menu (owner feedback)**
+- Right-click on any card, search row or related row (or its "⋮") opens a menu at the pointer.
+  The menu flips left or up to stay on screen.
+- Items: Play, Save to / Remove from Watch later (with a toast), Copy link (toast "Link copied"),
+  Go to channel.
+- It closes on Escape (even with the search box focused), on a click outside with either button
+  (the click does nothing else), and on a wheel (which also scrolls the page). A full-window
+  catcher occludes the page, so nothing underneath reacts.
+- Right-click never opens the video: GPUI's `on_click` is primary-button only.
+
+**State on Back/Forward (owner feedback)**
+- Each page keeps its data, scroll animator, text measurements and layout in the stack, so going
+  back restores them without a refetch or a flash.
+- The search box shows the query of the page on screen: a Search page's own query, empty on root
+  pages, unchanged on Watch and Channel.
+- Watch: leaving stops the player and stores the position. Returning resumes there and shows that
+  same video's last picture (parked) under the spinner until the new frames arrive (seen at
+  150 ms, `shots/back-to-watch-150ms.png`).
+- Positions are also kept across sessions (`gpui-prefs.json` in the data dir): resume when more
+  than 30 s in and more than 30 s from the end, as YouTube does.
+- Forward (Alt+Right, mouse forward) re-pushes popped pages.
+
+**Viewing**
+- Fullscreen: F, double-click, or the button; Escape leaves. The video is letterboxed on black.
+- Theatre mode: T or the button; the player is full width on black, height
+  `min(56.25% of width, h−169)`.
+- Control bar: play/pause/replay, next, mute with a 52 px slider that slides out on hover, time
+  (or a LIVE pill), autoplay toggle (remembered), settings (speed 0.25–2, hidden for live;
+  quality Auto (current)/heights), theatre, fullscreen.
+- Scrubber: 3 → 5 px on hover, buffered and played bars, a knob on hover only, a hover time
+  tooltip. Dragging shows the target and seeks once, on release.
+- Controls and cursor auto-hide after 3 s while playing; they stay while paused or while a menu
+  is open.
+- A center play/pause icon fades out over 500 ms.
+- Keys: Space/K, J/L, ←/→, ↑/↓, M, F, T, Shift+</> speed, ,/. frame step while paused, 0–9,
+  Home/End, Shift+N, Escape.
+- `set_target_size` gets the painted size in physical pixels on every size change.
+- End of video: an "Up next" card with a 5 s countdown, Cancel and Play now. With autoplay off,
+  the play button shows replay.
+- Screen blanking: core's MPRIS covers desktops whose idle manager watches MPRIS. `inhibit.rs`
+  additionally asks the xdg-desktop-portal Inhibit interface while playing, for desktops that
+  ignore MPRIS (GNOME). It logs once and stops if the portal lacks Inhibit, as on this Hyprland
+  machine. Linux only (`cfg`).
 
 ## Scrolling
 
-- **Raw input.** The page scroller is a plain `div` with `.on_scroll(...)`. No GPUI
-  `ScrollHandle`, `overflow_scroll` or kit scroll area is used, so GPUI's own scrolling never
-  runs. GPUI's Wayland backend reports a wheel notch (`axis_value120`) as `ScrollDelta::Lines`
-  of `value120/120 × 3 × −1`, so `ticks = −lines.y / 3` → `wheel_ticks`. Finger axis events come
-  as `ScrollDelta::Pixels` of `value × 3 × −1`, so `px = −pixels.y × 4` reproduces Chrome's ×12
-  → `wheel_pixels`. The finger lift arrives as a zero `Pixels` delta with `TouchPhase::Ended`
-  (from the vendored patch) → `fling_start`. A mouse-down on the feed calls `cancel_fling`.
-  Keys (Up/Down/PageUp/PageDown/Space/Shift+Space/Home/End, when the search box isn't
-  focused and the watch-page keys don't apply) call `scroll_by` with the module's step
-  helpers; any other key cancels a fling.
-- **Scrollbar.** A thin thumb shows while scrolling and hides about 1.3 s after motion stops. It
-  is draggable (root `on_mouse_move` → `jump_to`), and a track click pages toward the pointer.
-- **Present.** `render()` calls `tick(now)` once per drawn frame and positions blocks at
-  `y − offset`, with the offset snapped to physical pixels. It calls
-  `window.request_animation_frame()` only while `needs_frame()` is true, so an idle app draws
-  nothing (idle phases: 0 fps, 0.0–0.2% CPU). The clock is `nt_core::metrics::now()`, used for
-  both events and frames. GPUI doesn't expose the Wayland frame-callback timestamp to views, so
-  the frame time is the time `render()` runs, which is right after GPUI handles the frame
-  callback.
-- **Virtualization.** Each page's content is a list of absolutely positioned `Block`s with known
-  heights (`pages.rs::build_layout`). Grid rows and list rows have fixed heights. Titles, the
-  description and comments are measured once with `WindowTextSystem::shape_text` at the
-  width they're drawn, and comment heights are cached per width. Blocks are sorted per column,
-  so the visible ones come from a binary search. The scroller builds only blocks within
-  half a viewport above and below the screen (one viewport of overscan in total). Images are
-  requested for blocks up to a full viewport beyond the screen without building them. The
-  layout is rebuilt only when the data or window geometry changes, and `set_max_offset` and
-  `set_viewport` are updated then. Infinite scroll and the comments trigger compare
-  `target()`, not `offset()`, against the end of the list.
-- **Cost.** Per scroll frame on Home: building elements ≈ 0.4–0.7 ms, then GPUI's own
-  layout (Taffy) ≈ 2–3 ms and prepaint plus paint ≈ 1 ms. Measured with temporary probes;
-  profiled with `perf record -e cpu-clock:u`, the cost is spread across Taffy, style refinement
-  and text layout, with no hotspot in app code. Halving the overscan cut scroll-phase CPU from
-  about 33% to 24%.
+- **Wheel and touchpad.** Raw `ScrollEvent`s on the scroller feed `nt_core::scroll`:
+  - Wheel notches arrive as `Lines` = value120/120 × 3 × −1, converted to `wheel_ticks`.
+  - Finger deltas arrive as `Pixels` = axis × 3 × −1; × −4 gives Chrome's ×12, fed to
+    `wheel_pixels`.
+  - The patched finger lift calls `fling_start`, only after precise deltas.
+- **No framework scrolling.** No GPUI scroll handle or overflow scrolling is used.
+- **Wheel elsewhere.** Over the top bar, rail or chips the wheel scrolls the page (root
+  fallback); a horizontal wheel over the chips scrolls the chips.
+- **Keys and scrollbar.** Keys use `scroll_by` with the module's steps. The scrollbar thumb
+  drags with `jump_to`; a track click pages.
+- **Present.** `tick(now)` runs in `on_next_frame` before each draw, and frames are requested
+  only while `needs_frame()` is true. Idle draws nothing.
+- **Virtualization.** Blocks with known heights are binary-searched. The view builds the
+  viewport plus half a viewport above and below, and requests images a full viewport beyond.
+  Spinners animate only inside the visible band.
+- **Measuring.** Text is measured at bucketed widths (8 px for titles, 16 px for comments), so a
+  live resize re-measures rarely.
 
-## Video
+## Video path
 
-- One `nt_core::Player`, created lazily, with `PixelFormat::Bgra`, because GPUI's `RenderImage`
-  is BGRA. The waker does `try_send` on a bounded(1) `async_channel`, so bursts collapse. A
-  foreground task drains it and calls `VideoState::poll`, which notifies the view only if
-  `frame_generation()` changed or a displayed part of the state changed (status, paused,
-  buffering, mute, volume, duration, position in quarter-seconds, buffered seconds). A paused
-  video draws nothing (paused phase: 0.7 fps, 0.7–1.2% CPU, from the clock text).
-- **How frames reach the screen.** On the next `render()`, if the generation changed, the newest
-  `VideoFrame` is copied once (`pixels().to_vec()`, about 1.2 MB at 736×414, about 0.2 ms)
-  into an `image::RgbaImage` (holding BGRA bytes) and wrapped in a new `Arc<RenderImage>`.
-  The previous image's atlas tile is freed right away with `Window::drop_image`, then the new
-  image is drawn with `img(...).object_fit(Contain)`. GPUI uploads it into its wgpu sprite
-  atlas (`queue.write_texture`) when it is first painted. Exactly one video tile is alive at a
-  time, and since the old tile is freed first, the new frame usually reuses its slot. GPUI has
-  no API to update a texture in place (on Linux there is no `paint_surface`), so each frame
-  costs one CPU copy and one upload.
-- `set_target_size` is called with the player box in physical pixels whenever it changes.
-- Leaving a Watch page (pushing a page over it, Back, or the rail) calls `Player::stop` and
-  stores the position. Coming back with Back calls `load` again and seeks to the stored
-  position once the status is `Ready`.
-- When `NT_MUTE` is set, nothing in the UI can unmute: M, volume keys and the slider keep
-  `mute` on.
+mpv renders BGRA into a CPU buffer on the core's render thread and runs our waker, which does
+`try_send` on a bounded(1) channel. A task on `PlayerView` calls `poll`, which notifies the
+player view only when the frame generation or a displayed part of the state changed. On the next
+draw the newest frame is copied once into a new `RenderImage`; GPUI uploads it to its texture
+atlas when painted, and the previous tile is freed with `Window::drop_image`. GPUI has no in-place
+texture update on Linux (`paint_surface` is macOS-only), so one copy and one upload per frame is
+the framework's floor.
 
 ## Frame hook
 
-`metrics::frame()` runs in the paint callback of a zero-size `canvas` that is the root view's
-last child. It runs once per frame GPUI actually draws, during the paint phase, right before
-`window.present()`. Pending marks (set when data arrives, or when a new video picture is
-uploaded for `playback_started`) are moved into that closure, so they're emitted in the paint
-of the frame that first shows the content. `first_frame` is marked in the first painted frame,
-which already has the top bar and rail.
+`metrics::frame()` runs in the paint callback of a zero-size `canvas`, the root view's last child.
+It runs once per drawn frame, during paint, right before present. Page marks are moved into that
+closure. `playback_started` is emitted from the player view's own paint hook in the frame that
+first shows a picture.
 
-## What was hard / easy, and every workaround
+## What was hard, and workarounds
 
-- **Easy:** declarative layout and styling, `cx.listener`, `cx.spawn` with `Job` futures
-  (they're runtime-agnostic), `request_animation_frame`, and `canvas` for the frame hook. GPUI
-  never draws when nothing is dirty, which makes the idle requirement free.
-- **Finger lift is dropped by GPUI.** Upstream `gpui_linux` ignores `wl_pointer.axis_stop`, so
-  there was no way to start a Chromium fling. `vendor/gpui-pre-linux` is the crates.io 0.3.12
-  source plus a ~30-line patch (marked `nt-gpui patch`). It reports a finger or continuous
-  `axis_stop` as a zero-delta precise `ScrollEvent` with `TouchPhase::Ended`, wired in with
-  `[patch.crates-io]`.
-- **Inactive windows are throttled to 30 fps** by GPUI's default `inactive_frame_interval`.
-  The test window is never focused, so `inactive_frame_interval` and
-  `low_power_frame_interval` are set to `None`.
-- **Kit custom button colours.** gpui-component draws a `ButtonCustomVariant` background as the
-  colour mixed 80% toward transparent, so buttons also get an explicit `.bg()` with the spec
-  token.
-- **Focus.** A `track_focus` on the root div took focus back from the search input on every
-  click. The focus handle now lives on the scroller, and key handling stays on the root.
-- **Shortcuts added:** `/` and Ctrl+L focus the search box. They're also how the search box was
-  tested, since pointer clicks near the output edges don't reach the app (see "Testing").
-- **Search dropdown and focus.** A window losing or regaining activation blurs or refocuses the
-  input. Blur closes the dropdown only while the window is active, and focus doesn't reopen it.
-  Suggestions come back on the next keystroke.
-- **Fling after wheel samples.** Hyprland's virtual pointer (used by `nt-input touchpad`) sends
-  the "touchpad" frames as wheel-source `value120` and only the final `axis_stop` as finger. A
-  fling therefore starts only if the last scroll input was a precise (pixel) delta, which
-  matches Chrome, where `axis_stop` only follows finger frames. With `nt-input touchpad` this
-  path behaves as fractional wheel notches; the precise path is exercised by the autopilot's
-  `ScrollPixels` and `Fling`.
-- **Channel name.** Some watch responses (multi-artist videos) have an empty channel name, so
-  the card's channel name is shown instead.
-- The rail label "Subscriptions" at 12 px (the smallest spec size) is wider than the 72 px rail
-  and overflows it slightly.
+- **View caching.** A cached view whose render reads another entity is *not* invalidated when
+  that entity notifies: only the notified view and its ancestors are marked dirty. Every page
+  change therefore notifies the page view explicitly.
+- **Notifying a view during render doesn't count for that frame.** So the scroll tick runs in
+  `on_next_frame`, and triggers (infinite scroll, comments) run in `defer_in` after the root's
+  render.
+- **Hiding the cursor.** GPUI has no public way to hide it. A synthetic inert keystroke
+  (`Window::dispatch_keystroke`) trips GPUI's own hide-while-typing path
+  (`CursorHideMode::OnTypingAndAction`), and the root handler swallows the key. It must run from
+  `Window::defer` (see the panic above).
+- **Kit custom button colours are drawn at 20% strength**, so the app draws its own pill buttons.
+- **Test environment.** Clicks near the output edges on this machine are eaten by the desktop
+  shell's (caelestia) full-output layer. Top-bar and rail clicks were tested with the window
+  floated away from the edges, and by keyboard.
 
-## Testing caveats
+## Remaining differences from YouTube, and why
 
-- The desktop shell (caelestia) has a full-output top-layer surface (`caelestia-drawers`) on
-  every output, including NT-GPUI, and its input region covers bands near the output edges.
-  `nt-input` clicks at the top bar (y < ~60), the rail (x < ~90) and the right edge never
-  reached the app (no `wl_pointer` events at all). Those controls were checked with the window
-  floated and resized to 760×600 in the middle of the output
-  (`hyprctl dispatch 'hl.dsp.window.float/resize/move(...)'`, which also tested the narrow
-  layout), and by keyboard. This is the environment, not the app.
-- In screenshots the wallpaper shows faintly (~4%) through the window background, although
-  Hyprland reports opacity 1 and GPUI configures an opaque surface. Not explained; not
-  investigated further.
+- **No captions, chapters, storyboard previews, comment replies, dislike counts or verified
+  marks:** the core doesn't provide them; spec v2 says to leave them out.
+- **Like and dislike aren't clickable:** the app never signs in.
+- **No inline hover previews on cards:** not specified, and would cost a second player.
+- **Rail labels:** "Subscriptions" at 10/14 fits; there's no hamburger or guide drawer.
+- **The spinner is the kit's (Lucide arc), not YouTube's red-and-grey spinner.**
+- **Subpixel (RGB) text antialiasing:** that's GPUI's renderer; YouTube in Chrome is grayscale
+  on Linux.
+- **No keyboard focus rings or Tab traversal across cards:** not done in this round. GPUI
+  supports `tab_index` and `focus_visible`; it needs a focus handle per interactive element.
+- **Frame-accurate stepping:** "," and "." are exact ±1/30 s seeks; the core has no frame-step
+  command.
 
-## Memory
+## Not portable / unverified on macOS
 
-Peak RSS in the benchmark is about 460 MB; about 236 MB is already there at startup. Of that,
-about 90 MB is GPU driver libraries (`libnvidia-*` ≈ 58 MB, `libLLVM` 16 MB, Mesa
-`libgallium` 8.5 MB, `libvulkan_intel` 5 MB). They're loaded because gpui-wgpu enumerates
-adapters on all backends (`Backends::all()`), which initialises every installed driver
-(Intel and NVIDIA, Vulkan and GL). The binary itself is about 32 MB resident. Images add the
-core's decoded cache (≤ 96 MB) plus this app's `RenderImage`s, which keep their pixels on the
-CPU; they're capped at 140 ready images (about 32 MB) and evicted least-recently-drawn first,
-freeing their atlas tiles. Playback adds mpv's decoder and demuxer cache.
-
-## Not done / deviations
-
-- Related videos load more on scroll (`more_videos`), but in the wide layout the trigger is the
-  related column's end, which is normally above the primary column's end.
-- Frame timestamps are taken when `render()` runs, not from `wl_surface.frame` (GPUI doesn't
-  expose it to views).
+Nothing hard-codes a font or a path. The vendored crate and the portal Inhibit are Linux-only
+through `cfg`, and so is the Wayland feature. Not built or run on macOS here: the app menu, Cmd+Q
+and Cmd+W, and fullscreen there are unverified.
 
 ## Core requests
 
-1. **`bench/scenario.json` doesn't parse with `autopilot::Step`.** `Step::Do(Command)` is an
-   untagged newtype variant, so it accepts the command object itself (`{"cmd": "fling", …}`),
-   but the scenario writes single commands as `{ "do": { "cmd": … } }`, which matches no
-   variant. As shipped, `autopilot::start()` prints "data did not match any variant of untagged
-   enum Step" and runs nothing. Workaround in `main.rs::fix_scenario`: only if the file fails to
-   parse, write a copy to `$TMPDIR` with each `{ "do": X }` step replaced by `X` and point
-   `NT_AUTOPILOT` at it. Suggested fix: `Do { #[serde(rename = "do")] command: Command }`.
-2. It would help if `ScrollAnimator`'s Wayland note mentioned that GPUI (and possibly other
-   toolkits) drops `axis_stop`.
+1. A frame-step command (`frame-step` / `frame-back-step`) for `,` and `.`.
+2. Persistent watch positions and the autoplay choice in the library, so all three apps share
+   them (this app keeps them in `gpui-prefs.json`).
+3. Comment replies, captions and chapters, which spec v2 lists as "not available from the core
+   yet".
