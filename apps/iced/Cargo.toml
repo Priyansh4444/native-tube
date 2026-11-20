@@ -30,3 +30,13 @@ iced = { version = "0.14", default-features = false, features = ["wayland", "x11
 debug = false
 
 [workspace]
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+string_slice = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+unchecked_time_subtraction = "deny"

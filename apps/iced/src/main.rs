@@ -5,9 +5,12 @@ mod clock;
 mod ext;
 mod icons;
 mod imgcache;
+mod interaction;
 mod player_view;
 mod prefs;
+mod probe;
 mod scroller;
+mod surface;
 mod theme;
 mod video;
 mod view;
@@ -105,6 +108,7 @@ fn main() -> iced::Result {
         size: Size::new(1280.0, 800.0),
         min_size: Some(Size::new(480.0, 360.0)),
         resizable: true,
+        transparent: surface::enabled(),
         exit_on_close_request: false,
         #[cfg(target_os = "linux")]
         platform_specific: window::settings::PlatformSpecific {
@@ -119,7 +123,11 @@ fn main() -> iced::Result {
         .subscription(app::App::subscription)
         .theme(|_: &app::App| theme::theme())
         .style(|_, _| iced::theme::Style {
-            background_color: theme::BG,
+            background_color: if surface::enabled() {
+                iced::Color::TRANSPARENT
+            } else {
+                theme::BG
+            },
             text_color: theme::TEXT,
         })
         .font(theme::ROBOTO_REGULAR)

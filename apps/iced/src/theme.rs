@@ -238,11 +238,6 @@ pub fn bare(_: &Theme, _: button::Status) -> button::Style {
     plain(None, TEXT, 0.0)
 }
 
-pub fn rail_entry(_: &Theme, status: button::Status) -> button::Style {
-    let c = if hovered(status) { bg(FILL) } else { None };
-    plain(c, TEXT, 10.0)
-}
-
 pub fn menu_row(selected: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |_, status| {
         let c = if selected || hovered(status) {

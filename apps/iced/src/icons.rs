@@ -43,9 +43,14 @@ pub enum Icon {
     Delete,
     Speed,
     Tune,
+    Menu,
+    ClosedCaption,
+    ClosedCaptionFill,
+    ExpandMore,
+    ExpandLess,
 }
 
-const COUNT: usize = 36;
+const COUNT: usize = Icon::ExpandLess as usize + 1;
 
 impl Icon {
     fn index(self) -> usize {
@@ -92,6 +97,13 @@ impl Icon {
             Icon::Delete => include_bytes!("../../../assets/icons/delete.svg"),
             Icon::Speed => include_bytes!("../../../assets/icons/speed.svg"),
             Icon::Tune => include_bytes!("../../../assets/icons/tune.svg"),
+            Icon::ClosedCaption => include_bytes!("../../../assets/icons/closed_caption.svg"),
+            Icon::ClosedCaptionFill => {
+                include_bytes!("../../../assets/icons/closed_caption_fill1.svg")
+            }
+            Icon::ExpandMore => include_bytes!("../../../assets/icons/expand_more.svg"),
+            Icon::ExpandLess => include_bytes!("../../../assets/icons/expand_less.svg"),
+            Icon::Menu => br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>"#,
         }
     }
 

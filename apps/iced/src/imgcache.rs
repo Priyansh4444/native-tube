@@ -51,17 +51,32 @@ pub struct Images {
 /// Round widths up so resizing doesn't ask for a new size on every pixel.
 pub fn bucket(width_px: f32) -> u32 {
     let w = if width_px.is_finite() {
-        width_px.ceil().clamp(1.0, 4096.0) as u32
+        width_px.ceil().max(1.0) as u32
     } else {
         1
     };
-    w.div_ceil(64) * 64
+    w.div_ceil(64).saturating_mul(64)
 }
 
 impl Images {
     /// Start of a `view`: everything touched from now on counts as recently used.
     pub fn begin_view(&self) {
         self.view_tick.set(self.view_tick.get().wrapping_add(1));
+    }
+
+    /// Reuse the selected card's thumbnail during the transition, without a new request.
+    pub fn cached(&self, url: &str, width_px: f32) -> Option<Handle> {
+        let map = self.by_width.borrow();
+        map.iter()
+            .filter_map(|(w, slots)| match slots.get(url) {
+                Some(Slot::Ready { handle, used, .. }) => Some((*w, handle, used)),
+                _ => None,
+            })
+            .min_by_key(|(w, _, _)| (*w < bucket(width_px), w.abs_diff(bucket(width_px))))
+            .map(|(_, handle, used)| {
+                used.set(self.view_tick.get());
+                handle.clone()
+            })
     }
 
     /// The handle for `url` drawn `width_px` physical pixels wide, starting a load if needed.

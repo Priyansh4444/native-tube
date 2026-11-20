@@ -89,6 +89,14 @@ impl Default for ScrollModel {
 }
 
 impl ScrollModel {
+    pub fn is_moving(&self) -> bool {
+        self.anim.borrow().is_animating()
+    }
+
+    pub fn max_offset(&self) -> f64 {
+        self.anim.borrow().max_offset()
+    }
+
     pub fn offset(&self) -> f32 {
         self.offset.get()
     }
@@ -105,6 +113,20 @@ impl ScrollModel {
     pub fn height(&self, key: u64) -> Option<f32> {
         self.heights.borrow().get(&key).copied()
     }
+    pub fn reset(&self) {
+        self.anim.borrow_mut().jump_to(0.0);
+        self.offset.set(0.0);
+        self.heights.borrow_mut().clear();
+        self.heights_version
+            .set(self.heights_version.get().wrapping_add(1));
+    }
+
+    pub fn forget_height(&self, key: u64) {
+        self.heights.borrow_mut().remove(&key);
+        self.heights_version
+            .set(self.heights_version.get().wrapping_add(1));
+    }
+
     pub fn heights_version(&self) -> u64 {
         self.heights_version.get()
     }
@@ -196,6 +218,11 @@ impl<'a, M: Clone + 'a> Scroller<'a, M> {
     }
     pub fn scale(mut self, scale: f32) -> Self {
         self.scale = scale;
+        self
+    }
+
+    pub fn bottom(mut self, px: f32) -> Self {
+        self.bottom = px;
         self
     }
 
@@ -345,8 +372,37 @@ impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for Scroller<'a, M> {
         let mut a = self.model.anim.borrow_mut();
         a.set_viewport(size.height as f64);
         a.set_max_offset((content_h - size.height) as f64);
-        self.model.offset.set(snap(a.offset() as f32, self.scale));
+        self.model
+            .offset
+            .set(snap(a.offset() as f32, self.scale).min(a.max_offset() as f32));
         layout::Node::with_children(size, nodes)
+    }
+
+    fn operate(
+        &mut self,
+        tree: &mut Tree,
+        layout: Layout<'_>,
+        renderer: &Renderer,
+        operation: &mut dyn iced::advanced::widget::Operation,
+    ) {
+        let bounds = layout.bounds();
+        let viewport = Rectangle {
+            y: bounds.y + self.model.offset.get(),
+            ..bounds
+        };
+        operation.container(None, bounds);
+        operation.traverse(&mut |op| {
+            for ((child, state), layout) in self
+                .children
+                .iter_mut()
+                .zip(&mut tree.children)
+                .zip(layout.children())
+            {
+                if layout.bounds().intersects(&viewport) {
+                    child.as_widget_mut().operate(state, layout, renderer, op);
+                }
+            }
+        });
     }
 
     fn update(
@@ -367,7 +423,7 @@ impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for Scroller<'a, M> {
             let now = clock::secs(*at);
             let mut a = model.anim.borrow_mut();
             if a.needs_frame() {
-                let off = snap(a.tick(now) as f32, self.scale);
+                let off = snap(a.tick(now) as f32, self.scale).min(a.max_offset() as f32);
                 if off != model.offset.get() {
                     model.offset.set(off);
                     model.last_motion.set(now);
@@ -592,24 +648,26 @@ impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for Scroller<'a, M> {
         };
         renderer.with_layer(visible, |renderer| {
             renderer.with_translation(Vector::new(0.0, -off), |renderer| {
-                for ((child, tree), layout) in self
-                    .children
-                    .iter()
-                    .zip(&tree.children)
-                    .zip(layout.children())
-                {
-                    if layout.bounds().intersects(&content_viewport) {
-                        child.as_widget().draw(
-                            tree,
-                            renderer,
-                            theme,
-                            style,
-                            layout,
-                            content_cursor,
-                            &content_viewport,
-                        );
+                crate::probe::translated(Vector::new(0.0, -off), || {
+                    for ((child, tree), layout) in self
+                        .children
+                        .iter()
+                        .zip(&tree.children)
+                        .zip(layout.children())
+                    {
+                        if layout.bounds().intersects(&content_viewport) {
+                            child.as_widget().draw(
+                                tree,
+                                renderer,
+                                theme,
+                                style,
+                                layout,
+                                content_cursor,
+                                &content_viewport,
+                            );
+                        }
                     }
-                }
+                });
             });
         });
 
@@ -683,8 +741,9 @@ impl<'a, M: Clone + 'a> From<Scroller<'a, M>> for Element<'a, M> {
 
 /// The root wrapper: counts presented frames and emits pending marks from `draw`, which iced
 /// calls exactly once per `RedrawRequested`, right before `present`.
-pub struct FrameHook<'a, M> {
-    inner: Element<'a, M>,
+pub struct FrameHook<'a> {
+    inner: Element<'a, crate::app::Message>,
+    app: &'a crate::app::App,
 }
 
 thread_local! {
@@ -710,13 +769,17 @@ pub fn mark_on_next_frame(name: &'static str) {
     });
 }
 
-pub fn frame_hook<'a, M: 'a>(inner: impl Into<Element<'a, M>>) -> Element<'a, M> {
+pub fn frame_hook<'a>(
+    inner: impl Into<Element<'a, crate::app::Message>>,
+    app: &'a crate::app::App,
+) -> Element<'a, crate::app::Message> {
     Element::new(FrameHook {
         inner: inner.into(),
+        app,
     })
 }
 
-impl<'a, M: 'a> Widget<M, Theme, Renderer> for FrameHook<'a, M> {
+impl Widget<crate::app::Message, Theme, Renderer> for FrameHook<'_> {
     fn size(&self) -> Size<Length> {
         self.inner.as_widget().size()
     }
@@ -762,9 +825,23 @@ impl<'a, M: 'a> Widget<M, Theme, Renderer> for FrameHook<'a, M> {
         cursor: mouse::Cursor,
         renderer: &Renderer,
         clipboard: &mut dyn Clipboard,
-        shell: &mut Shell<'_, M>,
+        shell: &mut Shell<'_, crate::app::Message>,
         viewport: &Rectangle,
     ) {
+        crate::interaction::input_mode(event);
+        if self.app.preview.is_some()
+            && matches!(
+                event,
+                Event::Mouse(mouse::Event::WheelScrolled { .. } | mouse::Event::CursorLeft)
+            )
+        {
+            shell.publish(crate::app::Message::StopPreview);
+        }
+        if crate::probe::enabled()
+            && let Event::Window(window::Event::RedrawRequested(at)) = event
+        {
+            shell.request_redraw_at(*at + Duration::from_millis(100));
+        }
         if let Event::Mouse(mouse::Event::CursorMoved { position }) = event {
             LAST_CURSOR.with(|c| c.set(*position));
         }
@@ -782,14 +859,20 @@ impl<'a, M: 'a> Widget<M, Theme, Renderer> for FrameHook<'a, M> {
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
+        crate::probe::begin();
+        crate::surface::draw(self.app, renderer, layout.bounds());
         self.inner
             .as_widget()
             .draw(tree, renderer, theme, style, layout, cursor, viewport);
+        self.app.probe.draw(self.app);
         nt_core::metrics::frame();
         PENDING_MARKS.with(|p| {
             for name in p.borrow_mut().drain(..) {
                 nt_core::metrics::mark(name);
                 trace_event(name);
+                if name == nt_core::metrics::marks::FIRST_FRAME {
+                    crate::ext::prewarm_player();
+                }
             }
         });
     }
@@ -812,7 +895,7 @@ impl<'a, M: 'a> Widget<M, Theme, Renderer> for FrameHook<'a, M> {
         renderer: &Renderer,
         viewport: &Rectangle,
         translation: Vector,
-    ) -> Option<iced::advanced::overlay::Element<'b, M, Theme, Renderer>> {
+    ) -> Option<iced::advanced::overlay::Element<'b, crate::app::Message, Theme, Renderer>> {
         self.inner
             .as_widget_mut()
             .overlay(tree, layout, renderer, viewport, translation)

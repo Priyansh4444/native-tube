@@ -15,6 +15,8 @@ pub struct Prefs {
     pub autoplay: bool,
     #[serde(default)]
     pub theatre: bool,
+    #[serde(default)]
+    pub guide: bool,
     /// (video id, seconds watched, duration), newest last.
     #[serde(default)]
     positions: VecDeque<(String, f32, f32)>,
@@ -35,6 +37,7 @@ impl Default for Prefs {
         Prefs {
             autoplay: true,
             theatre: false,
+            guide: false,
             positions: VecDeque::new(),
             hidden: VecDeque::new(),
             index: HashMap::new(),
@@ -67,11 +70,20 @@ impl Prefs {
             return;
         };
         let dir = nt_core::data_dir();
+        use std::sync::Mutex;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        static WRITTEN: Mutex<u64> = Mutex::new(0);
+        let revision = NEXT.fetch_add(1, Ordering::Relaxed) + 1;
         nt_core::runtime().spawn_blocking(move || {
+            let mut written = WRITTEN.lock().unwrap_or_else(|e| e.into_inner());
+            if revision <= *written {
+                return;
+            }
             let _ = std::fs::create_dir_all(&dir);
             let tmp = dir.join(format!("{FILE}.tmp"));
-            if std::fs::write(&tmp, json).is_ok() {
-                let _ = std::fs::rename(&tmp, dir.join(FILE));
+            if std::fs::write(&tmp, json).is_ok() && std::fs::rename(&tmp, dir.join(FILE)).is_ok() {
+                *written = revision;
             }
         });
     }
@@ -95,15 +107,6 @@ impl Prefs {
 
     pub fn is_hidden(&self, id: &str) -> bool {
         self.hidden.iter().any(|v| v == id)
-    }
-
-    pub fn hide(&mut self, id: &str) {
-        if !self.is_hidden(id) {
-            self.hidden.push_back(id.to_string());
-            while self.hidden.len() > MAX_POSITIONS {
-                self.hidden.pop_front();
-            }
-        }
     }
 
     pub fn record(&mut self, id: &str, position: f64, duration: f64) {

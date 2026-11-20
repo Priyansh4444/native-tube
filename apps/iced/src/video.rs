@@ -38,16 +38,24 @@ struct VOut { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
 "#;
 
 /// The shader program: draws the newest frame the app took from the player.
-pub struct VideoProgram {
+pub struct VideoProgram<'a, const PREVIEW: bool> {
     pub frame: Option<Arc<VideoFrame>>,
     /// Corner radius in physical pixels (0 for square corners).
     pub radius: f32,
+    pub first_frame: Option<&'a std::cell::Cell<bool>>,
+    pub playback_mark: Option<&'a std::cell::Cell<bool>>,
 }
 
-impl<M> shader::Program<M> for VideoProgram {
+impl<M, const PREVIEW: bool> shader::Program<M> for VideoProgram<'_, PREVIEW> {
     type State = ();
-    type Primitive = VideoPrimitive;
-    fn draw(&self, _: &(), _: mouse::Cursor, _: Rectangle) -> VideoPrimitive {
+    type Primitive = VideoPrimitive<PREVIEW>;
+    fn draw(&self, _: &(), _: mouse::Cursor, _: Rectangle) -> VideoPrimitive<PREVIEW> {
+        if let Some(shown) = self.first_frame {
+            shown.set(true);
+        }
+        if self.playback_mark.is_some_and(|mark| mark.replace(false)) {
+            crate::scroller::mark_on_next_frame(nt_core::metrics::marks::PLAYBACK_STARTED);
+        }
         VideoPrimitive {
             frame: self.frame.clone(),
             radius: self.radius,
@@ -56,12 +64,12 @@ impl<M> shader::Program<M> for VideoProgram {
 }
 
 #[derive(Debug)]
-pub struct VideoPrimitive {
+pub struct VideoPrimitive<const PREVIEW: bool> {
     frame: Option<Arc<VideoFrame>>,
     radius: f32,
 }
 
-pub struct VideoPipeline {
+pub struct VideoPipeline<const PREVIEW: bool> {
     pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
@@ -71,7 +79,7 @@ pub struct VideoPipeline {
     uploaded: u64,
 }
 
-impl shader::Pipeline for VideoPipeline {
+impl<const PREVIEW: bool> shader::Pipeline for VideoPipeline<PREVIEW> {
     fn new(device: &wgpu::Device, _queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("nt video"),
@@ -165,12 +173,12 @@ impl shader::Pipeline for VideoPipeline {
     }
 }
 
-impl shader::Primitive for VideoPrimitive {
-    type Pipeline = VideoPipeline;
+impl<const PREVIEW: bool> shader::Primitive for VideoPrimitive<PREVIEW> {
+    type Pipeline = VideoPipeline<PREVIEW>;
 
     fn prepare(
         &self,
-        p: &mut VideoPipeline,
+        p: &mut VideoPipeline<PREVIEW>,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         bounds: &Rectangle,
@@ -266,7 +274,7 @@ impl shader::Primitive for VideoPrimitive {
         }
     }
 
-    fn draw(&self, p: &VideoPipeline, pass: &mut wgpu::RenderPass<'_>) -> bool {
+    fn draw(&self, p: &VideoPipeline<PREVIEW>, pass: &mut wgpu::RenderPass<'_>) -> bool {
         if self.frame.is_none() {
             return true;
         }

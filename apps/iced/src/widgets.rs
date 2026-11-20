@@ -119,6 +119,7 @@ pub struct Clamp<'a, M> {
     suffix: Option<(&'static str, Font, Color)>,
     on_link: Option<Box<dyn Fn(usize) -> M + 'a>>,
     on_press: Option<M>,
+    shrink: bool,
 }
 
 pub fn clamp<'a, M>(
@@ -138,6 +139,7 @@ pub fn rich<'a, M>(segs: Vec<Seg<'a>>, style: t::Style, lines: usize) -> Clamp<'
         suffix: None,
         on_link: None,
         on_press: None,
+        shrink: false,
     }
 }
 
@@ -158,6 +160,11 @@ impl<'a, M> Clamp<'a, M> {
     }
     pub fn on_press(mut self, m: M) -> Self {
         self.on_press = Some(m);
+        self
+    }
+    /// Take only the width the (cut) text needs, so something can follow it on the line.
+    pub fn shrink(mut self) -> Self {
+        self.shrink = true;
         self
     }
 
@@ -301,7 +308,12 @@ impl<'a, M: Clone> Clamp<'a, M> {
 
 impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for Clamp<'a, M> {
     fn size(&self) -> Size<Length> {
-        Size::new(Length::Fill, Length::Shrink)
+        let width = if self.shrink {
+            Length::Shrink
+        } else {
+            Length::Fill
+        };
+        Size::new(width, Length::Shrink)
     }
     fn tag(&self) -> tree::Tag {
         tree::Tag::of::<ClampState>()
@@ -326,12 +338,13 @@ impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for Clamp<'a, M> {
             st.truncated = truncated;
             st.key = key;
         }
-        let h = st
-            .para
-            .as_ref()
-            .map(|p| p.min_bounds().height)
-            .unwrap_or(0.0);
-        layout::Node::new(Size::new(width, h))
+        let size = st.para.as_ref().map_or(Size::ZERO, |p| p.min_bounds());
+        let w = if self.shrink {
+            size.width.ceil().min(width)
+        } else {
+            width
+        };
+        layout::Node::new(Size::new(w, size.height))
     }
     fn update(
         &mut self,
@@ -609,6 +622,7 @@ impl<M> Widget<M, Theme, Renderer> for Thumb {
                     };
                 }
                 let mut img = iced::advanced::image::Image::new(h.clone());
+                img.filter_method = iced::widget::image::FilterMethod::Linear;
                 img.border_radius = self.radius.into();
                 renderer.draw_image(img, draw_bounds, b);
             }
@@ -679,13 +693,19 @@ impl<'a, M: 'a> From<Thumb> for Element<'a, M> {
 // Seek bar
 
 /// YouTube's scrubber: a 3 px track that grows to 5 px with a 13 px knob on hover, a time
-/// tooltip over the hovered point, and a drag that previews the target and seeks once, on
-/// release.
+/// tooltip over the hovered point (with the chapter's title above it), and a drag that
+/// previews the target and seeks once, on release. With chapters the track is cut into
+/// segments with 2 px gaps; with a replay heatmap the most-replayed graph shows above the
+/// track while hovered.
 pub struct SeekBar<'a, M> {
     played: f32,
     buffered: f32,
     duration: f64,
+    chapters: &'a [nt_core::Chapter],
+    heat: &'a [nt_core::HeatPoint],
     on_seek: Box<dyn Fn(f32) -> M + 'a>,
+    on_preview: Option<fn(Option<f64>) -> M>,
+    preview: Option<Handle>,
 }
 
 pub fn seek_bar<'a, M>(
@@ -705,15 +725,50 @@ pub fn seek_bar<'a, M>(
         played: clean(played),
         buffered: clean(buffered),
         duration,
+        chapters: &[],
+        heat: &[],
         on_seek: Box::new(on_seek),
+        on_preview: None,
+        preview: None,
     }
 }
+
+impl<'a, M> SeekBar<'a, M> {
+    /// Chapters sorted by start time, in seconds.
+    pub fn chapters(mut self, chapters: &'a [nt_core::Chapter]) -> Self {
+        self.chapters = chapters;
+        self
+    }
+    pub fn heatmap(mut self, heat: &'a [nt_core::HeatPoint]) -> Self {
+        self.heat = heat;
+        self
+    }
+    pub fn storyboard(mut self, preview: Option<Handle>, on_preview: fn(Option<f64>) -> M) -> Self {
+        self.preview = preview;
+        self.on_preview = Some(on_preview);
+        self
+    }
+
+    fn chapter_title(&self, f: f32) -> Option<&'a str> {
+        let t = f as f64 * self.duration;
+        self.chapters
+            .iter()
+            .rev()
+            .find(|c| c.start <= t)
+            .map(|c| c.title.as_str())
+    }
+}
+
+/// Height of the most-replayed graph above the track.
+const HEAT_H: f32 = 36.0;
 
 #[derive(Default)]
 struct SeekState {
     dragging: Option<f32>,
     hover: Option<f32>,
     label: Option<(String, Paragraph)>,
+    title: Option<(String, Paragraph)>,
+    preview_time: Option<f64>,
 }
 
 impl<'a, M> Widget<M, Theme, Renderer> for SeekBar<'a, M> {
@@ -751,6 +806,15 @@ impl<'a, M> Widget<M, Theme, Renderer> for SeekBar<'a, M> {
                 let para = Paragraph::with_text(spec);
                 st.label = Some((text, para));
             }
+            match self.chapter_title(f) {
+                Some(title) if st.title.as_ref().is_none_or(|(s, _)| s != title) => {
+                    let mut spec = text_spec(title, 320.0, t::META_S_M);
+                    spec.wrapping = Wrapping::None;
+                    st.title = Some((title.to_string(), Paragraph::with_text(spec)));
+                }
+                Some(_) => {}
+                None => st.title = None,
+            }
         };
         match event {
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
@@ -764,7 +828,7 @@ impl<'a, M> Widget<M, Theme, Renderer> for SeekBar<'a, M> {
             }
             Event::Mouse(mouse::Event::CursorMoved { position }) => {
                 if st.dragging.is_some() {
-                    let f = frac(position.x);
+                    let f = frac(cursor.position().map_or(position.x, |p| p.x));
                     st.dragging = Some(f);
                     set_label(st, f);
                     shell.capture_event();
@@ -781,18 +845,26 @@ impl<'a, M> Widget<M, Theme, Renderer> for SeekBar<'a, M> {
                 }
             }
             Event::Mouse(mouse::Event::CursorLeft) => {
-                if st.hover.take().is_some() {
+                if st.hover.take().is_some() || st.dragging.take().is_some() {
                     shell.request_redraw();
                 }
             }
             Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
                 if let Some(f) = st.dragging.take() {
+                    st.hover = cursor.position_over(b).map(|p| frac(p.x));
                     shell.publish((self.on_seek)(f));
                     shell.capture_event();
                     shell.request_redraw();
                 }
             }
             _ => {}
+        }
+        let time = st.dragging.or(st.hover).map(|f| f as f64 * self.duration);
+        if let Some(notify) = self.on_preview
+            && st.preview_time != time
+        {
+            st.preview_time = time;
+            shell.publish(notify(time));
         }
     }
     fn draw(
@@ -802,38 +874,73 @@ impl<'a, M> Widget<M, Theme, Renderer> for SeekBar<'a, M> {
         _theme: &Theme,
         _style: &renderer::Style,
         layout: Layout<'_>,
-        _cursor: mouse::Cursor,
+        cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
         use iced::advanced::text::Renderer as _;
         let st = tree.state.downcast_ref::<SeekState>();
         let b = layout.bounds();
-        let active = st.hover.is_some() || st.dragging.is_some();
+        let hover = st.hover.filter(|_| cursor.is_over(b));
+        let active = hover.is_some() || st.dragging.is_some();
         let thick = if active { 5.0 } else { 3.0 };
         let y = b.y + b.height - 4.0 - thick / 2.0;
         let played = st.dragging.unwrap_or(self.played);
-        let bar = |x0: f32, x1: f32| Rectangle {
-            x: b.x + x0 * b.width,
-            y,
-            width: ((x1 - x0) * b.width).max(0.0),
-            height: thick,
+        // Chapter boundaries in px from the left edge (the first chapter's start is the edge).
+        let duration = self.duration.max(0.001);
+        let cuts = self
+            .chapters
+            .iter()
+            .map(|c| (c.start / duration) as f32 * b.width)
+            .filter(|x| *x > 1.0 && *x < b.width - 1.0);
+        // Fill [x0, x1] (fractions) as one rectangle per chapter segment, 2 px apart.
+        let bar = |renderer: &mut Renderer, x0: f32, x1: f32, color: Color| {
+            let (mut from, to) = (x0 * b.width, x1 * b.width);
+            for edge in cuts.clone().chain(std::iter::once(f32::INFINITY)) {
+                let seg_end = (edge - 1.0).min(to);
+                if seg_end > from {
+                    fill(
+                        renderer,
+                        Rectangle {
+                            x: b.x + from,
+                            y,
+                            width: seg_end - from,
+                            height: thick,
+                        },
+                        0.0,
+                        color,
+                    );
+                }
+                from = from.max(edge + 1.0);
+                if from >= to {
+                    break;
+                }
+            }
         };
-        fill(renderer, bar(0.0, 1.0), 0.0, t::css_white(0.2));
-        fill(
-            renderer,
-            bar(0.0, self.buffered.max(played)),
-            0.0,
-            t::css_white(0.4),
-        );
-        if let Some(h) = st.hover.filter(|_| st.dragging.is_none()) {
-            fill(
-                renderer,
-                bar(played.min(h), played.max(h)),
-                0.0,
-                t::css_white(0.5),
-            );
+        if active && !self.heat.is_empty() {
+            let base = y - 4.0;
+            for p in self.heat {
+                let x0 = (p.start / duration) as f32 * b.width;
+                let w = ((p.duration / duration) as f32 * b.width).max(1.0);
+                let h = (p.intensity.clamp(0.0, 1.0) as f32 * HEAT_H).max(1.0);
+                fill(
+                    renderer,
+                    Rectangle {
+                        x: b.x + x0,
+                        y: base - h,
+                        width: w.min(b.width - x0).max(0.0),
+                        height: h,
+                    },
+                    0.0,
+                    t::css_white(0.3),
+                );
+            }
         }
-        fill(renderer, bar(0.0, played), 0.0, t::RED);
+        bar(renderer, 0.0, 1.0, t::css_white(0.2));
+        bar(renderer, 0.0, self.buffered.max(played), t::css_white(0.4));
+        if let Some(h) = hover.filter(|_| st.dragging.is_none()) {
+            bar(renderer, played.min(h), played.max(h), t::css_white(0.5));
+        }
+        bar(renderer, 0.0, played, t::RED);
         if active {
             let d = 13.0;
             fill(
@@ -848,21 +955,60 @@ impl<'a, M> Widget<M, Theme, Renderer> for SeekBar<'a, M> {
                 t::RED,
             );
         }
-        let at = st.dragging.or(st.hover);
+        let at = st.dragging.or(hover);
         if let (Some(f), Some((_, para))) = (at, &st.label)
             && self.duration > 0.0
         {
             let sz = para.min_bounds();
-            let w = sz.width + 16.0;
+            let title = st
+                .title
+                .as_ref()
+                .filter(|_| self.chapter_title(f).is_some());
+            let tsz = title.map_or(Size::ZERO, |(_, p)| p.min_bounds());
+            let preview_w = self
+                .preview
+                .as_ref()
+                .map_or(0.0, |_| 160.0_f32.min((b.width - 16.0).max(0.0)));
+            let preview_h = preview_w * 9.0 / 16.0;
+            let w = (sz.width.max(tsz.width).max(preview_w) + 16.0).min(b.width);
+            let lift = if self.heat.is_empty() { 0.0 } else { HEAT_H };
             let x = (b.x + f * b.width - w / 2.0).clamp(b.x, b.x + b.width - w);
+            let h = sz.height + tsz.height + preview_h + 8.0;
             let r = Rectangle {
                 x,
-                y: b.y - sz.height - 16.0,
+                y: b.y - h - 8.0 - lift,
                 width: w,
-                height: sz.height + 8.0,
+                height: h,
             };
             fill(renderer, r, 4.0, Color::from_rgba(0.1, 0.1, 0.1, 0.9));
-            renderer.fill_paragraph(para, Point::new(r.x + 8.0, r.y + 4.0), t::TEXT, *viewport);
+            let text_y = r.y + preview_h + 4.0;
+            if let Some(handle) = &self.preview {
+                use iced::advanced::image::Renderer as _;
+                let pic = Rectangle {
+                    x: r.center_x() - preview_w / 2.0,
+                    y: r.y + 4.0,
+                    width: preview_w,
+                    height: preview_h,
+                };
+                renderer.draw_image(iced::advanced::image::Image::new(handle.clone()), pic, pic);
+            }
+            let Some(text_clip) = r.intersection(viewport) else {
+                return;
+            };
+            if let Some((_, tp)) = title {
+                renderer.fill_paragraph(
+                    tp,
+                    Point::new(r.x + ((w - tsz.width) / 2.0).max(4.0), text_y),
+                    t::TEXT,
+                    text_clip,
+                );
+            }
+            renderer.fill_paragraph(
+                para,
+                Point::new(r.x + ((w - sz.width) / 2.0).max(4.0), text_y + tsz.height),
+                t::TEXT,
+                text_clip,
+            );
         }
     }
     fn mouse_interaction(
@@ -897,6 +1043,7 @@ pub struct AutoHide<'a, M> {
     base: Element<'a, M>,
     overlay: Element<'a, M>,
     force: bool,
+    on_change: Option<Box<dyn Fn(bool) -> M + 'a>>,
 }
 
 pub fn auto_hide<'a, M>(
@@ -908,6 +1055,15 @@ pub fn auto_hide<'a, M>(
         base: base.into(),
         overlay: overlay.into(),
         force,
+        on_change: None,
+    }
+}
+
+impl<'a, M> AutoHide<'a, M> {
+    /// Publish whether the controls show, whenever that changes (captions move with them).
+    pub fn on_change(mut self, f: impl Fn(bool) -> M + 'a) -> Self {
+        self.on_change = Some(Box::new(f));
+        self
     }
 }
 
@@ -917,11 +1073,13 @@ const HIDE_AFTER: Duration = Duration::from_secs(3);
 struct HideState {
     last_move: Option<Instant>,
     shown: bool,
+    /// The visibility last published through `on_change`.
+    reported: Option<bool>,
 }
 
 impl<'a, M> AutoHide<'a, M> {
     fn visible(&self, st: &HideState) -> bool {
-        self.force || st.shown
+        self.force || st.shown || crate::interaction::keyboard_mode()
     }
 }
 
@@ -962,6 +1120,30 @@ impl<'a, M: 'a> Widget<M, Theme, Renderer> for AutoHide<'a, M> {
         );
         layout::Node::with_children(size, vec![base, overlay])
     }
+    fn operate(
+        &mut self,
+        tree: &mut Tree,
+        layout: Layout<'_>,
+        renderer: &Renderer,
+        operation: &mut dyn iced::advanced::widget::Operation,
+    ) {
+        let mut layouts = layout.children();
+        let (Some(base), Some(overlay)) = (layouts.next(), layouts.next()) else {
+            return;
+        };
+        let [base_tree, overlay_tree] = &mut tree.children[..] else {
+            return;
+        };
+        self.base
+            .as_widget_mut()
+            .operate(base_tree, base, renderer, operation);
+        if self.visible(tree.state.downcast_ref::<HideState>()) {
+            self.overlay
+                .as_widget_mut()
+                .operate(overlay_tree, overlay, renderer, operation);
+        }
+    }
+
     fn update(
         &mut self,
         tree: &mut Tree,
@@ -1008,6 +1190,12 @@ impl<'a, M: 'a> Widget<M, Theme, Renderer> for AutoHide<'a, M> {
             _ => {}
         }
         let visible = self.visible(st);
+        if let Some(f) = &self.on_change
+            && st.reported != Some(visible)
+        {
+            st.reported = Some(visible);
+            shell.publish(f(visible));
+        }
         let mut children = layout.children();
         let (Some(bl), Some(ol)) = (children.next(), children.next()) else {
             return;
@@ -1300,6 +1488,29 @@ impl<'a, M: 'a> Widget<M, Theme, Renderer> for ChipBar<'a, M> {
         self.offset.set(self.offset.get().clamp(0.0, max));
         layout::Node::with_children(size, nodes)
     }
+    fn operate(
+        &mut self,
+        tree: &mut Tree,
+        layout: Layout<'_>,
+        renderer: &Renderer,
+        operation: &mut dyn iced::advanced::widget::Operation,
+    ) {
+        let bounds = layout.bounds();
+        let clip = bounds + Vector::new(self.offset.get(), 0.0);
+        operation.traverse(&mut |op| {
+            for ((child, state), layout) in self
+                .children
+                .iter_mut()
+                .zip(&mut tree.children)
+                .zip(layout.children())
+            {
+                if clip.intersects(&layout.bounds()) {
+                    child.as_widget_mut().operate(state, layout, renderer, op);
+                }
+            }
+        });
+    }
+
     fn update(
         &mut self,
         tree: &mut Tree,
@@ -1426,24 +1637,26 @@ impl<'a, M: 'a> Widget<M, Theme, Renderer> for ChipBar<'a, M> {
         let inner = Rectangle { x: b.x + off, ..b };
         renderer.with_layer(b, |renderer| {
             renderer.with_translation(Vector::new(-off, 0.0), |renderer| {
-                for ((child, ct), cl) in self
-                    .children
-                    .iter()
-                    .zip(tree.children.iter())
-                    .zip(layout.children())
-                {
-                    if cl.bounds().intersects(&inner) {
-                        child.as_widget().draw(
-                            ct,
-                            renderer,
-                            theme,
-                            style,
-                            cl,
-                            child_cursor,
-                            &inner,
-                        );
+                crate::probe::translated(Vector::new(-off, 0.0), || {
+                    for ((child, ct), cl) in self
+                        .children
+                        .iter()
+                        .zip(tree.children.iter())
+                        .zip(layout.children())
+                    {
+                        if cl.bounds().intersects(&inner) {
+                            child.as_widget().draw(
+                                ct,
+                                renderer,
+                                theme,
+                                style,
+                                cl,
+                                child_cursor,
+                                &inner,
+                            );
+                        }
                     }
-                }
+                });
             });
         });
         // Fades and arrows go in a layer above the chips' text.
@@ -1480,6 +1693,8 @@ impl<'a, M: 'a> Widget<M, Theme, Renderer> for ChipBar<'a, M> {
                 );
             };
             if let Some(l) = l {
+                crate::probe::cover(l);
+                crate::probe::target("chip_previous", "Previous topics", l, b);
                 fade(renderer, b.x + 40.0, false);
                 fill(
                     renderer,
@@ -1507,6 +1722,8 @@ impl<'a, M: 'a> Widget<M, Theme, Renderer> for ChipBar<'a, M> {
                 );
             }
             if let Some(r) = r {
+                crate::probe::cover(r);
+                crate::probe::target("chip_next", "More topics", r, b);
                 fade(renderer, b.x + b.width - 130.0, true);
                 fill(
                     renderer,
@@ -1688,7 +1905,6 @@ pub struct SearchBox<'a, M> {
     on_focus: Box<dyn Fn(bool) -> M + 'a>,
     on_nav: Box<dyn Fn(i32) -> M + 'a>,
     on_escape: Option<M>,
-    blur: u64,
 }
 
 pub fn search_box<'a, M>(
@@ -1704,16 +1920,6 @@ pub fn search_box<'a, M>(
         on_focus: Box::new(on_focus),
         on_nav: Box::new(on_nav),
         on_escape,
-        blur: 0,
-    }
-}
-
-impl<'a, M> SearchBox<'a, M> {
-    /// Changing this token unfocuses the field on the next rebuild (iced 0.14 has no
-    /// unfocus operation).
-    pub fn blur(mut self, token: u64) -> Self {
-        self.blur = token;
-        self
     }
 }
 
@@ -1721,27 +1927,11 @@ impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for SearchBox<'a, M> {
     fn size(&self) -> Size<Length> {
         self.inner.as_widget().size()
     }
-    fn tag(&self) -> tree::Tag {
-        tree::Tag::of::<u64>()
-    }
-    fn state(&self) -> tree::State {
-        tree::State::new(self.blur)
-    }
     fn children(&self) -> Vec<Tree> {
         vec![Tree::new(self.inner.as_widget())]
     }
     fn diff(&self, tree: &mut Tree) {
         tree.diff_children(std::slice::from_ref(&self.inner));
-        let seen = tree.state.downcast_mut::<u64>();
-        if *seen != self.blur {
-            *seen = self.blur;
-            if let Some(child) = tree.children.first_mut() {
-                child
-                    .state
-                    .downcast_mut::<iced::widget::text_input::State<Paragraph>>()
-                    .unfocus();
-            }
-        }
     }
     fn layout(
         &mut self,
@@ -1849,6 +2039,16 @@ impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for SearchBox<'a, M> {
             self.inner
                 .as_widget()
                 .draw(child, renderer, theme, style, l, cursor, viewport);
+            let focused = child
+                .state
+                .downcast_ref::<iced::widget::text_input::State<Paragraph>>()
+                .is_focused();
+            if focused {
+                crate::probe::search_focused();
+            }
+            if focused && crate::interaction::keyboard_mode() {
+                crate::interaction::border(renderer, layout.bounds());
+            }
         }
     }
     fn mouse_interaction(

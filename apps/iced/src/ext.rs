@@ -19,6 +19,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 pub enum Ext {
     Image(String, u32, nt_core::Result<Arc<RgbaImage>>),
     Player,
+    PlayerReady,
+    Preview,
 }
 
 type Chan = (
@@ -65,39 +67,25 @@ pub fn player() -> Result<&'static Player, String> {
     Ok(PLAYER.get_or_init(|| p))
 }
 
-/// Create the player (dlopen libmpv, start mpv and its threads) on a thread of its own once
-/// the first page is on screen, so the first click on a video costs a load, not a start-up.
-/// A failure is only logged; the click tries again and shows the error.
-///
-/// It also resolves the first video on the page once, so the resolver's visitor id and its
-/// HTTPS connection exist before the first click (one extra request per launch; the core has
-/// no cheaper warm-up yet, see NOTES.md). Skipped with recorded data and in tests.
-pub fn prewarm_player(first_video: Option<String>) {
+/// Start libmpv outside the UI thread after the first frame. Resolution is left to
+/// the actual preload or click, so warming up never spends an extra YouTube request.
+pub fn prewarm_player() {
     static ONCE: std::sync::Once = std::sync::Once::new();
-    if std::env::var_os("NT_NO_PREWARM").is_some() {
-        return;
-    }
-    ONCE.call_once(|| {
-        let _ = std::thread::Builder::new()
-            .name("nt-player-warm".into())
-            .spawn(move || {
-                std::thread::sleep(std::time::Duration::from_millis(600));
-                match player() {
-                    Ok(_) => crate::scroller::trace_event("player_ready"),
-                    Err(e) => eprintln!("nt-iced: player warm-up: {e}"),
+    if std::env::var_os("NT_NO_PREWARM").is_none() {
+        ONCE.call_once(|| {
+            nt_core::runtime().spawn_blocking(|| match player() {
+                Ok(_) => {
+                    crate::scroller::trace_event("player_ready");
+                    send(Ext::PlayerReady);
                 }
-                let replay = std::env::var_os("NT_FIXTURES").is_some()
-                    || std::env::var_os("NT_VIDEO_OVERRIDE").is_some_and(|v| !v.is_empty());
-                if let Some(id) = first_video.filter(|_| !replay) {
-                    let height = nt_core::resolve::default_max_height();
-                    let r = nt_core::runtime().block_on(nt_core::resolve::resolve(&id, height));
-                    match r {
-                        Ok(_) => crate::scroller::trace_event("resolver_ready"),
-                        Err(e) => eprintln!("nt-iced: resolver warm-up: {e}"),
-                    }
-                }
+                Err(e) => eprintln!("nt-iced: player warm-up: {e}"),
             });
-    });
+        });
+    }
+}
+
+pub fn refresh_player() {
+    wake();
 }
 
 pub fn existing_player() -> Option<&'static Player> {
@@ -133,13 +121,23 @@ fn state_key(s: &PlaybackState) -> u64 {
     s.heights.hash(&mut h);
     s.video_size.hash(&mut h);
     s.source.hash(&mut h);
+    s.captions.len().hash(&mut h);
+    s.selected_captions.hash(&mut h);
+    s.audio_tracks.len().hash(&mut h);
+    s.audio_track.hash(&mut h);
+    s.normalize.hash(&mut h);
+    s.looping.hash(&mut h);
+    s.storyboard.is_some().hash(&mut h);
     h.finish()
 }
 
 fn wake() {
     if let Some(p) = PLAYER.get() {
         let generation = p.frame_generation();
-        let key = state_key(&p.state());
+        // The first real frame on the GPU surface changes what the UI paints (the hole and
+        // the poster), with no software frame and no state change to show for it. The count
+        // is an atomic, so the waker never waits on the UI thread.
+        let key = state_key(&p.state()) ^ u64::from(p.presented_frames() > 0);
         let new_frame =
             VISIBLE.load(Ordering::Acquire) && LAST_GEN.load(Ordering::Acquire) != generation;
         let changed = LAST_KEY.load(Ordering::Acquire) != key;
@@ -165,6 +163,56 @@ pub fn player_taken() {
 pub fn reset_gate() {
     LAST_GEN.store(u64::MAX, Ordering::Release);
     LAST_KEY.store(u64::MAX, Ordering::Release);
+}
+
+static PREVIEW_PLAYER: OnceLock<Player> = OnceLock::new();
+static PREVIEW_ACTIVE: AtomicBool = AtomicBool::new(false);
+static PREVIEW_PENDING: AtomicBool = AtomicBool::new(false);
+
+pub fn init_preview() -> Result<(), String> {
+    static CREATE: Mutex<()> = Mutex::new(());
+    let _guard = CREATE.lock().unwrap_or_else(|e| e.into_inner());
+    if PREVIEW_PLAYER.get().is_none() {
+        let player = Player::new_preview(PixelFormat::Rgba, || {
+            if PREVIEW_ACTIVE.load(Ordering::Acquire)
+                && !PREVIEW_PENDING.swap(true, Ordering::AcqRel)
+            {
+                send(Ext::Preview);
+            }
+        })
+        .map_err(|e| e.to_string())?;
+        let _ = PREVIEW_PLAYER.set(player);
+    }
+    Ok(())
+}
+
+pub fn play_preview(id: &str, width: u32, height: u32) {
+    if let Some(player) = PREVIEW_PLAYER.get() {
+        player.set_target_size(width, height);
+        PREVIEW_ACTIVE.store(true, Ordering::Release);
+        if player.load(id).is_err() {
+            PREVIEW_ACTIVE.store(false, Ordering::Release);
+        }
+    }
+}
+
+pub fn stop_preview() {
+    if PREVIEW_ACTIVE.swap(false, Ordering::AcqRel)
+        && let Some(player) = PREVIEW_PLAYER.get()
+    {
+        player.stop();
+    }
+    PREVIEW_PENDING.store(false, Ordering::Release);
+}
+
+pub fn preview_frame(id: &str) -> Option<Arc<nt_core::VideoFrame>> {
+    PREVIEW_PENDING.store(false, Ordering::Release);
+    let player = PREVIEW_PLAYER.get()?;
+    if player.state().source.as_deref() == Some(id) {
+        player.frame()
+    } else {
+        None
+    }
 }
 
 // ---- streams ------------------------------------------------------------------------------------

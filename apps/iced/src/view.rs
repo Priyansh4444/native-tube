@@ -4,20 +4,21 @@
 //! follows docs/frontend-spec-v2.md, "Look and feel".
 
 use crate::app::{
-    App, Body, CardMenu, Channel, Comments, Feed, ListRef, Load, Message, More, Root, Watch,
-    id_hash,
+    App, Body, CardMenu, Channel, Comments, Feed, ListRef, Load, Message, More, Root, Search,
+    SearchEntry, Watch, id_hash,
 };
 use crate::icons::{Icon, icon};
+use crate::interaction::{Control, action};
 use crate::player_view;
 use crate::scroller::{Item, Lane, ScrollModel, Scroller, frame_hook};
 use crate::theme::{self as t, RAIL, TOP_BAR};
 use crate::widgets::{Seg, chip_bar, clamp, highlight, press_hint, rich, search_box, seg, thumb};
 use iced::widget::text::{LineHeight, Wrapping};
 use iced::widget::{
-    Space, button, column, container, hover, mouse_area, pin, row, stack, text, text_input,
+    Space, button, column, container, hover, mouse_area, pin, row, shader, stack, text, text_input,
 };
 use iced::{Alignment, Color, Element, Fill, FillPortion, Length, Padding, Pixels, Theme};
-use nt_core::{Comment, TOPICS, Video, library};
+use nt_core::{Comment, SearchNotice, TOPICS, Video, library};
 
 pub type El<'a> = Element<'a, Message>;
 
@@ -38,9 +39,17 @@ const K_BANNER: u64 = 13;
 const K_STRIP: u64 = 14;
 const K_TABS: u64 = 15;
 const K_SKEL: u64 = 16;
+const K_MIXED: u64 = 20;
+const K_PLAYLIST: u64 = 21;
+const K_NOTICE: u64 = 17;
+const K_MOMENT: u64 = 18;
 
 pub fn key(lane: u64, kind: u64, idx: usize) -> u64 {
     (lane << 56) | (kind << 40) | (idx as u64 & 0xff_ffff_ffff)
+}
+
+pub fn comment_key(index: usize) -> u64 {
+    key(0, K_COMMENT, index)
 }
 
 /// Collects one lane's items, building elements only for those inside the band.
@@ -163,7 +172,9 @@ pub fn txt<'a>(
 }
 
 fn badge_text(v: &Video) -> Option<String> {
-    if v.is_live {
+    if v.upcoming.is_some() {
+        None
+    } else if v.is_live {
         Some("LIVE".to_string())
     } else {
         v.duration.clone()
@@ -183,10 +194,17 @@ pub struct Geo {
     pub pad: f32,
 }
 
-pub fn rail_shown(app: &App) -> bool {
-    app.win.width >= 792.0
-        && !app.fullscreen
-        && !matches!(app.top().map(|p| &p.body), Some(Body::Watch(_)))
+pub fn rail_width(app: &App) -> f32 {
+    if app.fullscreen
+        || app.win.width < 792.0
+        || matches!(app.top().map(|p| &p.body), Some(Body::Watch(_)))
+    {
+        0.0
+    } else if app.prefs.guide {
+        240.0
+    } else {
+        RAIL
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -195,34 +213,40 @@ pub fn view(app: &App) -> El<'_> {
     static FIRST: std::sync::Once = std::sync::Once::new();
     FIRST.call_once(|| crate::scroller::trace_event("first_view"));
     app.images.begin_view();
-    if app.fullscreen && matches!(app.top().map(|p| &p.body), Some(Body::Watch(_))) {
-        return frame_hook(
-            container(page(app))
-                .style(t::black(0.0))
-                .width(Fill)
-                .height(Fill),
-        );
-    }
     let body: El<'_> = container(page(app)).width(Fill).height(Fill).into();
-    let main_row: El<'_> = if rail_shown(app) {
-        row![rail(app), body].height(Fill).into()
-    } else {
+    let main: El<'_> = if app.fullscreen {
         body
+    } else {
+        let rail_w = rail_width(app);
+        let main_row: El<'_> = if rail_w > 0.0 {
+            row![rail(app, rail_w > RAIL), body].height(Fill).into()
+        } else {
+            body
+        };
+        column![top_bar(app), main_row].into()
     };
-    let main = column![top_bar(app), main_row];
+    let modal = app.card_menu.is_some()
+        || app.player_context.is_some()
+        || app.shortcuts
+        || app.search_filters
+        || app.queue_open
+        || app.guide_is_overlay();
+    let main = Control::new(main).block_keyboard(modal).element();
     let overlay = stack![
         Space::new().width(Fill).height(Fill),
         dropdown_layer(app),
-        card_menu_layer(app),
+        guide_layer(app),
+        context_menu_layer(app),
+        search_filters_layer(app),
+        queue_layer(app),
+        shortcuts_layer(app),
         toast_layer(app)
     ]
     .width(Fill)
     .height(Fill);
     frame_hook(
-        container(stack![main, overlay])
-            .style(t::surface)
-            .width(Fill)
-            .height(Fill),
+        container(stack![main, overlay]).width(Fill).height(Fill),
+        app,
     )
 }
 
@@ -238,7 +262,7 @@ fn bar_sides(app: &App) -> (f32, f32) {
     if app.win.width >= 900.0 {
         (190.0, 190.0)
     } else {
-        (170.0, 16.0)
+        (170.0, 40.0)
     }
 }
 
@@ -268,23 +292,22 @@ fn search_field(app: &App) -> El<'_> {
         Message::SearchFocus,
         Message::SuggestNav,
         app.sugg_open.then_some(Message::SuggestClose),
-    )
-    .blur(app.blur);
+    );
     // The focused field's search icon is a layer over the input's left padding. Changing the
     // layout around the input when it gains focus (an icon slot growing from 0 px) made iced
     // drop the input's focus on the next rebuild, so only the padding changes.
-    let lead: El<'_> = if focused {
-        container(icon(Icon::Search, 20.0, t::TEXT))
-            .height(38)
-            .padding(Padding {
-                left: 16.0,
-                ..Padding::ZERO
-            })
-            .align_y(Alignment::Center)
-            .into()
+    let glyph = if focused {
+        icon(Icon::Search, 20.0, t::TEXT)
     } else {
-        Space::new().into()
+        Space::new().width(20).height(20).into()
     };
+    let lead = container(glyph)
+        .height(38)
+        .padding(Padding {
+            left: 16.0,
+            ..Padding::ZERO
+        })
+        .align_y(Alignment::Center);
     let inner = stack![field, lead].height(38);
     let frame = container(inner)
         .style(t::search_frame(focused))
@@ -302,7 +325,15 @@ fn search_field(app: &App) -> El<'_> {
         .padding(0)
         .style(t::search_button)
         .on_press(Message::SearchSubmit);
-    row![frame, go].height(40).align_y(Alignment::Center).into()
+    row![
+        Control::new(frame)
+            .target("search_field", "Search")
+            .element(),
+        action(go, "search_button", "Search", Message::SearchSubmit)
+    ]
+    .height(40)
+    .align_y(Alignment::Center)
+    .into()
 }
 
 fn icon_button<'a>(i: Icon, size: f32, msg: Option<Message>) -> El<'a> {
@@ -311,13 +342,23 @@ fn icon_button<'a>(i: Icon, size: f32, msg: Option<Message>) -> El<'a> {
     } else {
         Color::from_rgb8(0x55, 0x55, 0x55)
     };
-    button(container(icon(i, 24.0, color)).center(Fill))
+    let control = button(container(icon(i, 24.0, color)).center(Fill))
         .width(size)
         .height(size)
         .padding(0)
         .style(t::icon_button)
-        .on_press_maybe(msg)
-        .into()
+        .on_press_maybe(msg.clone());
+    let (kind, label) = match i {
+        Icon::ArrowBack => ("back", "Back"),
+        Icon::Search => ("search_button", "Search"),
+        Icon::Menu => ("guide", "Guide"),
+        Icon::VideoLibrary => ("queue", "Queue"),
+        _ => ("button", ""),
+    };
+    match msg {
+        Some(msg) => action(control, kind, label, msg),
+        None => control.into(),
+    }
 }
 
 fn top_bar(app: &App) -> El<'_> {
@@ -343,7 +384,8 @@ fn top_bar(app: &App) -> El<'_> {
         40.0,
         (app.pages.len() > 1).then_some(Message::Back),
     );
-    let left = row![back, txt("NativeTube", t::HEADING)]
+    let guide = icon_button(Icon::Menu, 40.0, Some(Message::Guide));
+    let left = row![guide, back, txt("NativeTube", t::HEADING)]
         .spacing(12)
         .align_y(Alignment::Center);
     if search_collapsed(app) {
@@ -358,6 +400,7 @@ fn top_bar(app: &App) -> El<'_> {
         .into();
     }
     let (lw, rw) = bar_sides(app);
+    let queue = icon_button(Icon::VideoLibrary, 40.0, Some(Message::Queue(true)));
     row![
         container(left).width(lw),
         Space::new().width(FillPortion(1)),
@@ -365,7 +408,7 @@ fn top_bar(app: &App) -> El<'_> {
             .width(FillPortion(8))
             .max_width(640),
         Space::new().width(FillPortion(1)),
-        Space::new().width(rw),
+        container(queue).width(rw).align_x(Alignment::End),
     ]
     .height(TOP_BAR)
     .padding(pad)
@@ -387,7 +430,7 @@ fn dropdown_layer(app: &App) -> El<'_> {
             }
             _ => vec![seg(s.as_str()).font(t::MEDIUM)],
         };
-        button(
+        let button = button(
             row![
                 icon(Icon::Search, 20.0, t::TEXT),
                 rich(segs, t::SUGGEST, 1).color(t::TEXT)
@@ -404,8 +447,10 @@ fn dropdown_layer(app: &App) -> El<'_> {
             right: 16.0,
         })
         .style(t::menu_row(app.sugg_sel == Some(i)))
-        .on_press(Message::SuggestPick(i))
-        .into()
+        .on_press(Message::SuggestPick(i));
+        Control::new(button)
+            .target("suggestion", s.as_str())
+            .element()
     });
     let list = container(column(items))
         .style(t::dropdown)
@@ -416,6 +461,7 @@ fn dropdown_layer(app: &App) -> El<'_> {
             right: 0.0,
         })
         .width(Fill);
+    let list = Control::new(iced::widget::opaque(list)).cover().element();
     let pad = Padding {
         left: 16.0,
         right: 16.0,
@@ -443,25 +489,8 @@ fn dropdown_layer(app: &App) -> El<'_> {
     column![Space::new().height(TOP_BAR - 4.0), positioned].into()
 }
 
-fn card_menu_layer(app: &App) -> El<'_> {
-    let Some(CardMenu {
-        list,
-        index,
-        at,
-        context,
-        ..
-    }) = app.card_menu.clone()
-    else {
-        return Space::new().into();
-    };
-    let video = app.list(list).get(index);
-    let saved = video.is_some_and(|v| library().is_saved(&v.id));
-    let on_that_channel =
-        |id: &str| matches!(app.top().map(|p| &p.body), Some(Body::Channel(c)) if c.id == id);
-    let has_channel = video
-        .and_then(|v| v.channel_id.as_deref())
-        .is_some_and(|id| !on_that_channel(id));
-    let row_btn = |i: Icon, label: &'static str, msg: Message| -> El<'_> {
+fn menu_row<'a>(i: Icon, label: &'static str, message: Message) -> El<'a> {
+    action(
         button(
             row![icon(i, 24.0, t::TEXT), txt(label, t::BODY)]
                 .spacing(16)
@@ -469,75 +498,286 @@ fn card_menu_layer(app: &App) -> El<'_> {
         )
         .width(Fill)
         .height(36)
-        .padding(Padding {
-            top: 6.0,
-            bottom: 6.0,
-            left: 16.0,
-            right: 16.0,
-        })
+        .padding([6, 16])
         .style(t::menu_row(false))
-        .on_press(msg)
-        .into()
+        .on_press(message.clone()),
+        "menu_item",
+        label,
+        message,
+    )
+}
+
+fn context_menu_layer(app: &App) -> El<'_> {
+    let (at, context, items) = if let Some(at) = app.player_context {
+        (
+            at,
+            true,
+            vec![
+                menu_row(
+                    if app.play.looping {
+                        Icon::Check
+                    } else {
+                        Icon::Replay
+                    },
+                    "Loop",
+                    Message::Loop,
+                ),
+                menu_row(Icon::Share, "Copy video URL", Message::CopyVideoUrl(false)),
+                menu_row(
+                    Icon::Schedule,
+                    "Copy video URL at current time",
+                    Message::CopyVideoUrl(true),
+                ),
+                menu_row(Icon::Tune, "Stats for nerds", Message::Stats(true)),
+            ],
+        )
+    } else if let Some(CardMenu {
+        list,
+        index,
+        hash,
+        at,
+        context,
+    }) = app.card_menu
+    {
+        let Some(video) = app.list(list).get(index).filter(|v| id_hash(&v.id) == hash) else {
+            return Space::new().into();
+        };
+        let saved = library().is_saved(&video.id);
+        let mut items = vec![
+            menu_row(Icon::PlayArrow, "Play", Message::CardPlay),
+            menu_row(Icon::VideoLibrary, "Add to queue", Message::QueueAdd),
+            menu_row(
+                if saved { Icon::Check } else { Icon::Schedule },
+                if saved {
+                    "Remove from Watch later"
+                } else {
+                    "Save to Watch later"
+                },
+                Message::CardSaveLater,
+            ),
+            menu_row(Icon::Share, "Share", Message::CardCopyLink),
+        ];
+        if video.channel_id.is_some() {
+            items.push(menu_row(
+                Icon::VideoLibrary,
+                "Go to channel",
+                Message::CardOpenChannel,
+            ));
+        }
+        if !matches!(
+            app.top().map(|p| &p.body),
+            Some(Body::History(_) | Body::Later(_))
+        ) {
+            items.push(menu_row(
+                Icon::Close,
+                "Not interested",
+                Message::CardNotInterested,
+            ));
+        }
+        if video.channel_id.is_some()
+            && !matches!(
+                app.top().map(|p| &p.body),
+                Some(Body::Channel(_) | Body::History(_) | Body::Later(_))
+            )
+        {
+            items.push(menu_row(
+                Icon::Close,
+                "Don’t recommend channel",
+                Message::CardHideChannel,
+            ));
+        }
+        (at, context, items)
+    } else {
+        return Space::new().into();
     };
-    let mut items = vec![
-        row_btn(
-            if saved { Icon::Check } else { Icon::Schedule },
-            if saved {
-                "Remove from Watch later"
-            } else {
-                "Add to Watch later"
-            },
-            Message::CardSaveLater,
-        ),
-        row_btn(Icon::Share, "Copy link", Message::CardCopyLink),
-    ];
-    if has_channel {
-        items.push(row_btn(
-            Icon::VideoLibrary,
-            "Open channel",
-            Message::CardOpenChannel,
-        ));
-    }
-    if !matches!(
-        app.top().map(|p| &p.body),
-        Some(Body::History(_) | Body::Later(_))
-    ) {
-        items.push(row_btn(
-            Icon::Close,
-            "Not interested",
-            Message::CardNotInterested,
-        ));
-    }
-    let (mw, mh) = (260.0, items.len() as f32 * 36.0 + 16.0);
+    let (mw, mh) = (310.0, items.len() as f32 * 36.0 + 16.0);
     let menu = container(column(items))
         .style(t::menu)
-        .padding(Padding {
-            top: 8.0,
-            bottom: 8.0,
-            left: 0.0,
-            right: 0.0,
-        })
+        .padding([8, 0])
         .width(mw);
-    // At the pointer for a right-click, to the left of the "⋮" button otherwise; flipped and
-    // clamped so the whole menu stays in the window.
     let (w, h) = (app.win.width, app.win.height);
-    let mut x = if context { at.x } else { at.x - mw };
-    if x + mw > w - 8.0 {
-        x = at.x - mw;
+    let preferred_x = if context { at.x } else { at.x - mw };
+    let preferred_y = if context { at.y } else { at.y + 8.0 };
+    let x = if preferred_x + mw > w - 8.0 {
+        at.x - mw
+    } else {
+        preferred_x
+    };
+    let y = if preferred_y + mh > h - 8.0 {
+        at.y - mh
+    } else {
+        preferred_y
+    };
+    let menu = pin(iced::widget::opaque(menu))
+        .x(x.clamp(8.0, (w - mw - 8.0).max(8.0)))
+        .y(y.clamp(8.0, (h - mh - 8.0).max(8.0)));
+    stack![dismiss_layer(Message::ContextClose, false), menu]
+        .width(Fill)
+        .height(Fill)
+        .into()
+}
+
+fn dismiss_layer(message: Message, dim: bool) -> El<'static> {
+    let background =
+        container(Space::new().width(Fill).height(Fill)).style(move |_: &Theme| container::Style {
+            background: dim.then_some(Color::from_rgba8(0, 0, 0, 0.56).into()),
+            ..Default::default()
+        });
+    Control::new(
+        mouse_area(background)
+            .on_press(message.clone())
+            .on_right_press(message.clone())
+            .on_middle_press(message.clone())
+            .on_scroll(move |_| message.clone()),
+    )
+    .cover()
+    .element()
+}
+
+fn shortcuts_layer(app: &App) -> El<'_> {
+    if !app.shortcuts {
+        return Space::new().into();
     }
-    let mut y = if context { at.y } else { at.y + 8.0 };
-    if y + mh > h - 8.0 {
-        y = at.y - mh;
-    }
-    let x = x.clamp(8.0, (w - mw - 8.0).max(8.0));
-    let y = y.clamp(8.0, (h - mh - 8.0).max(8.0));
+    let definitions = [
+        ("Search", "/"),
+        ("Back / Forward", "Alt + ← / Alt + →"),
+        ("Move keyboard focus", "Tab / Shift + Tab"),
+        ("Play / Pause", "K / Space"),
+        ("Seek backward / forward", "J / L or ← / →"),
+        ("Jump to 0–90%", "0–9"),
+        ("Volume", "↑ / ↓"),
+        ("Mute", "M"),
+        ("Theatre / Fullscreen", "T / F"),
+        ("Close menu or exit fullscreen", "Esc"),
+    ];
+    let close = action(
+        button(icon(Icon::Close, 24.0, t::TEXT))
+            .padding(8)
+            .style(t::icon_button)
+            .on_press(Message::Shortcuts(false)),
+        "menu_item",
+        "Close",
+        Message::Shortcuts(false),
+    );
+    let header = row![
+        txt("Keyboard shortcuts", t::HEADING),
+        Space::new().width(Fill),
+        close
+    ]
+    .align_y(Alignment::Center);
+    let rows = column(definitions.into_iter().map(|(label, key)| {
+        row![
+            txt(label, t::BODY),
+            Space::new().width(Fill),
+            txt(key, t::BODY).color(t::TEXT_2)
+        ]
+        .height(30)
+        .align_y(Alignment::Center)
+        .into()
+    }));
+    let rows = Control::new(iced::widget::scrollable(rows))
+        .scroll_scope()
+        .element();
+    let panel = container(column![header, rows].spacing(12))
+        .style(t::menu)
+        .padding(20)
+        .width(440)
+        .max_height((app.win.height - 32.0).max(100.0));
     stack![
-        mouse_area(Space::new().width(Fill).height(Fill))
-            .on_press(Message::CardMenuClose)
-            .on_right_press(Message::CardMenuClose)
-            .on_middle_press(Message::CardMenuClose)
-            .on_scroll(|_| Message::CardMenuClose),
-        pin(menu).x(x).y(y),
+        dismiss_layer(Message::Shortcuts(false), true),
+        container(iced::widget::opaque(panel)).center(Fill)
+    ]
+    .width(Fill)
+    .height(Fill)
+    .into()
+}
+
+fn guide_layer(app: &App) -> El<'_> {
+    if !app.guide_is_overlay() {
+        return Space::new().into();
+    }
+    let panel = column![
+        row![
+            icon_button(Icon::Menu, 40.0, Some(Message::Guide)),
+            txt("NativeTube", t::HEADING)
+        ]
+        .spacing(8)
+        .padding([8, 16])
+        .align_y(Alignment::Center),
+        rail(app, true),
+    ];
+    stack![
+        dismiss_layer(Message::Guide, true),
+        iced::widget::opaque(container(panel).width(240).height(Fill).style(t::surface)),
+    ]
+    .width(Fill)
+    .height(Fill)
+    .into()
+}
+
+fn queue_layer(app: &App) -> El<'_> {
+    if !app.queue_open {
+        return Space::new().into();
+    }
+    let close = action(
+        button(icon(Icon::Close, 22.0, t::TEXT))
+            .padding(8)
+            .style(t::icon_button)
+            .on_press(Message::Queue(false)),
+        "menu_item",
+        "Close queue",
+        Message::Queue(false),
+    );
+    let heading =
+        row![txt("Queue", t::HEADING), Space::new().width(Fill), close].align_y(Alignment::Center);
+    let items: El<'_> = if app.queue.is_empty() {
+        txt("Add a video from its menu.", t::BODY)
+            .color(t::TEXT_2)
+            .into()
+    } else {
+        Control::new(
+            iced::widget::scrollable(column(app.queue.iter().map(|video| {
+                let play = Message::QueuePlay(video.id.clone());
+                let remove = Message::QueueRemove(video.id.clone());
+                row![
+                    action(
+                        button(clamp(video.title.as_str(), t::BODY, 2))
+                            .width(Fill)
+                            .height(52)
+                            .padding(8)
+                            .style(t::menu_row(false))
+                            .on_press(play.clone()),
+                        "menu_item",
+                        video.title.as_str(),
+                        play
+                    ),
+                    action(
+                        button(icon(Icon::Close, 20.0, t::TEXT))
+                            .padding(8)
+                            .style(t::icon_button)
+                            .on_press(remove.clone()),
+                        "menu_item",
+                        "Remove from queue",
+                        remove
+                    ),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center)
+                .into()
+            })))
+            .height(Fill),
+        )
+        .scroll_scope()
+        .element()
+    };
+    let panel = container(column![heading, items].spacing(12))
+        .style(t::menu)
+        .padding(20)
+        .width(440)
+        .height((app.win.height - 32.0).min(500.0));
+    stack![
+        dismiss_layer(Message::Queue(false), true),
+        container(iced::widget::opaque(panel)).center(Fill)
     ]
     .width(Fill)
     .height(Fill)
@@ -564,7 +804,7 @@ fn toast_layer(app: &App) -> El<'_> {
         .into()
 }
 
-fn rail(app: &App) -> El<'_> {
+fn rail(app: &App, expanded: bool) -> El<'_> {
     let shown = app.shown_root();
     let entries = [
         (Root::Home, Icon::Home, Icon::HomeFill, "Home"),
@@ -579,43 +819,54 @@ fn rail(app: &App) -> El<'_> {
             Root::WatchLater,
             Icon::Schedule,
             Icon::ScheduleFill,
-            "Watch Later",
+            "Watch later",
         ),
     ];
-    let col = column(entries.into_iter().map(|(r, outline, filled, label)| {
+    let mut col = column![].spacing(if expanded { 4 } else { 0 });
+    for (idx, (r, outline, filled, label)) in entries.into_iter().enumerate() {
+        if expanded && idx == 2 {
+            col = col
+                .push(iced::widget::rule::horizontal(1))
+                .push(container(txt("You", t::BODY_M)).padding([8, 12]));
+        }
         let selected = shown == Some(r);
-        button(
+        let img = icon(if selected { filled } else { outline }, 24.0, t::TEXT);
+        let content: El<'_> = if expanded {
+            row![img, txt(label, t::BODY)]
+                .spacing(24)
+                .align_y(Alignment::Center)
+                .into()
+        } else {
             column![
-                icon(if selected { filled } else { outline }, 24.0, t::TEXT),
+                img,
                 txt(label, t::RAIL_LABEL)
                     .wrapping(Wrapping::None)
                     .align_x(Alignment::Center)
                     .width(Fill)
             ]
             .align_x(Alignment::Center)
-            .spacing(6),
-        )
-        .width(64)
-        .height(74)
-        .padding(Padding {
-            top: 16.0,
-            bottom: 0.0,
-            left: 0.0,
-            right: 0.0,
-        })
-        .style(t::rail_entry)
-        .on_press(Message::Nav(r))
-        .into()
-    }));
+            .spacing(6)
+            .into()
+        };
+        let control = button(content)
+            .width(if expanded { 216 } else { 64 })
+            .height(if expanded { 40 } else { 74 })
+            .padding(if expanded {
+                Padding::from([8, 12])
+            } else {
+                Padding {
+                    top: 16.0,
+                    ..Padding::ZERO
+                }
+            })
+            .style(t::menu_row(selected))
+            .on_press(Message::Nav(r));
+        col = col.push(action(control, "rail", label, Message::Nav(r)));
+    }
     container(col)
-        .width(RAIL)
+        .width(if expanded { 240.0 } else { RAIL })
         .height(Fill)
-        .padding(Padding {
-            top: 4.0,
-            bottom: 0.0,
-            left: 4.0,
-            right: 4.0,
-        })
+        .padding(if expanded { 12 } else { 4 })
         .into()
 }
 
@@ -625,7 +876,12 @@ fn page(app: &App) -> El<'_> {
     let Some(p) = app.top() else {
         return Space::new().into();
     };
-    let rail_w = if rail_shown(app) { RAIL } else { 0.0 };
+    let model = if app.fullscreen {
+        &app.fullscreen_scroll
+    } else {
+        &p.scroll
+    };
+    let rail_w = rail_width(app);
     let body_w = (app.win.width - rail_w).max(100.0);
     let top = if app.fullscreen { 0.0 } else { TOP_BAR };
     let chips = matches!(p.body, Body::Home(_));
@@ -635,40 +891,65 @@ fn page(app: &App) -> El<'_> {
         h: app.win.height,
         body_w,
         vh,
-        offset: p.scroll.mark_built(),
+        offset: model.mark_built(),
         pad: if app.win.width < 600.0 { 16.0 } else { 24.0 },
     };
-    let model = &p.scroll;
     let mut on_key: Option<crate::scroller::KeyHandler<'_, Message>> = None;
     let lanes = match &p.body {
         Body::Home(h) => {
             let mut l = LaneB::new(model, 0, g.pad, g.body_w - 2.0 * g.pad, &g, 12.0);
+            if let Some(last) = &app.resume_offer {
+                l.item(K_HEAD, 5, 68.0, || {
+                    let title = if last.title.is_empty() {
+                        "Last video"
+                    } else {
+                        &last.title
+                    };
+                    let label = row![
+                        icon(Icon::PlayArrow, 20.0, t::TEXT),
+                        txt("Continue watching", t::BODY_M),
+                        clamp(title, t::BODY, 1).color(t::TEXT_2),
+                        txt(nt_core::format::clock(last.position), t::META_S).color(t::TEXT_2),
+                    ]
+                    .spacing(12)
+                    .align_y(Alignment::Center);
+                    let control = button(label)
+                        .width(Fill)
+                        .height(48)
+                        .padding([8, 14])
+                        .style(t::pill)
+                        .on_press(Message::ResumeLast);
+                    column![
+                        action(control, "resume", title, Message::ResumeLast),
+                        Space::new().height(20)
+                    ]
+                    .into()
+                });
+            }
             feed_grid(app, &mut l, &h.load, &h.feed, &g, true, None);
             vec![l.finish()]
         }
         Body::Search(s) => {
             let (x, w) = centered(&g, 1096.0);
             let mut l = LaneB::new(model, 0, x, w, &g, 16.0);
+            if !s.chips.is_empty() || !s.filters.is_empty() {
+                l.item(K_HEAD, 3, 56.0, || search_chips(s));
+            }
+            let previous =
+                !s.feed.items.is_empty() || !s.moments.items.is_empty() || !s.entries.is_empty();
             match &s.load {
-                Load::Ready if s.feed.items.is_empty() => l.item(K_STATUS, 0, g.vh - 40.0, || {
-                    empty_state(
-                        Icon::Search,
-                        "No results found",
-                        format!("Try different keywords than \u{201c}{}\u{201d}.", s.query),
-                        None,
-                        g.vh - 40.0,
-                    )
-                }),
-                Load::Ready => {
-                    let terms: Vec<String> = s
-                        .query
-                        .split_whitespace()
-                        .map(|t| t.to_lowercase())
-                        .collect();
-                    list_rows(app, &mut l, &s.feed.items, w, Some(terms));
-                    trailer(&mut l, &s.feed, w, false);
+                Load::Ready => search_body(app, &mut l, s, w, &g),
+                Load::Loading if previous => {
+                    l.item(K_STATUS, 3, 40.0, || loading_row(40.0));
+                    search_body(app, &mut l, s, w, &g);
                 }
                 Load::Loading => skeleton_list(&mut l, w),
+                Load::Failed(e) if previous => {
+                    l.item(K_STATUS, 3, 84.0, || {
+                        retry_row("Couldn't load filtered results", e, Message::Retry)
+                    });
+                    search_body(app, &mut l, s, w, &g);
+                }
                 Load::Failed(e) => error_item(&mut l, e, Message::Retry, g.vh - 40.0),
             }
             vec![l.finish()]
@@ -760,7 +1041,7 @@ fn page(app: &App) -> El<'_> {
                     )
                 });
             } else {
-                list_rows(app, &mut l, items, w, None);
+                list_rows(app, &mut l, items, ListRef::Main, w, None);
             }
             vec![l.finish()]
         }
@@ -771,8 +1052,17 @@ fn page(app: &App) -> El<'_> {
     };
     let scroller = Scroller::new(model, lanes, Message::ScrollMoved)
         .on_key(on_key)
-        .keys_enabled(!app.search_focused)
-        .scale(app.scale);
+        .keys_enabled(
+            !app.search_focused
+                && !app.shortcuts
+                && !app.search_filters
+                && !app.queue_open
+                && app.card_menu.is_none()
+                && app.player_context.is_none()
+                && !app.guide_is_overlay(),
+        )
+        .scale(app.scale)
+        .bottom(if app.fullscreen { 0.0 } else { 24.0 });
     match &p.body {
         Body::Home(h) => column![
             container(chips_row(h)).padding(Padding {
@@ -786,6 +1076,287 @@ fn page(app: &App) -> El<'_> {
         .into(),
         _ => scroller.into(),
     }
+}
+
+fn search_chips(search: &Search) -> El<'_> {
+    let chips = search
+        .chips
+        .iter()
+        .map(|option| search_option(search, option));
+    let filters = (!search.filters.is_empty()).then(|| {
+        action(
+            button(
+                row![icon(Icon::Tune, 18.0, t::TEXT), txt("Filters", t::BODY_M)]
+                    .spacing(8)
+                    .align_y(Alignment::Center),
+            )
+            .height(32)
+            .padding([4, 12])
+            .style(t::chip(false))
+            .on_press(Message::SearchFilters(true)),
+            "filters",
+            "Filters",
+            Message::SearchFilters(true),
+        )
+    });
+    let controls = row(filters.into_iter().chain(chips))
+        .spacing(8)
+        .align_y(Alignment::Center);
+    container(iced::widget::scrollable(controls).direction(
+        iced::widget::scrollable::Direction::Horizontal(
+            iced::widget::scrollable::Scrollbar::hidden(),
+        ),
+    ))
+    .height(56)
+    .align_y(Alignment::Center)
+    .into()
+}
+
+fn search_option<'a>(search: &Search, option: &'a nt_core::SearchOption) -> El<'a> {
+    let selected = (option.selected && search.filter != nt_core::SearchFilter::Transcripts)
+        || option.filter.as_ref() == Some(&search.filter);
+    let msg = option.filter.clone().map(Message::ApplySearchFilter);
+    let control = button(txt(option.label.as_str(), t::BODY_M))
+        .height(32)
+        .padding([4, 12])
+        .style(t::chip(selected))
+        .on_press_maybe(msg.clone());
+    match msg {
+        Some(msg) => action(control, "chip", option.label.as_str(), msg),
+        None => control.into(),
+    }
+}
+
+fn search_filters_layer(app: &App) -> El<'_> {
+    let Some(Body::Search(s)) = app.top().map(|p| &p.body).filter(|_| app.search_filters) else {
+        return Space::new().into();
+    };
+    let close = action(
+        button(icon(Icon::Close, 24.0, t::TEXT))
+            .padding(8)
+            .style(t::icon_button)
+            .on_press(Message::SearchFilters(false)),
+        "menu_item",
+        "Close filters",
+        Message::SearchFilters(false),
+    );
+    let header = row![
+        txt("Search filters", t::HEADING),
+        Space::new().width(Fill),
+        close
+    ]
+    .align_y(Alignment::Center);
+    let group_list = column(s.filters.iter().map(|group| {
+        let options = row(group.options.iter().map(|option| search_option(s, option)))
+            .spacing(6)
+            .wrap()
+            .vertical_spacing(6);
+        column![txt(group.title.as_str(), t::BODY_M), options]
+            .spacing(8)
+            .into()
+    }))
+    .spacing(16);
+    let list = Control::new(iced::widget::scrollable(group_list).height(Fill))
+        .scroll_scope()
+        .element();
+    let panel = container(column![header, list].spacing(12))
+        .style(t::menu)
+        .padding(20)
+        .width((app.win.width - 32.0).min(660.0))
+        .height((app.win.height - 32.0).min(500.0));
+    stack![
+        dismiss_layer(Message::SearchFilters(false), true),
+        container(iced::widget::opaque(panel)).center(Fill)
+    ]
+    .width(Fill)
+    .height(Fill)
+    .into()
+}
+
+/// A search page: YouTube's notices, the video results, then the transcript matches. Never
+/// blank: with nothing at all it says so in YouTube's words.
+fn search_body<'a>(app: &'a App, l: &mut LaneB<'a>, s: &'a Search, w: f32, g: &Geo) {
+    let nothing = s.feed.items.is_empty() && s.entries.is_empty() && s.moments.items.is_empty();
+    let mut no_results = nothing;
+    for (i, n) in s.notices.iter().enumerate() {
+        match n {
+            SearchNotice::NoResults => no_results = true,
+            SearchNotice::AgeGated { title, body } => {
+                l.item(K_NOTICE, i, 120.0, move || {
+                    container(
+                        column![
+                            txt(title.as_str(), t::CARD_TITLE).color(t::TEXT),
+                            txt(body.as_str(), t::BODY).color(t::TEXT_2),
+                        ]
+                        .spacing(8),
+                    )
+                    .width(Fill)
+                    .padding(16)
+                    .style(t::fill_box(t::R_THUMB))
+                    .into()
+                });
+                l.item(K_NOTICE, s.notices.len() + i, 16.0, || {
+                    Space::new().height(16).into()
+                });
+            }
+            SearchNotice::Corrected { showing, original } => {
+                l.item(K_NOTICE, i, 64.0, move || {
+                    column![
+                        rich(
+                            vec![
+                                seg("Showing results for "),
+                                seg(showing.as_str()).font(t::BOLD).color(t::TEXT),
+                            ],
+                            t::SEARCH_TITLE,
+                            1
+                        )
+                        .color(t::TEXT),
+                        row![
+                            txt("Search instead for ", t::BODY).color(t::TEXT_2),
+                            search_link(original.as_str()),
+                        ],
+                    ]
+                    .spacing(4)
+                    .height(64)
+                    .into()
+                });
+            }
+            SearchNotice::DidYouMean { suggestion } => {
+                l.item(K_NOTICE, i, 40.0, move || {
+                    row![
+                        txt("Did you mean: ", t::SEARCH_TITLE).color(t::TEXT),
+                        search_link(suggestion.as_str()),
+                    ]
+                    .align_y(Alignment::Center)
+                    .height(40)
+                    .into()
+                });
+            }
+        }
+    }
+    let terms: Vec<String> = s
+        .query
+        .split_whitespace()
+        .map(|t| t.to_lowercase())
+        .collect();
+    if !s.entries.is_empty() {
+        mixed_results(app, l, s, w, &terms);
+        trailer(l, &s.feed, w, false);
+    } else if !s.feed.items.is_empty() {
+        list_rows(app, l, &s.feed.items, ListRef::Main, w, Some(terms));
+        trailer(l, &s.feed, w, false);
+    } else if no_results && s.moments.items.is_empty() {
+        let h = (g.vh - 40.0 - l.y).max(300.0);
+        l.item(K_STATUS, 0, h, move || {
+            empty_state(
+                Icon::Search,
+                "No results found",
+                "Try different keywords or remove search filters".to_string(),
+                None,
+                h,
+            )
+        });
+    }
+    if !s.moments.items.is_empty() {
+        l.item(K_HEAD, 1, 52.0, || {
+            section("Matches in video transcripts \u{b7} search.pronsh.dev")
+        });
+        list_rows(app, l, &s.moments.items, ListRef::Moments, w, None);
+        trailer(l, &s.moments, w, false);
+    }
+}
+
+fn mixed_results<'a>(
+    app: &'a App,
+    l: &mut LaneB<'a>,
+    search: &'a Search,
+    width: f32,
+    terms: &[String],
+) {
+    let (tw, th) = list_geom(width);
+    for (index, entry) in search.entries.iter().enumerate() {
+        match entry {
+            SearchEntry::Video(i) => {
+                if let Some(video) = search.feed.items.get(*i) {
+                    l.item(K_MIXED, index, th + 16.0, || {
+                        column![
+                            list_row(app, video, *i, ListRef::Main, tw, th, Some(terms)),
+                            Space::new().height(16)
+                        ]
+                        .height(th + 16.0)
+                        .into()
+                    });
+                }
+            }
+            SearchEntry::Channel(channel) => l.item(K_MIXED, index, 146.0, || {
+                let record = &channel.channel;
+                let img = thumb(
+                    record
+                        .avatar
+                        .as_ref()
+                        .and_then(|u| app.images.get(u, 104.0 * app.scale)),
+                    104.0,
+                    104.0,
+                    52.0,
+                );
+                let label = row![txt(record.name.as_str(), t::SEARCH_TITLE)]
+                    .spacing(6)
+                    .align_y(Alignment::Center);
+                let label = if channel.verified {
+                    label.push(icon(Icon::Check, 16.0, t::TEXT_2))
+                } else {
+                    label
+                };
+                let meta = [channel.handle.as_deref(), record.subscribers.as_deref()]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>()
+                    .join(" · ");
+                let msg = Message::OpenChannel(record.clone());
+                let control = button(
+                    row![
+                        container(img).width(tw).center_x(tw),
+                        column![label, txt(meta, t::BODY).color(t::TEXT_2)].spacing(8),
+                    ]
+                    .spacing(16)
+                    .align_y(Alignment::Center),
+                )
+                .width(Fill)
+                .height(130)
+                .padding(0)
+                .style(t::card)
+                .on_press(msg.clone());
+                column![
+                    action(control, "channel", record.name.as_str(), msg),
+                    Space::new().height(16)
+                ]
+                .into()
+            }),
+            SearchEntry::Playlist(playlist) => l.item(K_MIXED, index, th + 16.0, || {
+                column![
+                    playlist_card(app, playlist, tw, th),
+                    Space::new().height(16)
+                ]
+                .into()
+            }),
+            SearchEntry::Shelf(title) => l.item(K_MIXED, index, 52.0, || section(title)),
+        }
+    }
+}
+
+fn search_link(q: &str) -> El<'_> {
+    button(
+        txt(q, t::SEARCH_TITLE)
+            .font(iced::Font {
+                style: iced::font::Style::Italic,
+                ..t::MEDIUM
+            })
+            .color(t::LINK),
+    )
+    .padding(0)
+    .style(t::bare)
+    .on_press(Message::DescLink(crate::app::Link::Search(q.to_string())))
+    .into()
 }
 
 /// Centered content of at most `max` px: (x, width).
@@ -862,7 +1433,7 @@ fn error_item(l: &mut LaneB<'_>, msg: &str, retry: Message, height: f32) {
     l.item(K_STATUS, 1, h, move || error_box(&msg, retry, h));
 }
 
-fn trailer(l: &mut LaneB<'_>, feed: &Feed, width: f32, grid: bool) {
+fn trailer<'a>(l: &mut LaneB<'a>, feed: &'a Feed, width: f32, grid: bool) {
     match &feed.more {
         Some(More::Loading) => {
             if grid {
@@ -879,32 +1450,34 @@ fn trailer(l: &mut LaneB<'_>, feed: &Feed, width: f32, grid: bool) {
                 l.item(K_TRAIL, 0, th + 16.0, move || skeleton_row(tw, th));
             }
         }
-        Some(More::Failed(e)) => {
-            let e = e.clone();
-            l.item(K_TRAIL, 1, 300.0, move || {
-                error_box(&e, Message::RetryMore, 300.0)
-            })
-        }
+        Some(More::Failed(e)) => l.item(K_TRAIL, 1, 84.0, || {
+            retry_row("Couldn't load more", e, Message::RetryMore)
+        }),
         _ => {}
     }
 }
 
 fn chips_row(h: &crate::app::Home) -> El<'_> {
-    let chips: Vec<El<'_>> = TOPICS
-        .iter()
+    let labels: Vec<_> = if h.chips.is_empty() {
+        TOPICS.iter().map(|topic| topic.title).collect()
+    } else {
+        h.chips.iter().map(|chip| chip.label.as_str()).collect()
+    };
+    let chips = labels
+        .into_iter()
         .enumerate()
-        .map(|(i, topic)| {
-            button(txt(topic.title, t::BODY_M))
-                .padding(Padding {
-                    top: 6.0,
-                    bottom: 6.0,
-                    left: 12.0,
-                    right: 12.0,
-                })
-                .height(32)
-                .style(t::chip(i == h.topic))
-                .on_press(Message::Topic(i))
-                .into()
+        .map(|(i, title)| {
+            let msg = Message::Topic(i);
+            action(
+                button(txt(title, t::BODY_M))
+                    .padding([6, 12])
+                    .height(32)
+                    .style(t::chip(i == h.topic))
+                    .on_press(msg.clone()),
+                "chip",
+                title,
+                msg,
+            )
         })
         .collect();
     chip_bar(chips, &h.chip_offset).into()
@@ -1058,34 +1631,134 @@ fn avatar<'a>(app: &'a App, v: &'a Video, i: usize, list: ListRef, size: f32) ->
 }
 
 fn channel_name<'a>(v: &'a Video, i: usize, list: ListRef, style: t::Style) -> El<'a> {
-    let name = clamp(v.channel.as_str(), style, 1);
-    match &v.channel_id {
-        Some(_) if !v.channel.is_empty() => button(name)
-            .padding(0)
-            .style(t::link)
-            .on_press(Message::OpenChannelOf(list, i))
-            .into(),
-        _ => container(name.color(t::TEXT_2)).into(),
+    let mut text = row![
+        clamp(v.channel.as_str(), style, 1)
+            .color(t::TEXT_2)
+            .shrink()
+    ]
+    .spacing(4)
+    .align_y(Alignment::Center);
+    if v.channel_verified {
+        text = text.push(icon(Icon::Check, 14.0, t::TEXT_2));
     }
+    if v.channel_id.is_some() && !v.channel.is_empty() {
+        let msg = Message::OpenChannelOf(list, i);
+        action(
+            button(text).padding(0).style(t::link).on_press(msg.clone()),
+            "channel",
+            v.channel.as_str(),
+            msg,
+        )
+    } else {
+        text.into()
+    }
+}
+
+fn card_meta(video: &Video) -> String {
+    video
+        .upcoming
+        .as_ref()
+        .cloned()
+        .unwrap_or_else(|| video.meta_line())
+}
+
+fn badges<'a>(video: &'a Video) -> impl Iterator<Item = El<'a>> {
+    video
+        .badges
+        .iter()
+        .filter(|s| !s.eq_ignore_ascii_case("live"))
+        .map(|s| {
+            container(txt(s.as_str(), t::META_S).color(t::TEXT_2))
+                .style(t::fill_box(3.0))
+                .padding([0, 4])
+                .into()
+        })
 }
 
 /// Right-click anywhere on a card or row opens its menu at the pointer (captured, so nothing
 /// under the pointer reacts).
-fn context_menu<'a>(content: impl Into<El<'a>>, list: ListRef, i: usize) -> El<'a> {
-    mouse_area(content)
-        .on_right_press(Message::CardContext(list, i))
+fn card_interaction<'a>(
+    app: &'a App,
+    base: impl Into<El<'a>>,
+    menu: impl Into<El<'a>>,
+    address: (ListRef, usize),
+    video: &'a Video,
+    kind: &'static str,
+    dimensions: (f32, f32),
+) -> El<'a> {
+    let (list, index) = address;
+    let hash = id_hash(&video.id);
+    let base = Control::new(base)
+        .target(kind, video.title.as_str())
+        .action(Message::Open(list, index, hash))
+        .tint_on_hover()
+        .preload_on_hover(
+            app.can_preload()
+                .then_some(Message::Preload(list, index, hash)),
+        )
+        .preview_on_hover(crate::app::PreviewTarget {
+            page: app.top_id(),
+            list,
+            index,
+            hash,
+            width: (dimensions.0 * app.scale).ceil() as u32,
+            height: (dimensions.1 * app.scale).ceil() as u32,
+        })
+        .element();
+    mouse_area(hover(base, menu))
+        .on_right_press(Message::CardContext(list, index))
         .into()
 }
 
-/// The "⋮" button shown over a card or row while it is hovered.
 fn more_button<'a>(list: ListRef, i: usize) -> El<'a> {
-    button(container(icon(Icon::MoreVert, 24.0, t::TEXT)).center(Fill))
-        .width(40)
-        .height(40)
-        .padding(0)
-        .style(t::icon_button)
-        .on_press(Message::CardMenu(list, i))
-        .into()
+    let message = Message::CardMenu(list, i);
+    action(
+        button(container(icon(Icon::MoreVert, 24.0, t::TEXT)).center(Fill))
+            .width(40)
+            .height(40)
+            .padding(0)
+            .style(t::icon_button)
+            .on_press(message.clone()),
+        "more",
+        "More actions",
+        message,
+    )
+}
+
+fn preview_thumbnail<'a>(
+    app: &'a App,
+    poster: impl Into<El<'a>>,
+    video: &Video,
+    list: ListRef,
+    index: usize,
+    size: (f32, f32),
+    radius: f32,
+) -> El<'a> {
+    let Some(frame) = app.preview_frame.as_ref().filter(|_| {
+        app.preview.is_some_and(|target| {
+            target.page == app.top_id()
+                && target.list == list
+                && target.index == index
+                && target.hash == id_hash(&video.id)
+        })
+    }) else {
+        return poster.into();
+    };
+    let poster: El<'_> = poster.into();
+    stack![
+        poster,
+        shader(crate::video::VideoProgram::<true> {
+            frame: Some(frame.clone()),
+            radius: radius * app.scale,
+            first_frame: None,
+            playback_mark: None,
+        })
+        .width(size.0)
+        .height(size.1),
+    ]
+    .width(size.0)
+    .height(size.1)
+    .into()
 }
 
 fn card<'a>(
@@ -1106,23 +1779,25 @@ fn card<'a>(
     .cover()
     .badge(badge_text(v), v.is_live)
     .progress(app.prefs.progress(&v.id));
-    let hint = Message::Preload(list, i, id_hash(&v.id));
-    let img = press_hint(img, hint.clone());
-    let mut text_col = column![press_hint(
-        clamp(v.title.as_str(), t::CARD_TITLE, 2).color(t::TEXT),
-        hint
-    )]
-    .width(Fill)
-    .padding(Padding {
-        right: 24.0,
-        ..Padding::ZERO
-    });
+    let img = preview_thumbnail(app, img, v, list, i, (w, th), t::R_THUMB);
+    let img = press_hint(img, Message::Preload(list, i, id_hash(&v.id)));
+    let mut text_col = column![clamp(v.title.as_str(), t::CARD_TITLE, 2).color(t::TEXT)]
+        .width(Fill)
+        .padding(Padding {
+            right: 24.0,
+            ..Padding::ZERO
+        });
     if with_channel && !v.channel.is_empty() {
         text_col = text_col
             .push(Space::new().height(4))
             .push(channel_name(v, i, list, t::BODY));
     }
-    text_col = text_col.push(clamp(v.meta_line(), t::BODY, 1).color(t::TEXT_2));
+    text_col = text_col.push(
+        row![clamp(card_meta(v), t::BODY, 1).color(t::TEXT_2).shrink()]
+            .extend(badges(v))
+            .spacing(4)
+            .align_y(Alignment::Center),
+    );
     let mut info = row![].spacing(12);
     if with_channel && let Some(a) = avatar(app, v, i, list, 36.0) {
         info = info.push(a);
@@ -1138,7 +1813,7 @@ fn card<'a>(
         row![Space::new().width(Fill), more_button(list, i)]
     ]
     .width(w);
-    context_menu(hover(base, menu), list, i)
+    card_interaction(app, base, menu, (list, i), v, "card", (w, th))
 }
 
 /// Search-style rows: thumbnail clamp(240, 40% of the content, 500) wide, 16:9.
@@ -1154,12 +1829,18 @@ fn list_rows<'a>(
     app: &'a App,
     l: &mut LaneB<'a>,
     items: &'a [Video],
+    list: ListRef,
     content_w: f32,
     terms: Option<Vec<String>>,
 ) {
     let (tw, th) = list_geom(content_w);
-    l.rows(K_ROW, items.len(), th + 16.0, |i| match items.get(i) {
-        Some(v) => list_row(app, v, i, ListRef::Main, tw, th, terms.as_deref()),
+    let kind = if list == ListRef::Moments {
+        K_MOMENT
+    } else {
+        K_ROW
+    };
+    l.rows(kind, items.len(), th + 16.0, |i| match items.get(i) {
+        Some(v) => list_row(app, v, i, list, tw, th, terms.as_deref()),
         None => Space::new().into(),
     });
 }
@@ -1182,19 +1863,16 @@ fn list_row<'a>(
     .cover()
     .badge(badge_text(v), v.is_live)
     .progress(app.prefs.progress(&v.id));
+    let img = preview_thumbnail(app, img, v, list, i, (tw, th), t::R_THUMB);
+    let img = press_hint(img, Message::Preload(list, i, id_hash(&v.id)));
     let mut chan = row![].spacing(8).align_y(Alignment::Center);
     if let Some(a) = avatar(app, v, i, list, 24.0) {
         chan = chan.push(a);
     }
     chan = chan.push(channel_name(v, i, list, t::META_S));
-    let hint = Message::Preload(list, i, id_hash(&v.id));
-    let img = press_hint(img, hint.clone());
     let mut col = column![
-        press_hint(
-            clamp(v.title.as_str(), t::SEARCH_TITLE, 2).color(t::TEXT),
-            hint
-        ),
-        clamp(v.meta_line(), t::META_S, 1).color(t::TEXT_2),
+        clamp(v.title.as_str(), t::SEARCH_TITLE, 2).color(t::TEXT),
+        clamp(card_meta(v), t::META_S, 1).color(t::TEXT_2),
         container(chan).padding(Padding {
             top: 12.0,
             bottom: 12.0,
@@ -1206,7 +1884,35 @@ fn list_row<'a>(
         right: 32.0,
         ..Padding::ZERO
     });
-    if let Some(s) = v.snippet.as_deref().filter(|s| !s.is_empty()) {
+    if v.badges
+        .iter()
+        .any(|badge| !badge.eq_ignore_ascii_case("live"))
+    {
+        col = col.push(row(badges(v)).spacing(4));
+    }
+    if let Some(m) = &v.moment {
+        // "▶ 9:52" and the matching transcript line, its matched words bold and bright.
+        let chip = container(
+            row![
+                icon(Icon::PlayArrow, 16.0, t::TEXT),
+                txt(m.label.as_str(), t::META_S_M).color(t::TEXT)
+            ]
+            .spacing(2)
+            .align_y(Alignment::Center),
+        )
+        .padding(Padding {
+            top: 1.0,
+            bottom: 1.0,
+            left: 4.0,
+            right: 6.0,
+        })
+        .style(t::fill_box(4.0));
+        col = col.push(
+            row![chip, rich(moment_segs(m), t::META_S, 2).color(t::TEXT_2)]
+                .spacing(8)
+                .align_y(Alignment::Start),
+        );
+    } else if let Some(s) = v.snippet.as_deref().filter(|s| !s.is_empty()) {
         let segs = match terms {
             Some(terms) => highlight(s, terms, t::MEDIUM, t::TEXT),
             None => vec![seg(s)],
@@ -1220,7 +1926,42 @@ fn list_row<'a>(
         .style(t::card)
         .on_press(Message::Open(list, i, id_hash(&v.id)));
     let menu = row![Space::new().width(Fill), more_button(list, i)];
-    context_menu(hover(base, menu), list, i)
+    card_interaction(app, base, menu, (list, i), v, "row", (tw, th))
+}
+
+/// A transcript snippet split at its highlight ranges (UTF-8 byte offsets).
+fn moment_segs(m: &nt_core::Moment) -> Vec<Seg<'_>> {
+    let text = m.snippet.as_str();
+    let mut ranges: Vec<std::ops::Range<usize>> = m
+        .highlights
+        .iter()
+        .filter(|r| {
+            r.start < r.end
+                && r.end <= text.len()
+                && text.is_char_boundary(r.start)
+                && text.is_char_boundary(r.end)
+        })
+        .cloned()
+        .collect();
+    ranges.sort_by_key(|r| r.start);
+    let mut segs = Vec::new();
+    let mut at = 0;
+    for r in ranges {
+        if r.start < at {
+            continue;
+        }
+        if let Some(plain) = text.get(at..r.start).filter(|p| !p.is_empty()) {
+            segs.push(seg(plain));
+        }
+        if let Some(hit) = text.get(r.clone()) {
+            segs.push(seg(hit).font(t::BOLD).color(t::TEXT));
+        }
+        at = r.end;
+    }
+    if let Some(rest) = text.get(at..).filter(|p| !p.is_empty()) {
+        segs.push(seg(rest));
+    }
+    segs
 }
 
 pub fn compact_row<'a>(app: &'a App, v: &'a Video, i: usize) -> El<'a> {
@@ -1233,11 +1974,20 @@ pub fn compact_row<'a>(app: &'a App, v: &'a Video, i: usize) -> El<'a> {
     .cover()
     .badge(badge_text(v), v.is_live)
     .progress(app.prefs.progress(&v.id));
+    let img = preview_thumbnail(
+        app,
+        img,
+        v,
+        ListRef::Related,
+        i,
+        (168.0, 94.0),
+        t::R_COMPACT,
+    );
     let col = column![
         clamp(v.title.as_str(), t::BODY_M, 2).color(t::TEXT),
         Space::new().height(4),
-        clamp(v.channel.as_str(), t::META_S, 1).color(t::TEXT_2),
-        clamp(v.meta_line(), t::META_S, 1).color(t::TEXT_2),
+        channel_name(v, i, ListRef::Related, t::META_S),
+        clamp(card_meta(v), t::META_S, 1).color(t::TEXT_2),
     ]
     .width(Fill)
     .padding(Padding {
@@ -1251,11 +2001,19 @@ pub fn compact_row<'a>(app: &'a App, v: &'a Video, i: usize) -> El<'a> {
         .style(t::card)
         .on_press(Message::Open(ListRef::Related, i, id_hash(&v.id)));
     let menu = row![Space::new().width(Fill), more_button(ListRef::Related, i)].height(40);
-    context_menu(hover(base, column![menu]), ListRef::Related, i)
+    card_interaction(
+        app,
+        base,
+        column![menu],
+        (ListRef::Related, i),
+        v,
+        "related",
+        (168.0, 94.0),
+    )
 }
 
 pub fn subscribe_button<'a>(subscribed: bool) -> El<'a> {
-    if subscribed {
+    let control = if subscribed {
         button(
             row![
                 icon(Icon::Notifications, 24.0, t::TEXT),
@@ -1273,7 +2031,6 @@ pub fn subscribe_button<'a>(subscribed: bool) -> El<'a> {
         })
         .style(t::pill)
         .on_press(Message::ToggleSubscribe)
-        .into()
     } else {
         button(txt("Subscribe", t::BODY_M))
             .height(36)
@@ -1285,8 +2042,17 @@ pub fn subscribe_button<'a>(subscribed: bool) -> El<'a> {
             })
             .style(t::primary)
             .on_press(Message::ToggleSubscribe)
-            .into()
-    }
+    };
+    action(
+        control,
+        "subscribe",
+        if subscribed {
+            "Subscribed"
+        } else {
+            "Subscribe"
+        },
+        Message::ToggleSubscribe,
+    )
 }
 
 fn channel<'a>(
@@ -1311,38 +2077,161 @@ fn channel<'a>(
         l.y += 16.0;
     }
     l.item(K_HEAD, 0, 200.0, || channel_header(app, c, g));
-    l.item(K_TABS, 0, 49.0, || {
+    l.item(K_TABS, 0, 73.0, || channel_tabs(c));
+    if c.tab == nt_core::ChannelTab::Videos
+        && let Some(info) = &c.info
+        && !info.video_sort.is_empty()
+    {
+        l.item(K_TABS, 1, 48.0, || {
+            let choices = info.video_sort.iter().enumerate().map(|(i, chip)| {
+                let msg = Message::ChannelSort(i);
+                let b = button(txt(chip.label.as_str(), t::BODY_M))
+                    .padding([6, 12])
+                    .height(32)
+                    .style(t::chip(c.sort == Some(i)))
+                    .on_press_maybe((chip.next.is_some() || chip.selected).then(|| msg.clone()));
+                if chip.next.is_some() || chip.selected {
+                    action(b, "chip", chip.label.as_str(), msg)
+                } else {
+                    b.into()
+                }
+            });
+            container(row(choices).spacing(8)).height(48).into()
+        });
+    }
+    if c.tab == nt_core::ChannelTab::Playlists && c.load == Load::Ready {
+        if let Some(info) = &c.info {
+            let (cols, card_width) = grid_geom(g.body_w, w);
+            let height = (card_width * 9.0 / 16.0).round();
+            if info.playlists.items.is_empty() {
+                l.item(K_STATUS, 0, 76.0, || section("No playlists"));
+            }
+            l.rows(
+                K_PLAYLIST,
+                info.playlists.items.len().div_ceil(cols),
+                height + 68.0,
+                |i| {
+                    row(info
+                        .playlists
+                        .items
+                        .iter()
+                        .skip(i * cols)
+                        .take(cols)
+                        .map(|list| playlist_card(app, list, card_width, height)))
+                    .spacing(16)
+                    .height(height + 68.0)
+                    .into()
+                },
+            );
+        }
+        match &c.playlists_more {
+            More::Loading => l.item(K_TRAIL, 0, 56.0, || loading_row(56.0)),
+            More::Failed(e) => l.item(K_TRAIL, 1, 76.0, || {
+                retry_row("Couldn't load more playlists", e, Message::RetryMore)
+            }),
+            More::Idle => {}
+        }
+    } else {
+        feed_grid(
+            app,
+            &mut l,
+            &c.load,
+            &c.feed,
+            g,
+            false,
+            Some("This channel has no videos"),
+        );
+    }
+    vec![l.finish()]
+}
+
+fn channel_tabs(channel: &Channel) -> El<'_> {
+    use nt_core::ChannelTab;
+    let fallback = [ChannelTab::Videos];
+    let tabs = channel
+        .info
+        .as_ref()
+        .map(|i| i.tabs.as_slice())
+        .filter(|tabs| !tabs.is_empty())
+        .unwrap_or(&fallback);
+    let buttons = tabs.iter().copied().map(|tab| {
+        let title = match tab {
+            ChannelTab::Home => "Home",
+            ChannelTab::Videos => "Videos",
+            ChannelTab::Live => "Live",
+            ChannelTab::Playlists => "Playlists",
+        };
+        let active = tab == channel.tab;
+        let control = button(txt(title, t::TAB))
+            .height(46)
+            .padding([6, 12])
+            .style(t::menu_row(active))
+            .on_press(Message::ChannelTab(tab));
+        let tab_button = action(control, "tab", title, Message::ChannelTab(tab));
         column![
-            row![
-                column![
-                    container(txt("Videos", t::TAB))
-                        .height(46)
-                        .align_y(Alignment::Center),
-                    container(Space::new())
-                        .width(Fill)
-                        .height(2)
-                        .style(t::underline),
-                ]
-                .width(Length::Shrink)
-            ],
+            tab_button,
             container(Space::new())
+                .height(2)
                 .width(Fill)
-                .height(1)
-                .style(t::divider),
+                .style(move |theme| {
+                    if active {
+                        t::underline(theme)
+                    } else {
+                        container::Style::default()
+                    }
+                })
         ]
+        .width(Length::Shrink)
         .into()
     });
-    l.y += 24.0;
-    feed_grid(
-        app,
-        &mut l,
-        &c.load,
-        &c.feed,
-        g,
-        false,
-        Some("This channel has no videos"),
-    );
-    vec![l.finish()]
+    column![
+        row(buttons).spacing(12),
+        iced::widget::rule::horizontal(1),
+        Space::new().height(20)
+    ]
+    .into()
+}
+
+fn playlist_card<'a>(
+    app: &'a App,
+    list: &'a nt_core::PlaylistRef,
+    width: f32,
+    height: f32,
+) -> El<'a> {
+    let count = list
+        .video_count
+        .as_deref()
+        .map(|n| {
+            if n.to_ascii_lowercase().contains("video") {
+                n.to_string()
+            } else {
+                format!("{n} videos")
+            }
+        })
+        .unwrap_or_else(|| "Playlist".into());
+    let cover = thumb(
+        list.thumbnail
+            .as_ref()
+            .and_then(|u| app.images.get(u, width * app.scale)),
+        width,
+        height,
+        t::R_THUMB,
+    )
+    .cover()
+    .badge(Some(count), false);
+    let msg = Message::OpenPlaylist(list.id.clone());
+    let control = button(
+        column![
+            cover,
+            clamp(list.title.as_str(), t::CARD_TITLE, 2).color(t::TEXT)
+        ]
+        .width(width)
+        .spacing(8),
+    )
+    .padding(0)
+    .style(t::card)
+    .on_press(msg.clone());
+    action(control, "playlist", list.title.as_str(), msg)
 }
 
 fn channel_header<'a>(app: &'a App, c: &'a Channel, g: &Geo) -> El<'a> {
@@ -1372,22 +2261,80 @@ fn channel_header<'a>(app: &'a App, c: &'a Channel, g: &Geo) -> El<'a> {
         size,
         size / 2.0,
     );
-    let mut col = column![txt(name, t::CHANNEL_NAME)].spacing(8).width(Fill);
+    let mut name = row![txt(name, t::CHANNEL_NAME)]
+        .spacing(8)
+        .align_y(Alignment::Center);
+    if c.info.as_ref().is_some_and(|i| i.verified) {
+        name = name.push(icon(Icon::Check, 20.0, t::TEXT_2));
+    }
+    let mut col = column![name].spacing(8).width(Fill);
     if !line.is_empty() {
         col = col.push(clamp(line, t::BODY, 1).color(t::TEXT_2));
     }
-    if !desc.is_empty() {
-        let d = if c.desc_open {
-            clamp(desc, t::BODY, 0)
-                .color(t::TEXT_2)
-                .on_press(Message::ToggleDesc)
+    if c.desc_open {
+        let full = c
+            .about
+            .as_ref()
+            .map(|a| a.description.as_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or(desc);
+        if !full.is_empty() {
+            col = col.push(clamp(full, t::BODY, 0).color(t::TEXT_2));
+        }
+        let links = c
+            .about
+            .as_ref()
+            .map(|a| a.links.as_slice())
+            .or_else(|| c.info.as_ref().map(|i| i.links.as_slice()));
+        for link in links.into_iter().flatten() {
+            let copy = Message::DescLink(crate::app::Link::Url(link.url.clone()));
+            col = col.push(action(
+                button(txt(link.label.as_str(), t::BODY).color(t::LINK))
+                    .padding(0)
+                    .style(t::bare)
+                    .on_press(copy.clone()),
+                "link",
+                link.label.as_str(),
+                copy,
+            ));
+        }
+        match &c.about_load {
+            Load::Loading => col = col.push(loading_row(40.0)),
+            Load::Failed(e) => {
+                col = col.push(retry_row(
+                    "Couldn't load channel details",
+                    e,
+                    Message::ChannelAbout(true),
+                ))
+            }
+            Load::Ready => {}
+        }
+    } else if !desc.is_empty() {
+        col = col.push(clamp(desc, t::BODY, 1).color(t::TEXT_2));
+    }
+    if !desc.is_empty()
+        || c.info
+            .as_ref()
+            .is_some_and(|i| i.about.is_some() || !i.links.is_empty())
+    {
+        let label = if c.desc_open {
+            "Show less"
         } else {
-            clamp(desc, t::BODY, 1)
-                .color(t::TEXT_2)
-                .suffix("…more", t::MEDIUM, t::TEXT)
-                .on_press(Message::ToggleDesc)
+            c.info
+                .as_ref()
+                .and_then(|i| i.links_label.as_deref())
+                .unwrap_or("About")
         };
-        col = col.push(d);
+        let msg = Message::ChannelAbout(!c.desc_open);
+        col = col.push(action(
+            button(txt(label, t::BODY_M).color(t::LINK))
+                .padding(4)
+                .style(t::bare)
+                .on_press(msg.clone()),
+            "more",
+            label,
+            msg,
+        ));
     }
     if c.info.is_some() {
         col = col
@@ -1528,18 +2475,18 @@ fn watch<'a>(
     }
     crate::ext::set_video_visible(playing_here && player_built);
     l.item(K_INFO, 0, 140.0, || player_view::watch_info(app, w, wg.pw));
+    if wg.secondary.is_none() {
+        watch_playlist(app, &mut l, w);
+    }
     match &w.load {
         Load::Ready => {
             if let Some(info) = &w.info {
-                l.item(K_DESC, 0, 150.0, || player_view::description(info, w));
+                w.desc_y.set(l.y);
+                l.item(K_DESC, 0, 150.0, || player_view::description(app, info, w));
             }
-            if wg.secondary.is_none() && !w.related.is_empty() {
+            if wg.secondary.is_none() {
                 l.item(K_RHEAD, 0, 24.0, || Space::new().height(24).into());
-                let related = &w.related;
-                l.rows(K_REL, related.len(), 102.0, |i| match related.get(i) {
-                    Some(v) => compact_row(app, v, i),
-                    None => Space::new().into(),
-                });
+                related_videos(app, &mut l, w);
             }
             comments(app, &mut l, w, wg.pw);
         }
@@ -1566,6 +2513,7 @@ fn watch<'a>(
             g,
             if wg.theatre { top + 24.0 } else { 24.0 },
         );
+        watch_playlist(app, &mut r, w);
         match &w.load {
             Load::Loading => {
                 r.rows(K_SKEL, 6, 102.0, |_| {
@@ -1582,17 +2530,134 @@ fn watch<'a>(
                     .into()
                 });
             }
-            _ => {
-                let related = &w.related;
-                r.rows(K_REL, related.len(), 102.0, |i| match related.get(i) {
-                    Some(v) => compact_row(app, v, i),
-                    None => Space::new().into(),
-                });
-            }
+            _ => related_videos(app, &mut r, w),
         }
         lanes.push(r.finish());
     }
     lanes
+}
+
+fn watch_playlist<'a>(app: &'a App, lane: &mut LaneB<'a>, watch: &'a Watch) {
+    let Some(list) = &watch.playlist else { return };
+    lane.item(K_RHEAD, 3, 56.0, || {
+        let name = if list.is_mix {
+            format!("Mix · {}", list.title)
+        } else {
+            list.title.clone()
+        };
+        container(clamp(name, t::HEADING, 1).color(t::TEXT))
+            .height(56)
+            .align_y(Alignment::Center)
+            .into()
+    });
+    lane.rows(K_PLAYLIST, list.items.len(), 70.0, |index| {
+        let video = &list.items[index];
+        let img = thumb(
+            app.images.get(&video.thumbnail, 112.0 * app.scale),
+            112.0,
+            63.0,
+            t::R_COMPACT,
+        )
+        .cover();
+        let content = row![
+            img,
+            column![
+                clamp(video.title.as_str(), t::BODY_M, 2).color(t::TEXT),
+                clamp(video.channel.as_str(), t::META_S, 1).color(t::TEXT_2),
+            ]
+            .spacing(4)
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center);
+        let msg = Message::PlaylistPlay(index);
+        action(
+            button(content)
+                .width(Fill)
+                .height(68)
+                .padding(2)
+                .style(t::menu_row(list.index == Some(index)))
+                .on_press(msg.clone()),
+            "playlist_video",
+            video.title.as_str(),
+            msg,
+        )
+    });
+    watch.playlist_end.set(lane.y);
+    match &watch.playlist_more {
+        More::Loading => lane.item(K_TRAIL, 8, 56.0, || loading_row(56.0)),
+        More::Failed(e) => lane.item(K_TRAIL, 9, 76.0, || {
+            retry_row(
+                "Couldn't load more playlist videos",
+                e,
+                Message::PlaylistMore,
+            )
+        }),
+        More::Idle => {}
+    }
+}
+
+fn related_videos<'a>(app: &'a App, lane: &mut LaneB<'a>, w: &'a Watch) {
+    if let Some(info) = &w.info
+        && !info.related_chips.is_empty()
+        && !w.related.is_empty()
+    {
+        lane.item(K_RHEAD, 1, t::CHIP_BAR, || {
+            let chips = info
+                .related_chips
+                .iter()
+                .enumerate()
+                .map(|(i, chip)| {
+                    let msg = Message::RelatedChip(i);
+                    let control = button(txt(chip.label.as_str(), t::BODY_M))
+                        .height(32)
+                        .padding([4, 12])
+                        .style(t::chip(w.related_selected == Some(i)))
+                        .on_press(msg.clone());
+                    action(control, "chip", chip.label.as_str(), msg)
+                })
+                .collect();
+            chip_bar(chips, &w.related_chip_offset).into()
+        });
+    }
+    lane.rows(K_REL, w.related.len(), 102.0, |i| {
+        compact_row(app, &w.related[i], i)
+    });
+    w.related_end.set(lane.y);
+    match &w.related_more {
+        More::Idle => {}
+        More::Loading => lane.item(K_TRAIL, 5, 56.0, || loading_row(56.0)),
+        More::Failed(error) => lane.item(K_TRAIL, 6, 76.0, || {
+            retry_row("Couldn't load more videos", error, Message::RelatedMore)
+        }),
+    }
+}
+
+fn loading_row(height: f32) -> El<'static> {
+    container(crate::widgets::spinner(24.0))
+        .width(Fill)
+        .height(height)
+        .center_x(Fill)
+        .into()
+}
+
+fn retry_row<'a>(label: &'static str, message: &'a str, retry: Message) -> El<'a> {
+    let retry_btn = action(
+        button(txt("Retry", t::BODY_M))
+            .padding([6, 12])
+            .style(t::pill)
+            .on_press(retry.clone()),
+        "retry",
+        "Retry",
+        retry,
+    );
+    column![
+        row![txt(label, t::BODY_M), retry_btn]
+            .spacing(12)
+            .align_y(Alignment::Center),
+        clamp(message, t::META_S, 1).color(t::TEXT_2),
+    ]
+    .spacing(4)
+    .into()
 }
 
 fn comments<'a>(app: &'a App, l: &mut LaneB<'a>, w: &'a Watch, width: f32) {
@@ -1602,7 +2667,22 @@ fn comments<'a>(app: &'a App, l: &mut LaneB<'a>, w: &'a Watch, width: f32) {
             Some(n) => format!("{n} Comments"),
             None => "Comments".to_string(),
         };
-        container(txt(label, t::HEADING))
+        let mut head = row![txt(label, t::HEADING)]
+            .spacing(12)
+            .align_y(Alignment::Center);
+        if !w.comments_sort.is_empty() {
+            head = head.push(txt("Sort by", t::BODY_M));
+            for (index, sort) in w.comments_sort.iter().enumerate() {
+                let message = Message::SortComments(index);
+                let button = button(txt(sort.label.as_str(), t::BODY_M))
+                    .height(32)
+                    .padding([4, 12])
+                    .style(t::chip(sort.selected))
+                    .on_press(message.clone());
+                head = head.push(action(button, "comment_sort", sort.label.as_str(), message));
+            }
+        }
+        container(head)
             .padding(Padding {
                 top: 24.0,
                 bottom: 24.0,
@@ -1623,9 +2703,14 @@ fn comments<'a>(app: &'a App, l: &mut LaneB<'a>, w: &'a Watch, width: f32) {
             let mut y = 0.0;
             prefix.push(0.0);
             for (i, chars) in w.comment_chars.iter().enumerate() {
-                let h = l.model.height(key(0, K_COMMENT, i)).unwrap_or_else(|| {
+                let h = l.model.height(comment_key(i)).unwrap_or_else(|| {
                     let lines = ((*chars as f32 * 7.4) / text_w).ceil().clamp(1.0, 4.0);
-                    18.0 + 2.0 + lines * 20.0 + 8.0 + 18.0 + 24.0
+                    let extra = w
+                        .replies
+                        .get(&i)
+                        .filter(|r| r.open)
+                        .map_or(0.0, |r| r.items.len() as f32 * 92.0 + 40.0);
+                    18.0 + 2.0 + lines * 20.0 + 8.0 + 18.0 + 24.0 + extra
                 });
                 y += h;
                 prefix.push(y);
@@ -1640,7 +2725,7 @@ fn comments<'a>(app: &'a App, l: &mut LaneB<'a>, w: &'a Watch, width: f32) {
     let cache = w.comments_layout.borrow();
     let comments = &w.comments;
     l.var_rows(K_COMMENT, &cache.prefix, |i| match comments.get(i) {
-        Some(c) => comment(app, c, i, w.comments_open.contains(&i), text_w),
+        Some(c) => comment(app, w, c, Some(i), text_w),
         None => Space::new().into(),
     });
     drop(cache);
@@ -1653,12 +2738,9 @@ fn comments<'a>(app: &'a App, l: &mut LaneB<'a>, w: &'a Watch, width: f32) {
                 .align_y(Alignment::Center)
                 .into()
         }),
-        Comments::Failed(e) => {
-            let e = e.clone();
-            l.item(K_CTRAIL, 1, 300.0, move || {
-                error_box(&e, Message::RetryComments, 300.0)
-            })
-        }
+        Comments::Failed(e) => l.item(K_CTRAIL, 1, 76.0, || {
+            retry_row("Couldn't load more comments", e, Message::RetryComments)
+        }),
         Comments::NotStarted if w.info.as_ref().is_some_and(|i| i.comments.is_none()) => {
             l.item(K_CTRAIL, 2, 60.0, || {
                 container(txt("Comments are turned off.", t::BODY).color(t::TEXT_2))
@@ -1670,48 +2752,140 @@ fn comments<'a>(app: &'a App, l: &mut LaneB<'a>, w: &'a Watch, width: f32) {
     }
 }
 
-fn comment<'a>(app: &'a App, c: &'a Comment, i: usize, open: bool, text_w: f32) -> El<'a> {
+fn comment<'a>(
+    app: &'a App,
+    watch: &'a Watch,
+    c: &'a Comment,
+    index: Option<usize>,
+    text_w: f32,
+) -> El<'a> {
+    let avatar_size = if index.is_some() { 40.0 } else { 24.0 };
     let av = thumb(
         c.author_avatar
             .as_ref()
-            .and_then(|u| app.images.get(u, 40.0 * app.scale)),
-        40.0,
-        40.0,
-        20.0,
+            .and_then(|u| app.images.get(u, avatar_size * app.scale)),
+        avatar_size,
+        avatar_size,
+        avatar_size / 2.0,
     );
-    let mut head = row![clamp(c.author.as_str(), t::AUTHOR, 1).color(t::TEXT)]
+    let mut header = row![txt(c.author.as_str(), t::AUTHOR)]
         .spacing(4)
         .align_y(Alignment::Center);
-    if let Some(p) = &c.published {
-        head = row![
-            container(txt(c.author.as_str(), t::AUTHOR).color(t::TEXT)),
-            txt(p.as_str(), t::META_S).color(t::TEXT_2)
-        ]
-        .spacing(6)
-        .align_y(Alignment::Center);
+    if c.author_verified {
+        header = header.push(icon(Icon::Check, 14.0, t::TEXT_2));
     }
-    let body = clamp(c.text.as_str(), t::BODY, if open { 0 } else { 4 }).color(t::TEXT);
-    let mut col = column![head, body].spacing(2).width(Fill);
+    if let Some(published) = &c.published {
+        header = header.push(txt(published.as_str(), t::META_S).color(t::TEXT_2));
+    }
+    let open = index.is_some_and(|i| watch.comments_open.contains(&i));
+    let mut col = column![].spacing(4).width(Fill);
+    if c.pinned {
+        col =
+            col.push(txt(format!("Pinned by {}", watch.video.channel), t::META_S).color(t::TEXT_2));
+    }
+    col = col
+        .push(header)
+        .push(clamp(c.text.as_str(), t::BODY, if open { 0 } else { 4 }).color(t::TEXT));
     let est_lines =
         (c.text.chars().count() as f32 * 7.4 / text_w).ceil() + c.text.matches('\n').count() as f32;
-    if est_lines > 4.0 {
-        col = col.push(
+    if let Some(index) = index
+        && est_lines > 4.0
+    {
+        col = col.push(action(
             button(txt(if open { "Show less" } else { "Read more" }, t::BODY_M).color(t::TEXT_2))
                 .padding(0)
                 .style(t::bare)
-                .on_press(Message::ToggleComment(i)),
-        );
+                .on_press(Message::ToggleComment(index)),
+            "more",
+            "Read comment",
+            Message::ToggleComment(index),
+        ));
     }
     let mut foot = row![icon(Icon::ThumbUp, 16.0, t::TEXT_2)]
         .spacing(6)
         .align_y(Alignment::Center);
-    if let Some(l) = &c.likes {
-        foot = foot.push(txt(l.as_str(), t::META_S).color(t::TEXT_2));
+    if let Some(likes) = &c.likes {
+        foot = foot.push(txt(likes.as_str(), t::META_S).color(t::TEXT_2));
+    }
+    if c.hearted {
+        let avatar = watch
+            .info
+            .as_ref()
+            .and_then(|i| i.channel.avatar.as_ref())
+            .and_then(|url| app.images.get(url, 16.0 * app.scale));
+        foot = foot
+            .push(thumb(avatar, 16.0, 16.0, 8.0))
+            .push(txt("♥", t::META_S_M).color(t::RED));
     }
     col = col.push(container(foot).padding(Padding {
-        top: 8.0,
+        top: 4.0,
         ..Padding::ZERO
     }));
+    if let Some(index) = index
+        && c.replies.is_some()
+    {
+        let reply = watch.replies.get(&index);
+        let expanded = reply.is_some_and(|r| r.open);
+        let label = match c.reply_count.as_deref() {
+            Some(count) => format!("{count} {}", if count == "1" { "reply" } else { "replies" }),
+            None => "Replies".into(),
+        };
+        let toggle = Message::ReplyToggle(index);
+        col = col.push(action(
+            button(
+                row![
+                    icon(
+                        if expanded {
+                            Icon::ExpandLess
+                        } else {
+                            Icon::ExpandMore
+                        },
+                        18.0,
+                        t::LINK
+                    ),
+                    txt(label.clone(), t::BODY_M).color(t::LINK),
+                ]
+                .align_y(Alignment::Center)
+                .spacing(4),
+            )
+            .padding([6, 8])
+            .style(t::bare)
+            .on_press(toggle.clone()),
+            "comment_replies",
+            label,
+            toggle,
+        ));
+        if let Some(reply) = reply.filter(|r| r.open) {
+            col = col.extend(
+                reply
+                    .items
+                    .iter()
+                    .map(|r| comment(app, watch, r, None, text_w - 40.0)),
+            );
+            match &reply.more {
+                Some(More::Loading) => col = col.push(loading_row(36.0)),
+                Some(More::Failed(e)) => {
+                    col = col.push(retry_row(
+                        "Couldn't load replies",
+                        e,
+                        Message::ReplyMore(index),
+                    ))
+                }
+                _ if reply.has_more() => {
+                    col = col.push(action(
+                        button(txt("Show more replies", t::BODY_M).color(t::LINK))
+                            .padding([6, 8])
+                            .style(t::bare)
+                            .on_press(Message::ReplyMore(index)),
+                        "comment_replies",
+                        "Show more replies",
+                        Message::ReplyMore(index),
+                    ));
+                }
+                _ => {}
+            }
+        }
+    }
     container(row![av, col].spacing(16))
         .padding(Padding {
             bottom: 24.0,
