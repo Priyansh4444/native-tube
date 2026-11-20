@@ -168,7 +168,7 @@ pub struct PlayerView {
     to_drop: Vec<Arc<RenderImage>>,
     source: Option<String>,
     started_pending: bool,
-    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    /// A frame of the current video has been painted. The poster stays up until then.
     presented: Rc<Cell<bool>>,
     source_epoch: u64,
     preview_key: Option<nt_core::StoryboardFrame>,
@@ -248,7 +248,6 @@ impl PlayerView {
             to_drop: Vec::new(),
             source: None,
             started_pending: false,
-            #[cfg(all(target_os = "linux", target_env = "gnu"))]
             presented: Rc::new(Cell::new(false)),
             source_epoch: 0,
             preview_key: None,
