@@ -174,3 +174,137 @@ two apps' builds and runs, so frame numbers vary by a few long frames between ru
    keeps its own mute flag (initialised from `NT_MUTE`, as core initialises mpv's).
 3. (Nice to have) `Player::frame()` gives an `Arc<VideoFrame>`; Rune's `Pixels::set` wants an
    owned `Vec<u8>`, so each frame costs one extra copy.
+
+## November 19 parity and stability round
+
+The current app keeps the page plan in an `Rc` snapshot. It releases the plan's
+`RefCell` before computing or rendering. Core completions use Rune's queued
+`AppHandle::update`, with a page/request token that follows the page into Forward.
+Back/Forward restore its loaded lists, query and exact scroll offset. Watch restores
+the saved clock and pause state through `load_at`. The three most recently left Watch
+pages can show their own cached picture while the single main player reloads, with
+the page's own poster as the fallback for older entries.
+
+Recommendations now activate the resolved row directly. The old velocity guard
+treated both touchpad flings and ordinary wheel easing as a reason to suppress a
+press, but the operation it called only cancelled flings. Leaving the page already
+freezes its scroll position. The Wayland input trace also recorded native misses
+where the event hit the viewport or never completed a row press. On one failed click,
+the pointer entered the correct row, then moved and left before button release.
+Playback commands and pixel uploads carry a per-load serial, so a prior decoder
+callback cannot overwrite a new page's picture.
+
+Rune's default enter fades compounded across the control bar and its children.
+The player commits hover changes immediately, refreshes its hide deadline on motion
+and uses Rune's keyboard-only rings and modal focus for menus. The card tint and
+overflow action use a hover group. The delayed hover preview reuses one silent
+software player with a separate `Pixels` buffer per hover. Captions, chapter title
+and segments, replay heatmap, storyboard seek preview, audio options, Stable volume,
+Loop and Sleep are wired to core's state. Storyboard jobs are keyed by frame and drop
+results after the pointer leaves. To display Stats and chapter labels, reserve
+explicit layout boxes for `LiveText`. Wrapped live text panics in Rune's release
+commit path.
+[Wrapped LiveText repro](../../docs/upstream/rune-wrapped-livetext.md)
+
+Mixed search results retain their typed order and continuation. Search masks transcript
+highlights with UTF-8-safe ranges and opens a match at its core timestamp. Channel tabs,
+sort and About use their own cursors. Playlist cards lead to a Watch page with a panel;
+adjacent rows and the local queue feed the same Next and preparation path. Home uses
+server chips when supplied and fixed topics otherwise. The lists prefetch ahead of
+the viewport and keep loaded rows alongside Retry. Each Retry button targets its own
+list, including when related and comments fail simultaneously. A window close saves
+the playback checkpoint before the command thread can exit. Home offers a Continue watching card
+with the title and saved time. One background writer saves Guide, theatre and autoplay
+preferences in order when toggles arrive close together.
+
+### Wayland video
+
+Rune exposes swapchain transparency through `WindowOptions::transparent` and borrows
+the raw `wl_surface` through `WindowHandle::with_raw_handle`. At the pinned revision
+there is no public raw-display callback. The frontend uses the existing `libloading`
+crate to find Wayland 1.23's `wl_proxy_get_display` at runtime and get the matching
+display from that same surface. Older Wayland clients, X11, macOS, explicit
+`NT_RUNE_SOFTWARE=1` and native attach failures use `Pixels`. The window keeps the
+lease on its event thread and detaches in the close and quit hooks. Four live opaque
+rectangles frame the clipped hole. The child uses the same crop through `set_clip`
+and hides when it scrolls fully out of view. Wayland commits the child's position with
+the parent, while EGL presents the video independently. Rune's ordinary controls still
+draw above it. The GPU hole is rectangular.
+
+Switching videos on the GPU path (fixed 2026-11-19, `switch5` harness, live, muted):
+
+- **Stall.** The hole only opened from `poll`, i.e. on a Rune frame. The GPU picture never
+  wakes Rune, and core's "first frame presented" wake reached only `player_changed`, which
+  didn't look at the surface. When no other change followed, the poster stayed up and
+  `playback_started` never fired (2 of 5 and 1 of 5 waits timed out in two baseline runs).
+  `player_changed` now runs `NativeVideo::update` too.
+- **Black hole.** `is_presenting` stays true from the previous video until the worker
+  unmaps, and core maps the child with one render before mpv has decoded anything. Traced:
+  Ready at position 0.00 with that single black render held for 2.6 s. The hole now opens
+  only once the requested load has reached the player and `Player::presented_frames()`
+  counts a decoded frame presented after mpv's playback restart. The count resets
+  on each load and stop and covers paused loads too. Until then the poster shows with
+  the spinner (`App::gpu_pending`).
+- Result: 6 of 6 consecutive runs without a failed wait, plus a 7th. The pure-black
+  (max channel 0) +0.15 s snapshots that remain are the videos' own openings: `ntctl play`
+  renders the same ids black at 0.3 s (`R_8UPhJNrZ4`) and 2 s (`kF6DLUiANMk`).
+- `NT_GPU_TRACE=1` logs time, frames, position and status on every update.
+
+Eight-second muted 720p clip, same 1280×800 off-screen window and same release build:
+
+| path | CPU seconds | one CPU core | end RSS |
+|---|---:|---:|---:|
+| Wayland child | 0.74 | 9.2% | 347 MiB |
+| Software Pixels | 2.71 | 33.9% | 283 MiB |
+
+The probe uses Rune's after-draw inspection for clipped target rectangles and the
+first-frame marker. It samples the playhead even while a native child advances without
+repainting its parent. It emits stable page IDs as rail selections and stays off by
+default. Static images request the drawn width in physical pixels. Rune's image shader
+blends four neighboring texels with atlas-edge clamping.
+
+### Reproduced and measured
+
+- The local fixture run opened 20 distinct recommendations and sent 35 Back/Forward
+  inputs in 1.29 s. Median click-to-frame was 580 ms and one click needed a retry.
+  The strict retest confirmed five correct hits from ten attempts before a wheel
+  input missed. Real input was disabled after the owner reported interference.
+- `/proc/<pid>/smaps_rollup` sampled every 0.5 s in the strict retest. A warmed Watch
+  page was 347.4–347.7 MiB RSS and 262.6–262.9 MiB PSS. Across switches, peaks were
+  485.1 MiB RSS and 446.5 MiB PSS. The run ended before a post-switch steady phase,
+  leaving the navigation memory plateau unverified.
+- On the final release build, an off-screen Home launch with a seeded checkpoint
+  showed the remembered Guide and a Continue watching card at 0:23. From seconds 11
+  through 20, the idle process held at 153.5 MiB RSS and 143.4 MiB PSS. This sample
+  covers idle Home.
+- Real-input search for `rust programming` filled 16 items, paged to 27 and restored all
+  27 at precisely 4,320 logical pixels after Back. Search for `pronsh` displayed the
+  native age notice and seven transcript matches.
+- The release smoke test opened Stats with all nine rows, closed it, selected Sleep
+  until End of video and observed the pause at 60.0 s. It also opened the shortcut
+  sheet and Watch guide. The GPU path was captured in Watch, theatre and fullscreen.
+- The pinned Rune workspace's winit patch removes startup COM taskbar work on Windows.
+  Its wgpu-hal patch supports direct DXGI adapter selection and defers FXC loading.
+  The app repeats the pins because Cargo does not inherit a dependency's patches.
+  The Windows startup changes were not exercised on this Linux host.
+- Rune's process-wide `set_app_id(&'static str)` takes a runtime test ID via a single
+  leaked string at startup. A toolkit-owned `OnceLock<String>` could retain that ID
+  without requiring the caller to leak it.
+
+### Memory over 60 opens (live, muted, autopilot `open60.json`, PSS each second)
+
+| run | PSS @30 s | @120 s | @180 s | peak | end |
+|---|---:|---:|---:|---:|---:|
+| GPU path | 289 | 406 | 449 | 474 | 453 MiB |
+| `NT_RUNE_SOFTWARE=1` | 283 | 394 | 455 | 481 | 428 MiB |
+| GPU, app image map 400/64 MiB → 160/24 MiB | 300 | 430 | 473 | 489 | 470 MiB |
+
+It is not a leak and not the surface path: both paths grow alike and level off after about
+40 opens (back stack at its 40-page cap, caches at their budgets). `NT_MEM_TRACE=1` prints
+the census every 5 s. Of the growth, core's decoded image cache accounts for 95 MiB (it
+fills to its fixed 96 MiB budget as new thumbnails appear, as in GPUI and iced), the app's
+`Pixels` copies about 46 MiB at the old bound (18 MiB now), pages/plans and the heap the
+rest (heap 28 → 43 MiB, anonymous 144 → 274 MiB). Rune's PSS also carries ~160 MiB of mapped
+libraries, about 50 MiB of it NVIDIA's EGL/GL libraries loaded for the GPU video surface.
+Shrinking the app's image map is real (measured by the census) but inside run-to-run noise
+of ±20 MiB at the plateau.

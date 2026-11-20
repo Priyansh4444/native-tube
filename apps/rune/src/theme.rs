@@ -28,6 +28,7 @@ pub struct Tok {
     pub badge: Color,
     /// Skeleton placeholders.
     pub skeleton: Color,
+    pub hover_tint: Color,
 }
 
 fn hex(s: &str) -> Color {
@@ -53,6 +54,7 @@ static TOK: LazyLock<Tok> = LazyLock::new(|| Tok {
     red: hex("#ff0033"),
     badge: hex("#00000099"),
     skeleton: hex("#272727"),
+    hover_tint: hex(HOVER_TINT),
 });
 
 pub fn t() -> &'static Tok {
@@ -76,6 +78,10 @@ pub const S36B: TextStyle = TextStyle::new(36.0, 700.0).lh(44.0);
 pub const TOP_BAR: f32 = 56.0;
 pub const RAIL: f32 = 72.0;
 pub const CHIP_BAR: f32 = 56.0;
+/// The full guide (☰).
+pub const GUIDE_W: f32 = 240.0;
+/// The card hover tint (YouTube's #272727 box behind a hovered card).
+pub const HOVER_TINT: &str = "#272727";
 
 /// Roboto, embedded (assets/fonts, Apache-2.0). Never a system font.
 pub static FONTS: &[&[u8]] = &[
@@ -171,3 +177,37 @@ symbol!(ERROR, "error");
 symbol!(OFFLINE, "wifi_off");
 symbol!(LIBRARY, "video_library");
 symbol!(DELETE, "delete");
+symbol!(CC, "closed_caption");
+symbol!(CC_FILL, "closed_caption_fill1");
+symbol!(CLOSE, "close");
+
+/// Material Symbols that assets/icons doesn't carry, inline (same viewBox convention).
+macro_rules! inline_symbol {
+    ($name:ident, $id:literal, $d:literal) => {
+        pub static $name: Icon = Icon {
+            name: concat!("ms-inline-", $id),
+            view: 960.0,
+            body: concat!(
+                "<g transform=\"translate(0 960)\"><path d=\"",
+                $d,
+                "\"/></g>"
+            ),
+        };
+    };
+}
+
+inline_symbol!(
+    MENU,
+    "menu",
+    "M120-240v-80h720v80H120Zm0-200v-80h720v80H120Zm0-200v-80h720v80H120Z"
+);
+inline_symbol!(
+    INFO,
+    "info",
+    "M440-280h80v-240h-80v240Zm40-320q17 0 28.5-11.5T520-640q0-17-11.5-28.5T480-680q-17 0-28.5 11.5T440-640q0 17 11.5 28.5T480-600Zm0 520q-83 0-156-31.5T197-197q-54-54-85.5-127T80-480q0-83 31.5-156T197-763q54-54 127-85.5T480-880q83 0 156 31.5T763-763q54 54 85.5 127T880-480q0 83-31.5 156T763-197q-54 54-127 85.5T480-80Zm0-80q134 0 227-93t93-227q0-134-93-227t-227-93q-134 0-227 93t-93 227q0 134 93 227t227 93Z"
+);
+inline_symbol!(
+    LOOP,
+    "repeat",
+    "M280-80 120-240l160-160 56 58-62 62h406v-160h80v240H274l62 62-56 58Zm-80-440v-240h486l-62-62 56-58 160 160-160 160-56-58 62-62H280v160h-80Z"
+);

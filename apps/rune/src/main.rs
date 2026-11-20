@@ -3,11 +3,15 @@
 mod app;
 mod images;
 mod pages;
+mod preview;
+mod probe;
 mod scroller;
 mod theme;
 mod video;
 mod view;
 mod watch;
+#[cfg(target_os = "linux")]
+mod wayland_video;
 
 use rune::{AppSpec, FrameOutcome, KeyEvent, Tx};
 
@@ -39,6 +43,7 @@ fn install_panic_hook() {
 }
 
 fn main() {
+    probe::init();
     nt_core::metrics::init("rune");
     nt_core::autopilot::start();
     install_panic_hook();
@@ -58,7 +63,20 @@ fn main() {
     };
     // macOS: winit's application menu (About, Hide, Quit ⌘Q) stays; standard_menus adds Edit
     // and Window (Close ⌘W). Closing the window quits on every platform (rune::App's default).
-    let app = rune::App::new(spec).standard_menus();
+    let app = rune::App::new(spec)
+        .standard_menus()
+        .on_close(video::checkpoint_on_exit)
+        .on_quit(video::checkpoint_on_exit);
+    #[cfg(target_os = "linux")]
+    let app = if wayland_video::enabled() {
+        app.window_options(rune::WindowOptions {
+            transparent: true,
+            ..Default::default()
+        })
+        .on_window(wayland_video::window_created)
+    } else {
+        app
+    };
     app::set_handle(app.handle());
     if let Some(h) = app::handle() {
         let h = h.clone();
@@ -71,5 +89,6 @@ fn main() {
             app::flush_marks();
         }
     })
+    .on_frame_drawn(probe::drawn)
     .run();
 }

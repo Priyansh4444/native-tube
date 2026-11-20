@@ -16,6 +16,9 @@ nt-core = { path = "../../core" }
 rune = { git = "https://github.com/anomalyco/rune", rev = "4fbd2d6ac4dd12595dd8ed0b7849b28a309c7c00", default-features = false, features = ["accessibility", "dbus", "metal-backend", "svg"] }
 rune-kit = { git = "https://github.com/anomalyco/rune", rev = "4fbd2d6ac4dd12595dd8ed0b7849b28a309c7c00" }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+libloading = "0.8"
+
 # Rune's README: an app that builds Rune applies its [patch.crates-io] too (a dependency's
 # [patch] doesn't reach the workspace that depends on it). Same repository and rev.
 [patch.crates-io]
@@ -30,3 +33,13 @@ codegen-units = 16
 incremental = false
 
 [workspace]
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+string_slice = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+unchecked_time_subtraction = "deny"

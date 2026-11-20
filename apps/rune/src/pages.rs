@@ -9,9 +9,12 @@
 
 use crate::scroller::Scroller;
 use crate::theme::*;
-use nt_core::{ChannelInfo, ChannelRef, Comment, Continuation, Video, WatchInfo};
+use nt_core::{
+    ChannelInfo, ChannelRef, Comment, CommentSort, Continuation, SearchNotice, Video, WatchInfo,
+};
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Load {
@@ -67,6 +70,21 @@ impl Feed {
     pub fn reset(&mut self) {
         *self = Feed::default();
     }
+
+    /// An empty list that isn't loading.
+    pub fn idle() -> Feed {
+        Feed {
+            status: Load::Idle,
+            ..Feed::default()
+        }
+    }
+}
+
+pub struct Replies {
+    pub open: bool,
+    pub items: Vec<Comment>,
+    pub next: Option<Continuation>,
+    pub state: Load,
 }
 
 pub struct Watch {
@@ -79,6 +97,15 @@ pub struct Watch {
     pub comments_next: Option<Continuation>,
     pub comments_total: Option<String>,
     pub comments_state: Load,
+    pub comments_sort: Vec<CommentSort>,
+    pub comment_order: Option<usize>,
+    pub pending_order: Option<usize>,
+    pub replies: HashMap<String, Replies>,
+    pub related_chip: Option<usize>,
+    pub pending_related: Option<usize>,
+    pub playlist_key: Option<String>,
+    pub playlist: Option<nt_core::PlaylistPanel>,
+    pub playlist_more: Load,
     pub comments_started: bool,
     pub desc_open: bool,
     /// Comments expanded past four lines ("Read more").
@@ -87,6 +114,8 @@ pub struct Watch {
     pub rating: Option<bool>,
     /// Playback position to restore when the page shows again (Back).
     pub resume_at: Option<f64>,
+    pub resume_paused: bool,
+    pub resume_duration: f64,
     /// Measured comment text heights: (width bits, full height).
     pub comment_h: RefCell<Vec<(u32, f32)>>,
     /// Where the collapsed description is cut for its inline "…more": (width bits, byte index).
@@ -104,11 +133,22 @@ impl Watch {
             comments_next: None,
             comments_total: None,
             comments_state: Load::Idle,
+            comments_sort: Vec::new(),
+            comment_order: None,
+            pending_order: None,
+            replies: HashMap::new(),
+            related_chip: None,
+            pending_related: None,
+            playlist_key: None,
+            playlist: None,
+            playlist_more: Load::Idle,
             comments_started: false,
             desc_open: false,
             comments_open: HashSet::new(),
             rating: None,
             resume_at: None,
+            resume_paused: false,
+            resume_duration: 0.0,
             comment_h: RefCell::default(),
             desc_cut: RefCell::default(),
         }
@@ -150,15 +190,72 @@ impl Watch {
     }
 }
 
+/// A results page: the query, core's notices (age gate, correction, no results), the results
+/// (`Page::feed`) and the transcript matches from search.pronsh.dev.
+pub struct Search {
+    pub query: String,
+    pub notices: Vec<SearchNotice>,
+    pub trans: Feed,
+    pub trans_total: Option<u64>,
+    pub filter: nt_core::SearchFilter,
+    pub chips: Vec<nt_core::SearchOption>,
+    pub filters: Vec<nt_core::SearchFilterGroup>,
+    pub entries: Vec<nt_core::SearchResult>,
+    seen_entries: HashSet<(char, String)>,
+}
+
+impl Search {
+    pub fn append_entries(&mut self, entries: Vec<nt_core::SearchResult>, videos: &[Video]) {
+        use nt_core::SearchResult::*;
+        if entries.is_empty() {
+            for v in videos {
+                if self.seen_entries.insert(('v', v.id.clone())) {
+                    self.entries.push(Video(Box::new(v.clone())));
+                }
+            }
+            return;
+        }
+        for entry in entries {
+            let key = match &entry {
+                Video(v) => ('v', v.id.clone()),
+                Playlist(p) => ('p', p.id.clone()),
+                Channel(c) => ('c', c.channel.id.clone()),
+                Shelf(sh) => ('s', sh.title.clone()),
+            };
+            if self.seen_entries.insert(key) {
+                if let Shelf(mut shelf) = entry {
+                    let items = std::mem::take(&mut shelf.items);
+                    self.entries.push(Shelf(shelf));
+                    self.append_entries(items, &[]);
+                } else {
+                    self.entries.push(entry);
+                }
+            }
+        }
+    }
+
+    pub fn new(query: String) -> Search {
+        Search {
+            query,
+            notices: Vec::new(),
+            trans: Feed::idle(),
+            trans_total: None,
+            filter: nt_core::SearchFilter::All,
+            chips: Vec::new(),
+            filters: Vec::new(),
+            entries: Vec::new(),
+            seen_entries: HashSet::new(),
+        }
+    }
+}
+
 // A handful of pages exist at a time; boxing the big variants would only add indirection.
 #[allow(clippy::large_enum_variant)]
 pub enum Kind {
     Home {
         topic: usize,
     },
-    Search {
-        query: String,
-    },
+    Search(Box<Search>),
     Watch(Box<Watch>),
     Channel {
         id: String,
@@ -177,13 +274,48 @@ pub struct Page {
     pub kind: Kind,
     /// The page's main list: the feed, results, uploads, library rows, or a watch page's related videos.
     pub feed: Feed,
+    pub home_chips: Vec<nt_core::Chip>,
+    pub home_chip: Option<usize>,
+    pub channel_tab: Option<nt_core::ChannelTab>,
+    pub channel_sort: Option<usize>,
+    pub pending_sort: Option<usize>,
+    pub playlist_cards_more: Load,
     pub scroll: Scroller,
     /// Bumped whenever something the plan depends on changes.
     pub version: Cell<u64>,
     /// The request token: bumped by every (re)load of the page's data. An answer carries the
     /// token it was asked with and is dropped unless it still matches.
     pub req: u64,
-    pub plan: RefCell<Plan>,
+    playlist_open_seq: u64,
+    plan: RefCell<Rc<Plan>>,
+}
+
+#[derive(Clone, Copy)]
+pub struct PlaylistOpen {
+    page: u64,
+    revision: u64,
+    sequence: u64,
+}
+
+#[cfg(test)]
+mod playlist_open_tests {
+    use super::{Kind, Page};
+
+    #[test]
+    fn latest_playlist_click_wins_even_before_its_response_arrives() {
+        let mut page = Page::new(Kind::Home { topic: 0 });
+        let first = page.begin_playlist_open();
+        assert!(page.accepts_playlist_open(first));
+
+        let second = page.begin_playlist_open();
+        assert!(!page.accepts_playlist_open(first));
+        assert!(page.accepts_playlist_open(second));
+        assert!(!Page::new(Kind::Home { topic: 0 }).accepts_playlist_open(second));
+
+        assert_eq!(page.req, 0);
+        page.req += 1;
+        assert!(!page.accepts_playlist_open(second));
+    }
 }
 
 impl Page {
@@ -193,15 +325,38 @@ impl Page {
             id: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             kind,
             feed: Feed::default(),
+            home_chips: Vec::new(),
+            home_chip: None,
+            channel_tab: None,
+            channel_sort: None,
+            pending_sort: None,
+            playlist_cards_more: Load::Idle,
             scroll: Scroller::default(),
             version: Cell::new(1),
             req: 0,
-            plan: RefCell::new(Plan::default()),
+            playlist_open_seq: 0,
+            plan: RefCell::new(Rc::new(Plan::default())),
         }
     }
 
     pub fn touch(&self) {
         self.version.set(self.version.get() + 1);
+    }
+
+    /// Opening a playlist navigates away. Its token is independent of in-page data loads.
+    pub fn begin_playlist_open(&mut self) -> PlaylistOpen {
+        self.playlist_open_seq += 1;
+        PlaylistOpen {
+            page: self.id,
+            revision: self.req,
+            sequence: self.playlist_open_seq,
+        }
+    }
+
+    pub fn accepts_playlist_open(&self, request: PlaylistOpen) -> bool {
+        request.page == self.id
+            && request.revision == self.req
+            && request.sequence == self.playlist_open_seq
     }
 
     pub fn watch(&self) -> Option<&Watch> {
@@ -228,18 +383,18 @@ impl Page {
     }
 
     /// The plan for this geometry, recomputed only when it or the data changed.
-    pub fn plan(&self, g: Geo) -> std::cell::Ref<'_, Plan> {
+    pub fn plan(&self, g: Geo) -> Rc<Plan> {
         let key = (g.key(), self.version.get());
-        // Never a borrow panic: if the plan is in use (a caller still holds it), the new one waits
-        // for the next call. Only this function borrows it mutably, and only for the store.
-        let stale = self.plan.try_borrow().is_ok_and(|p| p.key != key);
-        if stale {
-            let p = compute(self, g);
-            if let Ok(mut slot) = self.plan.try_borrow_mut() {
-                *slot = Plan { key, ..p };
-            }
+        let plan = self.plan.borrow().clone();
+        if plan.key == key {
+            return plan;
         }
-        self.plan.borrow()
+        let next = Rc::new(Plan {
+            key,
+            ..compute(self, g)
+        });
+        self.plan.replace(next.clone());
+        next
     }
 }
 
@@ -252,16 +407,18 @@ pub struct Geo {
     pub vw: f32,
     pub vh: f32,
     pub theatre: bool,
+    pub show_resume: bool,
 }
 
 impl Geo {
-    fn key(&self) -> [u32; 5] {
+    fn key(&self) -> [u32; 6] {
         [
             self.win_w.to_bits(),
             self.win_h.to_bits(),
             self.vw.to_bits(),
             self.vh.to_bits(),
             self.theatre as u32,
+            self.show_resume as u32,
         ]
     }
 
@@ -277,16 +434,26 @@ pub enum St {
     Empty,
     MoreLoading,
     MoreError,
+    TransLoading,
+    TransError,
     CommentsLoading,
     CommentsError,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum B {
+    Resume,
     Card(usize),
     SkelCard(usize),
     Row(usize),
     SkelRow(usize),
+    SearchControls,
+    SearchEntry(usize),
+    /// A search notice (index into `Search::notices`).
+    Notice(usize),
+    /// "Matches in video transcripts · search.pronsh.dev", then its rows.
+    TransHead,
+    TRow(usize),
     Compact(usize),
     SkelCompact(usize),
     Status(St),
@@ -299,8 +466,19 @@ pub enum B {
     Info,
     SkelInfo,
     Desc,
+    /// The chapter list under the open description.
+    Chapters,
     CommentsHead,
     Comment(usize),
+    Reply(usize, usize),
+    RepliesMore(usize),
+    RelatedChips,
+    PlaylistHeading,
+    PlaylistRow(usize),
+    PlaylistMore,
+    PlaylistCard(usize),
+    PlaylistCardsMore,
+    ChannelSort,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -314,7 +492,7 @@ pub struct Block {
 
 #[derive(Default)]
 pub struct Plan {
-    key: ([u32; 5], u64),
+    key: ([u32; 6], u64),
     /// Sorted by `y`.
     pub blocks: Vec<Block>,
     pub height: f32,
@@ -325,10 +503,13 @@ pub struct Plan {
     /// The watch page's player box, in content coordinates, and where its comments start.
     pub player: [f32; 4],
     pub comments_top: f32,
+    pub related_end: f32,
+    pub playlist_end: f32,
     /// The description is clamped with an inline "…more" (or is open with "Show less").
     pub desc_more: bool,
     /// Where the infinite list ends (the trigger compares against this).
     pub list_end: f32,
+    pub results_end: f32,
 }
 
 impl Plan {
@@ -367,6 +548,8 @@ pub const ROW_GAP: f32 = 16.0;
 pub const COMPACT_H: f32 = 94.0;
 pub const COMPACT_GAP: f32 = 8.0;
 pub const SEARCH_MAX: f32 = 1096.0;
+pub const CHAPTERS_HEAD: f32 = 40.0;
+pub const CHAPTER_ROW: f32 = 64.0;
 pub const CHANNEL_MAX: f32 = 1284.0;
 const SKELETONS: usize = 12;
 
@@ -410,8 +593,16 @@ fn grid(p: &mut Plan, y0: f32, x0: f32, w: f32, cols: usize, n: usize, skeleton:
 
 /// Search-style rows: thumbnail clamp(240, 40 % of the width, 500), 16:9.
 fn rows(p: &mut Plan, y0: f32, x0: f32, w: f32, n: usize, skeleton: bool) -> f32 {
-    let tw = (w * 0.4).clamp(240.0_f32.min(w * 0.45), 500.0).round();
-    let th = (tw * 9.0 / 16.0).round();
+    rows_of(p, y0, x0, w, n, if skeleton { B::SkelRow } else { B::Row })
+}
+
+fn row_thumb(w: f32) -> (f32, f32) {
+    let width = (w * 0.4).clamp(240.0_f32.min(w * 0.45), 500.0).round();
+    (width, (width * 9.0 / 16.0).round())
+}
+
+fn rows_of(p: &mut Plan, y0: f32, x0: f32, w: f32, n: usize, kind: fn(usize) -> B) -> f32 {
+    let (tw, th) = row_thumb(w);
     p.row_thumb = (tw, th);
     for i in 0..n {
         p.push(Block {
@@ -419,7 +610,7 @@ fn rows(p: &mut Plan, y0: f32, x0: f32, w: f32, n: usize, skeleton: bool) -> f32
             y: y0 + i as f32 * (th + ROW_GAP),
             w,
             h: th,
-            kind: if skeleton { B::SkelRow(i) } else { B::Row(i) },
+            kind: kind(i),
         });
     }
     if n == 0 {
@@ -497,6 +688,16 @@ fn compute(page: &Page, g: Geo) -> Plan {
     match &page.kind {
         Kind::Home { .. } => {
             y += 8.0;
+            if g.show_resume {
+                p.push(Block {
+                    x,
+                    y,
+                    w: w.min(460.0),
+                    h: 87.0,
+                    kind: B::Resume,
+                });
+                y += 103.0;
+            }
             let loading = feed.status == Load::Loading;
             let n = if loading { SKELETONS } else { feed.items.len() };
             let end = grid(&mut p, y, x, w, cols, n, loading);
@@ -577,7 +778,14 @@ fn compute(page: &Page, g: Geo) -> Plan {
                     20.0 + 8.0
                 };
                 let name_h = measure(&info.name, S36B, text_w).min(88.0);
-                let head = (name_h + 8.0 + 20.0 + desc_h + 12.0 + 36.0).max(av);
+                let links_h = if *desc_open {
+                    28.0 * info.links.len() as f32 + 28.0
+                } else if info.links_label.is_some() || info.about.is_some() {
+                    28.0
+                } else {
+                    0.0
+                };
+                let head = (name_h + 8.0 + 20.0 + desc_h + links_h + 12.0 + 36.0).max(av);
                 p.push(Block {
                     x: cx,
                     y,
@@ -595,6 +803,52 @@ fn compute(page: &Page, g: Geo) -> Plan {
                 });
                 y += 48.0 + 24.0;
             }
+            if let Some(info) = info {
+                if page.channel_tab == Some(nt_core::ChannelTab::Playlists)
+                    && feed.status == Load::Idle
+                {
+                    let columns = cols.max(1);
+                    let width =
+                        ((cw - GRID_GAP * (columns as f32 - 1.0)) / columns as f32).max(1.0);
+                    let height = width * 9.0 / 16.0 + 72.0;
+                    for (i, _) in info.playlists.items.iter().enumerate() {
+                        p.push(Block {
+                            x: cx + (i % columns) as f32 * (width + GRID_GAP),
+                            y: y + (i / columns) as f32 * (height + GRID_ROW_GAP),
+                            w: width,
+                            h: height,
+                            kind: B::PlaylistCard(i),
+                        });
+                    }
+                    p.list_end = y + info.playlists.items.len().div_ceil(columns) as f32
+                        * (height + GRID_ROW_GAP);
+                    if page.playlist_cards_more != Load::Idle {
+                        p.push(Block {
+                            x: cx,
+                            y: p.list_end,
+                            w: cw,
+                            h: MORE_H,
+                            kind: B::PlaylistCardsMore,
+                        });
+                    } else if info.playlists.items.is_empty() && info.playlists.next.is_none() {
+                        feed_status(&mut p, feed, y, cx, cw, g.vh);
+                    }
+                    p.finish(pad);
+                    return p;
+                }
+                if !info.video_sort.is_empty()
+                    && page.channel_tab != Some(nt_core::ChannelTab::Home)
+                {
+                    p.push(Block {
+                        x: cx,
+                        y,
+                        w: cw,
+                        h: 42.0,
+                        kind: B::ChannelSort,
+                    });
+                    y += 54.0;
+                }
+            }
             p.card_channel = false;
             let loading = feed.status == Load::Loading;
             let n = if loading { SKELETONS } else { feed.items.len() };
@@ -611,23 +865,7 @@ fn compute(page: &Page, g: Geo) -> Plan {
                 );
             }
         }
-        Kind::Search { .. } => {
-            let (cx, cw) = centered(g.vw, pad, SEARCH_MAX);
-            let loading = feed.status == Load::Loading;
-            let n = if loading { 6 } else { feed.items.len() };
-            let end = rows(&mut p, y, cx, cw, n, loading);
-            p.list_end = end;
-            if !loading {
-                feed_status(
-                    &mut p,
-                    feed,
-                    if n == 0 { y } else { end + 24.0 },
-                    cx,
-                    cw,
-                    g.vh,
-                );
-            }
-        }
+        Kind::Search(sr) => search_plan(&mut p, feed, sr, y, g, pad),
         Kind::History | Kind::Later => {
             let (cx, cw) = centered(g.vw, pad, SEARCH_MAX);
             p.push(Block {
@@ -653,6 +891,129 @@ fn compute(page: &Page, g: Geo) -> Plan {
     }
     p.finish(pad);
     p
+}
+
+/// The height of a search notice drawn `w` wide.
+pub fn notice_h(n: &SearchNotice, w: f32) -> f32 {
+    match n {
+        SearchNotice::AgeGated { title, body } => {
+            measure(title, S20B, w) + 8.0 + measure(body, S14, w) + 16.0
+        }
+        SearchNotice::Corrected { .. } => 20.0 + 4.0 + 20.0 + 16.0,
+        SearchNotice::DidYouMean { .. } => 24.0 + 16.0,
+        SearchNotice::NoResults => 76.0,
+    }
+}
+
+fn search_plan(p: &mut Plan, feed: &Feed, sr: &Search, mut y: f32, g: Geo, pad: f32) {
+    let (cx, cw) = centered(g.vw, pad, SEARCH_MAX);
+    let loading = feed.status == Load::Loading;
+    if !sr.chips.is_empty() || !sr.filters.is_empty() {
+        p.push(Block {
+            x: cx,
+            y,
+            w: cw,
+            h: 44.0,
+            kind: B::SearchControls,
+        });
+        y += 54.0;
+    }
+    if !loading {
+        for (i, n) in sr.notices.iter().enumerate() {
+            if matches!(n, SearchNotice::NoResults) && sr.trans.items.is_empty() {
+                continue;
+            }
+            let h = notice_h(n, cw);
+            if h > 0.0 {
+                p.push(Block {
+                    x: cx,
+                    y,
+                    w: cw,
+                    h,
+                    kind: B::Notice(i),
+                });
+                y += h + 8.0;
+            }
+        }
+    }
+    let n = sr.entries.len();
+    if loading {
+        rows(p, y, cx, cw, 6, true);
+        return;
+    }
+    let (tw, th) = row_thumb(cw);
+    p.row_thumb = (tw, th);
+    for (i, entry) in sr.entries.iter().enumerate() {
+        let h = match entry {
+            nt_core::SearchResult::Shelf(_) => 40.0,
+            nt_core::SearchResult::Channel(_) => th.min(150.0),
+            _ => th,
+        };
+        p.push(Block {
+            x: cx,
+            y,
+            w: cw,
+            h,
+            kind: B::SearchEntry(i),
+        });
+        y += h + ROW_GAP;
+    }
+    let end = y;
+    p.list_end = end;
+    p.results_end = end;
+    let trans = &sr.trans;
+    let gated = sr
+        .notices
+        .iter()
+        .any(|n| matches!(n, SearchNotice::AgeGated { .. }));
+    if !trans.items.is_empty() {
+        // The results' own "more" spinner or error, then the transcript section.
+        let top = if n == 0 {
+            y
+        } else {
+            feed_status(p, feed, end + 8.0, cx, cw, g.vh) + 24.0
+        };
+        p.push(Block {
+            x: cx,
+            y: top,
+            w: cw,
+            h: 48.0,
+            kind: B::TransHead,
+        });
+        let end2 = rows_of(p, top + 48.0 + 8.0, cx, cw, trans.items.len(), B::TRow);
+        p.list_end = end2;
+        let st = match trans.more {
+            Load::Loading => Some(St::TransLoading),
+            Load::Error(_) => Some(St::TransError),
+            Load::Idle => None,
+        };
+        if let Some(st) = st {
+            p.push(Block {
+                x: cx,
+                y: end2 + 16.0,
+                w: cw,
+                h: MORE_H,
+                kind: B::Status(st),
+            });
+        }
+    } else if n > 0 && feed.items.is_empty() && feed.status == Load::Idle {
+        if feed.more != Load::Idle {
+            let state = if feed.more == Load::Loading {
+                St::MoreLoading
+            } else {
+                St::MoreError
+            };
+            p.push(Block {
+                x: cx,
+                y: end,
+                w: cw,
+                h: MORE_H,
+                kind: B::Status(state),
+            });
+        }
+    } else if !(gated && n == 0 && feed.status == Load::Idle) {
+        feed_status(p, feed, end, cx, cw, g.vh);
+    }
 }
 
 /// Where the watch page's parts go (spec v2: YouTube's formula).
@@ -804,6 +1165,17 @@ fn watch_plan(p: &mut Plan, page: &Page, wt: &Watch, g: Geo) {
                 kind: B::Desc,
             });
             y += h + 24.0;
+            if wt.desc_open && !info.chapters.is_empty() {
+                let h = CHAPTERS_HEAD + info.chapters.len() as f32 * CHAPTER_ROW;
+                p.push(Block {
+                    x,
+                    y,
+                    w: pw,
+                    h,
+                    kind: B::Chapters,
+                });
+                y += h + 24.0;
+            }
             if related_below {
                 y = related(p, page, x, y, pw) + 24.0;
             }
@@ -837,7 +1209,9 @@ fn watch_plan(p: &mut Plan, page: &Page, wt: &Watch, g: Geo) {
                 let clamped = full > 80.5;
                 let text_h = if open || !clamped { full } else { 80.0 };
                 let more = if clamped { 4.0 + 20.0 } else { 0.0 };
-                let h = 18.0 + 2.0 + text_h + more + 8.0 + 32.0;
+                let pinned = if c.pinned { 22.0 } else { 0.0 };
+                let reply_toggle = if c.replies.is_some() { 36.0 } else { 0.0 };
+                let h = 18.0 + 2.0 + text_h + more + 8.0 + 32.0 + pinned + reply_toggle;
                 p.push(Block {
                     x,
                     y,
@@ -846,6 +1220,32 @@ fn watch_plan(p: &mut Plan, page: &Page, wt: &Watch, g: Geo) {
                     kind: B::Comment(i),
                 });
                 y += h + 16.0;
+                if let Some(thread) = wt.replies.get(&c.id).filter(|reply| reply.open) {
+                    let width = pw - 56.0;
+                    for (j, reply) in thread.items.iter().enumerate() {
+                        let height = measure(&reply.text, S14, comment_text_w(width)).max(20.0)
+                            + 64.0
+                            + if reply.pinned { 22.0 } else { 0.0 };
+                        p.push(Block {
+                            x: x + 56.0,
+                            y,
+                            w: width,
+                            h: height,
+                            kind: B::Reply(i, j),
+                        });
+                        y += height;
+                    }
+                    if thread.next.is_some() {
+                        p.push(Block {
+                            x: x + 56.0,
+                            y,
+                            w: width,
+                            h: 40.0,
+                            kind: B::RepliesMore(i),
+                        });
+                        y += 48.0;
+                    }
+                }
             }
             p.list_end = y;
             let st = match wt.comments_state {
@@ -896,6 +1296,54 @@ fn related(p: &mut Plan, page: &Page, x: f32, mut y: f32, w: f32) -> f32 {
     let loading = page
         .watch()
         .is_some_and(|w| w.info.is_none() && w.error.is_none());
+    if let Some(watch) = page.watch()
+        && let Some(panel) = &watch.playlist
+    {
+        p.push(Block {
+            x,
+            y,
+            w,
+            h: 42.0,
+            kind: B::PlaylistHeading,
+        });
+        y += 44.0;
+        for (i, _) in panel.items.iter().enumerate() {
+            p.push(Block {
+                x,
+                y,
+                w,
+                h: 62.0,
+                kind: B::PlaylistRow(i),
+            });
+            y += 64.0;
+        }
+        p.playlist_end = y;
+        if watch.playlist_more != Load::Idle {
+            p.push(Block {
+                x,
+                y,
+                w,
+                h: MORE_H,
+                kind: B::PlaylistMore,
+            });
+            y += MORE_H;
+        }
+        y += 12.0;
+    }
+    if page
+        .watch()
+        .and_then(|watch| watch.info.as_ref())
+        .is_some_and(|info| !info.related_chips.is_empty())
+    {
+        p.push(Block {
+            x,
+            y,
+            w,
+            h: 44.0,
+            kind: B::RelatedChips,
+        });
+        y += 52.0;
+    }
     let n = if loading { 8 } else { page.feed.items.len() };
     for i in 0..n {
         let kind = if loading {
@@ -911,6 +1359,10 @@ fn related(p: &mut Plan, page: &Page, x: f32, mut y: f32, w: f32) -> f32 {
             kind,
         });
         y += COMPACT_H + COMPACT_GAP;
+    }
+    p.related_end = y;
+    if page.feed.more != Load::Idle {
+        y = feed_status(p, &page.feed, y, x, w, 0.0);
     }
     y
 }

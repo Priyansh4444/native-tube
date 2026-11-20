@@ -17,8 +17,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-const MAX_ENTRIES: usize = 400;
-const MAX_BYTES: usize = 64 * 1024 * 1024;
+// Every entry is a second copy of an image core's decoded cache (96 MiB) already holds, and
+// Rune mirrors drawn ones in its atlas: keep only about two screens' worth here. An evicted
+// image comes back from core's cache without a request. (400 / 64 MiB filled to ~46 MiB in
+// 20 opens and held it, part of the 290 -> 480 MiB PSS plateau over 60 opens.)
+const MAX_ENTRIES: usize = 160;
+const MAX_BYTES: usize = 24 * 1024 * 1024;
 const RETRY_AFTER: Duration = Duration::from_secs(15);
 
 struct Entry {
@@ -34,6 +38,21 @@ pub struct Images {
     map: RefCell<HashMap<(String, u32), Entry>>,
     epoch: Cell<u64>,
     bytes: Cell<usize>,
+}
+
+impl Images {
+    /// (entries, estimated bytes, decoded bytes actually held) for `NT_MEM_TRACE`.
+    pub fn census(&self) -> (usize, usize, usize) {
+        let map = self.map.borrow();
+        let held = map
+            .values()
+            .map(|e| {
+                let (w, h) = e.pixels.size();
+                w as usize * h as usize * 4
+            })
+            .sum();
+        (map.len(), self.bytes.get(), held)
+    }
 }
 
 /// Rounds a width in physical pixels up to the next multiple of 32.
