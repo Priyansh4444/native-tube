@@ -1,0 +1,7 @@
+{
+  "name": "nativetube-bombadil",
+  "private": true,
+  "devDependencies": {
+    "@antithesishq/bombadil": "0.7.10"
+  }
+}

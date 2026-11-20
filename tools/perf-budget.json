@@ -1,0 +1,28 @@
+{
+  "stories": {
+    "load": {
+      "window_ms": 75,
+      "home_ms": 125,
+      "first_frame_ms": 125,
+      "idle_cpu_percent": 1
+    },
+    "browse": {
+      "wheel_cpu_percent": 10
+    },
+    "play": {
+      "click_first_frame_ms": 75,
+      "warm_switch_ms": 25,
+      "playing_cpu_percent": 10
+    }
+  },
+  "pss_budgets": {
+    "load": ["idle_pss_mib"],
+    "play": ["playback_peak_pss_mib", "retained_pss_mib"],
+    "navigation": ["warmed_retained_pss_mib", "late_growth_pss_mib"]
+  },
+  "apps": {
+    "iced": {"stripped_bytes": 3145728, "max_stripped_bytes": 52428800, "idle_pss_mib": 48},
+    "gpui": {"stripped_bytes": 5242880, "max_stripped_bytes": 89128960, "idle_pss_mib": 64},
+    "rune": {"stripped_bytes": 3145728, "max_stripped_bytes": 68157440, "idle_pss_mib": 48}
+  }
+}
