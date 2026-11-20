@@ -2,6 +2,7 @@
 //!
 //!   nt-input <fw> click X Y [left|right|middle|back|forward]
 //!   nt-input <fw> move X Y
+//!   nt-input <fw> hover X Y OUT.png [MS]              hover, screenshot the output, restore
 //!   nt-input <fw> wheel X Y TICKS [INTERVAL_MS]      mouse-wheel notches (+ scrolls down)
 //!   nt-input <fw> touchpad X Y PIXELS [DURATION_MS]  two-finger swipe then lift (fling)
 //!   nt-input <fw> drag X1 Y1 X2 Y2 [DURATION_MS]
@@ -12,7 +13,8 @@
 //! 1280x800 output NT-<FW> (set up by tools/headless.sh). Pointer events go
 //! through a wlr virtual pointer bound to that output, so they reach the app
 //! exactly as a real mouse or touchpad would. Afterwards the cursor goes back
-//! where it was and the previously focused window gets focus back.
+//! where it was (or onto a real screen, never a test output) and the previously focused
+//! window gets focus back. A detached watchdog does the same if the process is killed.
 
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -202,12 +204,151 @@ fn focus(address: &str) {
     ]);
 }
 
+/// Waits (up to `max_ms`) until Hyprland reports `address` as the active window, so keys sent
+/// right after a focus change aren't delivered before the client has keyboard focus.
+fn wait_focus(address: &str, max_ms: u64) -> bool {
+    let start = Instant::now();
+    loop {
+        if hypr_json(&["activewindow"])["address"].as_str() == Some(address) {
+            return true;
+        }
+        if start.elapsed() >= Duration::from_millis(max_ms) {
+            return false;
+        }
+        sleep_ms(15);
+    }
+}
+
 fn sleep_ms(ms: u64) {
     std::thread::sleep(Duration::from_millis(ms));
 }
 
+/// Is (x, y) inside monitor `m` (Hyprland layout coordinates are logical pixels)?
+fn monitor_contains(m: &serde_json::Value, x: f64, y: f64) -> bool {
+    let num = |k: &str| m[k].as_f64().unwrap_or(0.0);
+    let scale = m["scale"].as_f64().filter(|s| *s > 0.0).unwrap_or(1.0);
+    let (mx, my) = (num("x"), num("y"));
+    let (mw, mh) = (num("width") / scale, num("height") / scale);
+    x >= mx && x < mx + mw && y >= my && y < my + mh
+}
+
+fn is_test_monitor(m: &serde_json::Value) -> bool {
+    m["name"].as_str().is_some_and(|n| n.starts_with("NT-"))
+}
+
+/// Where the owner's cursor goes back to: the saved point if it is on a real screen, otherwise
+/// the centre of a real screen. Never a test output, so one stranded cursor can't stay stranded.
+fn safe_home(saved: &serde_json::Value) -> Option<(i64, i64)> {
+    let monitors = hypr_json(&["monitors"]);
+    let real: Vec<&serde_json::Value> = monitors
+        .as_array()
+        .map(|ms| ms.iter().filter(|m| !is_test_monitor(m)).collect())
+        .unwrap_or_default();
+    if let (Some(x), Some(y)) = (saved["x"].as_f64(), saved["y"].as_f64())
+        && real.iter().any(|m| monitor_contains(m, x, y))
+    {
+        return Some((x as i64, y as i64));
+    }
+    let m = real
+        .iter()
+        .find(|m| m["focused"].as_bool() == Some(true))
+        .or_else(|| real.first())?;
+    let scale = m["scale"].as_f64().filter(|s| *s > 0.0).unwrap_or(1.0);
+    let c = |pos: &str, size: &str| {
+        m[pos].as_f64().unwrap_or(0.0) + m[size].as_f64().unwrap_or(0.0) / scale / 2.0
+    };
+    Some((c("x", "width") as i64, c("y", "height") as i64))
+}
+
+fn cursor_on_test_output() -> bool {
+    let cursor = hypr_json(&["cursorpos"]);
+    let (Some(x), Some(y)) = (cursor["x"].as_f64(), cursor["y"].as_f64()) else {
+        return false;
+    };
+    hypr_json(&["monitors"]).as_array().is_some_and(|ms| {
+        ms.iter()
+            .any(|m| is_test_monitor(m) && monitor_contains(m, x, y))
+    })
+}
+
+/// Give the owner back their screen: focus the window they had (unless it is a test window),
+/// else a real monitor, then put the cursor on a real screen. Focus first: focusing a window
+/// warps the cursor to it.
+fn give_back(home: Option<(i64, i64)>, prev_window: Option<&str>, test_window: &str) {
+    match prev_window.filter(|p| *p != test_window && !p.is_empty()) {
+        Some(prev) => focus(prev),
+        None => {
+            if let Some(name) = hypr_json(&["monitors"]).as_array().and_then(|ms| {
+                ms.iter()
+                    .find(|m| !is_test_monitor(m))
+                    .and_then(|m| m["name"].as_str().map(str::to_string))
+            }) {
+                hypr(&[
+                    "dispatch",
+                    &format!("hl.dsp.focus({{ monitor = \"{name}\" }})"),
+                ]);
+            }
+        }
+    }
+    if let Some((x, y)) = home {
+        hypr(&[
+            "dispatch",
+            &format!("hl.dsp.cursor.move({{ x = {x}, y = {y} }})"),
+        ]);
+    }
+}
+
+/// `nt-input __guard <pid> <x> <y> <prev-window|->`: a detached watchdog. When <pid> exits for
+/// any reason (finished, killed, crashed) and the cursor is still on a test output, it gives the
+/// owner their screen back. Started by every action, in its own process group.
+fn guard(args: &[String]) {
+    let pid = args.first().cloned().unwrap_or_default();
+    let home = match (args.get(1), args.get(2)) {
+        (Some(x), Some(y)) => x.parse().ok().zip(y.parse().ok()),
+        _ => None,
+    };
+    let prev = args
+        .get(3)
+        .filter(|p| p.as_str() != "-")
+        .map(String::as_str);
+    let started = Instant::now();
+    while std::path::Path::new(&format!("/proc/{pid}")).exists()
+        && started.elapsed() < Duration::from_secs(120)
+    {
+        sleep_ms(50);
+    }
+    if cursor_on_test_output() {
+        give_back(home, prev, "");
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|a| a == "__guard") {
+        guard(&args[1..]);
+        return;
+    }
+    // The owner's pause switch: while this file exists, nobody's test drives the real cursor.
+    // `touch $XDG_RUNTIME_DIR/nt-input.paused` pauses; removing it resumes.
+    let paused = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("nt-input.paused");
+    if paused.exists() {
+        eprintln!(
+            "nt-input: PAUSED by the owner ({}): they are using the machine. Don't drive the GUI \
+             any other way either; report the step as needing input verification.",
+            paused.display()
+        );
+        std::process::exit(75);
+    }
+    if args.first().is_some_and(|a| a == "--stay") {
+        eprintln!(
+            "--stay was removed: it left the owner's real cursor on a test output. \
+             Use `nt-input <fw> hover X Y OUT.png [MS]`, which screenshots the hover and restores."
+        );
+        std::process::exit(2);
+    }
     if args.len() < 2 {
         eprintln!(
             "{}",
@@ -246,9 +387,16 @@ fn main() {
 
     // What to put back afterwards.
     let cursor = hypr_json(&["cursorpos"]);
-    let prev_window = hypr_json(&["activewindow"])
+    // The owner's window to give focus back to; never a test window.
+    let active = hypr_json(&["activewindow"]);
+    let prev_window = active
         .get("address")
         .and_then(|a| a.as_str())
+        .filter(|_| {
+            !active["class"]
+                .as_str()
+                .is_some_and(|c| c.starts_with("nttest-"))
+        })
         .map(str::to_string);
     let window = hypr_json(&["clients"])
         .as_array()
@@ -261,6 +409,29 @@ fn main() {
         std::process::exit(1);
     };
     let win_addr = window["address"].as_str().unwrap_or_default().to_string();
+    let home = safe_home(&cursor);
+
+    // A watchdog in its own process group: if this process dies mid-action (killed, timed out,
+    // crashed), it still puts the owner's cursor and focus back.
+    if let Ok(exe) = std::env::current_exe() {
+        use std::os::unix::process::CommandExt;
+        let (hx, hy) = home.map_or((String::new(), String::new()), |(x, y)| {
+            (x.to_string(), y.to_string())
+        });
+        let _ = Command::new(exe)
+            .args([
+                "__guard",
+                &std::process::id().to_string(),
+                &hx,
+                &hy,
+                prev_window.as_deref().unwrap_or("-"),
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .process_group(0)
+            .spawn();
+    }
 
     let conn = Connection::connect_to_env().expect("no Wayland display");
     let mut queue = conn.new_event_queue();
@@ -295,6 +466,15 @@ fn main() {
     let mut needs_focus_restore = false;
     match args[1].as_str() {
         "move" => p.move_to(x, y),
+        "hover" => {
+            // Hover, screenshot the output while the pointer is still there, then restore.
+            let out = args.get(4).cloned().unwrap_or_else(|| "hover.png".into());
+            p.move_to(x, y);
+            sleep_ms(num(5, 700.0) as u64);
+            let _ = Command::new("grim")
+                .args(["-o", &output_name, &out])
+                .status();
+        }
         "click" => {
             let button = match args.get(4).map(String::as_str) {
                 Some("right") => BTN_RIGHT,
@@ -353,9 +533,19 @@ fn main() {
         }
         "key" | "type" => {
             focus(&win_addr);
-            sleep_ms(80);
+            if !wait_focus(&win_addr, 800) {
+                // Never type into whatever does have focus (it may be the owner's editor).
+                eprintln!("nt-input: window {win_addr} did not take focus; no keys sent");
+                give_back(home, prev_window.as_deref(), &win_addr);
+                std::process::exit(3);
+            }
+            // wtype uploads its own keymap first. Give the client time to compile it before
+            // the first key, or that key can be dropped (seen as "first key after a pause").
+            sleep_ms(40);
             let mut cmd = Command::new("wtype");
+            cmd.args(["-s", "60"]);
             if args[1] == "type" {
+                cmd.args(["-d", "12"]);
                 cmd.arg(args[2..].join(" "));
             } else {
                 for k in &args[2..] {
@@ -383,20 +573,12 @@ fn main() {
     p.vp.destroy();
     let _ = conn.flush();
 
-    // Focus first: focusing a window warps the cursor to it.
-    if needs_focus_restore
-        && let Some(prev) = prev_window
-        && prev != win_addr
-    {
-        focus(&prev);
-    }
-    if let (Some(cx), Some(cy)) = (cursor["x"].as_f64(), cursor["y"].as_f64()) {
+    if needs_focus_restore || cursor_on_test_output() {
+        give_back(home, prev_window.as_deref(), &win_addr);
+    } else if let Some((hx, hy)) = home {
         hypr(&[
             "dispatch",
-            &format!(
-                "hl.dsp.cursor.move({{ x = {}, y = {} }})",
-                cx as i64, cy as i64
-            ),
+            &format!("hl.dsp.cursor.move({{ x = {hx}, y = {hy} }})"),
         ]);
     }
 }
