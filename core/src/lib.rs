@@ -9,6 +9,7 @@
 //! - [`metrics`] and [`autopilot`]: the benchmark harness's hooks.
 
 pub mod autopilot;
+mod captions;
 mod client;
 mod error;
 mod fixtures;
@@ -24,9 +25,19 @@ pub mod player;
 mod polite;
 pub mod resolve;
 pub mod scroll;
+mod storyboard;
+mod transcripts;
 
+pub use captions::{CaptionLanguage, CaptionTrack};
 pub use client::{Client, Job, client, runtime};
 pub use error::{Error, Result};
-pub use library::{Library, LibraryData, data_dir, library};
+pub use library::{LastPlayed, Library, LibraryData, data_dir, library};
 pub use model::*;
+#[cfg(target_os = "linux")]
+pub use player::VideoSurface;
 pub use player::{PixelFormat, PlaybackState, Player, Status, VideoFrame};
+pub use resolve::AudioTrack;
+pub use storyboard::{Storyboard, StoryboardFrame, StoryboardLevel};
+
+#[cfg(test)]
+mod proptests;

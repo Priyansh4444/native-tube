@@ -145,6 +145,9 @@ const FLING_P2X: f64 = 0.55_f32 as f64;
 const FLING_P2Y: f64 = 1.0;
 /// `kDefaultPixelDeceleration` = 2300 px/s^2 (sets duration = v / 2300).
 const FLING_PIXEL_DECELERATION: f64 = 2300.0;
+/// `ui::GestureConfiguration::max_fling_velocity_` on Aura (px/s): the gesture layer caps every
+/// fling it starts at this speed, before the booster adds earlier flings.
+const MAX_FLING_VELOCITY: f64 = 17_000.0;
 /// `kMaxCurveDurationForFling` = 2 s.
 const FLING_MAX_DURATION_S: f64 = 2.0;
 /// `kDefaultPhysicalDeceleration` = 2.7559e-5 inch/ms^2 (sets distance).
@@ -1321,6 +1324,7 @@ impl ScrollAnimator {
 
     /// `FlingController::ProcessGestureFlingStart` / `UpdateCurrentFlingState`.
     fn start_fling(&mut self, raw_velocity: f64, now: f64) {
+        let raw_velocity = raw_velocity.clamp(-MAX_FLING_VELOCITY, MAX_FLING_VELOCITY);
         let start_time = self.last_seen_scroll_update.unwrap_or(now);
         self.end_touchpad_scroll();
         let velocity = self.booster.velocity_for_fling_start(raw_velocity, now);

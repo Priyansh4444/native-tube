@@ -14,8 +14,10 @@
 
 use crate::error::{Error, Result};
 use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+// Tokio's clock, so cooldowns follow a paused test clock; it is the system clock otherwise.
 use tokio::sync::{Semaphore, SemaphorePermit};
+use tokio::time::Instant;
 
 /// Requests to YouTube in flight at once.
 pub const MAX_IN_FLIGHT: usize = 3;
@@ -60,12 +62,37 @@ fn paused() -> Option<Error> {
     }
 }
 
+/// Fail at once while YouTube has asked for less traffic. For requests that skip [`turn`]
+/// (the image CDN keeps its own concurrency) but must still respect a cooldown.
+pub(crate) fn cooldown() -> Result<()> {
+    paused().map_or(Ok(()), Err)
+}
+
 /// Wait for a turn to talk to YouTube. Hold the permit until the response has been read.
 pub async fn turn() -> Result<SemaphorePermit<'static>> {
     if let Some(e) = paused() {
         return Err(e);
     }
     let g = gate();
+    let permit = take_turn(g).await?;
+    // A cooldown may have started while we waited.
+    if let Some(e) = paused() {
+        return Err(e);
+    }
+    Ok(permit)
+}
+
+pub(crate) async fn transcript_turn() -> Result<SemaphorePermit<'static>> {
+    static G: OnceLock<Gate> = OnceLock::new();
+    take_turn(G.get_or_init(|| Gate {
+        slots: Semaphore::new(2),
+        next_start: tokio::sync::Mutex::new(Instant::now()),
+        paused_until: Mutex::new(None),
+    }))
+    .await
+}
+
+async fn take_turn(g: &'static Gate) -> Result<SemaphorePermit<'static>> {
     let permit = g.slots.acquire().await.map_err(|_| Error::Cancelled)?;
     {
         let mut next = g.next_start.lock().await;
@@ -74,10 +101,6 @@ pub async fn turn() -> Result<SemaphorePermit<'static>> {
             tokio::time::sleep(*next - now).await;
         }
         *next = Instant::now() + MIN_GAP;
-    }
-    // A cooldown may have started while we waited.
-    if let Some(e) = paused() {
-        return Err(e);
     }
     Ok(permit)
 }

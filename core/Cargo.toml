@@ -8,6 +8,7 @@ description = "Shared, UI-framework-agnostic backend for the NativeTube clients:
 bytes = "1"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 libc = "0.2"
+raw-window-handle = "0.6"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "gzip", "brotli", "json"] }
 roxmltree = "0.21"
 serde = { version = "1", features = ["derive"] }
@@ -18,8 +19,30 @@ tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"
 # MPRIS: media keys, "now playing", and idle inhibit for desktops that tie it to playing players.
 zbus = { version = "6", default-features = false, features = ["tokio", "service"] }
 
+khronos-egl = { version = "6", features = ["dynamic"] }
+wayland-backend = { version = "0.3", features = ["client_system", "dlopen"] }
+wayland-client = { version = "0.31", features = ["system"] }
+wayland-egl = "0.32"
+wayland-protocols = { version = "0.32", features = ["client"] }
+
 [[bin]]
 name = "ntctl"
 path = "src/bin/ntctl.rs"
 
 [workspace]
+
+[dev-dependencies]
+proptest = "1"
+tempfile = "3"
+tokio = { version = "1", features = ["test-util"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+string_slice = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+unchecked_time_subtraction = "deny"

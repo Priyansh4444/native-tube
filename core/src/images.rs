@@ -7,6 +7,7 @@ use crate::error::{Error, Result};
 use crate::model::RgbaImage;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use tokio::sync::OnceCell;
 
 /// Decoded pixels kept across all images. Thumbnails at 320x180 are 230 KB each, so ~400 of them.
@@ -16,8 +17,13 @@ const PARALLEL_FETCHES: usize = 8;
 
 type Slot = Arc<OnceCell<Result<Arc<RgbaImage>>>>;
 
+struct Entry {
+    slot: Slot,
+    bytes: Option<usize>,
+}
+
 struct Cache {
-    slots: HashMap<(String, u32), Slot>,
+    slots: HashMap<(String, u32), Entry>,
     order: VecDeque<(String, u32)>,
     bytes: usize,
 }
@@ -86,7 +92,7 @@ pub fn image(url: &str, max_width: u32) -> Job<Arc<RgbaImage>> {
     let key = (url.to_string(), max_width);
     let slot = {
         let mut c = cache().lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(slot) = c.slots.get(&key).cloned() {
+        if let Some(slot) = c.slots.get(&key).map(|e| e.slot.clone()) {
             if let Some(pos) = c.order.iter().position(|k| *k == key) {
                 let k = c.order.remove(pos).unwrap_or_else(|| key.clone());
                 c.order.push_back(k);
@@ -94,7 +100,13 @@ pub fn image(url: &str, max_width: u32) -> Job<Arc<RgbaImage>> {
             slot
         } else {
             let slot: Slot = Arc::new(OnceCell::new());
-            c.slots.insert(key.clone(), slot.clone());
+            c.slots.insert(
+                key.clone(),
+                Entry {
+                    slot: slot.clone(),
+                    bytes: None,
+                },
+            );
             c.order.push_back(key.clone());
             slot
         }
@@ -105,32 +117,25 @@ pub fn image(url: &str, max_width: u32) -> Job<Arc<RgbaImage>> {
     let (tx, rx_job) = job_pair();
     crate::client::runtime().spawn(async move {
         let (url, max_width) = key.clone();
-        let mine = slot.clone();
-        let own_key = key.clone();
         let result = slot
-            .get_or_init(|| async move {
-                let bytes = {
-                    let _turn = fetch_gate().acquire().await;
-                    client().get_bytes(&url).await?
-                };
-                let img = tokio::task::spawn_blocking(move || decode(&bytes, max_width))
-                    .await
-                    .map_err(|_| Error::Cancelled)?
-                    .map(Arc::new)?;
-                // Counted exactly once, by the job that decoded it, and only if this slot is
-                // still the one in the cache (it can be evicted or replaced while in flight).
-                admit(&key, &mine, img.pixels.len());
-                Ok(img)
+            .get_or_init(|| async {
+                let _turn = fetch_gate().acquire().await;
+                fetch_image(&url, max_width).await.map(Arc::new)
             })
             .await
             .clone();
-        if result.is_err() {
-            // Failures aren't cached, so a flaky network is retried next time. Remove only our
-            // own slot: a newer request for the same image may already sit under the key.
-            let mut c = cache().lock().unwrap_or_else(|e| e.into_inner());
-            if c.slots.get(&own_key).is_some_and(|s| Arc::ptr_eq(s, &slot)) {
-                c.slots.remove(&own_key);
-                c.order.retain(|o| *o != own_key);
+        match &result {
+            Ok(img) => admit(&key, &slot, img.pixels.len()),
+            Err(_) => {
+                // A newer request may already have replaced the failed slot.
+                let mut c = cache().lock().unwrap_or_else(|e| e.into_inner());
+                if c.slots
+                    .get(&key)
+                    .is_some_and(|e| Arc::ptr_eq(&e.slot, &slot))
+                {
+                    c.slots.remove(&key);
+                    c.order.retain(|o| *o != key);
+                }
             }
         }
         let _ = tx.send(result);
@@ -143,33 +148,163 @@ fn job_pair<T: Send + 'static>() -> (tokio::sync::oneshot::Sender<Result<T>>, Jo
     (tx, Job::from_receiver(rx))
 }
 
-/// Count a decoded image against the budget, then evict least recently used *finished* images
-/// until the cache fits. Images still loading are never evicted: their bytes aren't counted yet.
+/// Account for completed entries exactly once, evicting oldest accounted entries first.
 fn admit(key: &(String, u32), slot: &Slot, len: usize) {
     let mut c = cache().lock().unwrap_or_else(|e| e.into_inner());
-    if !c.slots.get(key).is_some_and(|s| Arc::ptr_eq(s, slot)) {
+    let Some(entry) = c.slots.get_mut(key) else {
+        return;
+    };
+    if !Arc::ptr_eq(&entry.slot, slot) || entry.bytes.is_some() {
         return;
     }
+    entry.bytes = Some(len);
     c.bytes += len;
-    let mut i = 0;
-    while c.bytes > BUDGET_BYTES && i < c.order.len() {
-        let k = c.order[i].clone();
-        if k == *key {
-            i += 1;
-            continue;
-        }
-        let finished = c.slots.get(&k).and_then(|s| s.get().cloned());
-        match finished {
-            Some(done) => {
-                c.order.remove(i);
-                c.slots.remove(&k);
-                if let Ok(img) = done {
-                    c.bytes = c.bytes.saturating_sub(img.pixels.len());
-                }
-            }
-            None => i += 1, // still loading
+    while c.bytes > BUDGET_BYTES {
+        let Some(index) = c
+            .order
+            .iter()
+            .position(|k| c.slots.get(k).is_some_and(|e| e.bytes.is_some()))
+        else {
+            break;
+        };
+        if let Some(removed) = c.order.remove(index).and_then(|k| c.slots.remove(&k)) {
+            c.bytes -= removed.bytes.unwrap_or_default();
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Poster {
+    Renderer,
+    Hd,
+    Sd,
+    Hq,
+    Medium,
+}
+
+fn poster_candidates(url: &str, max_width: u32) -> Option<(String, Vec<(Poster, String)>)> {
+    let parsed = reqwest::Url::parse(url).ok()?;
+    if parsed.host_str()? != "i.ytimg.com" {
+        return None;
+    }
+    let [directory, id, file] = parsed
+        .path_segments()?
+        .collect::<Vec<_>>()
+        .try_into()
+        .ok()?;
+    if !matches!(directory, "vi" | "vi_webp")
+        || id.len() != 11
+        || !id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
+    {
+        return None;
+    }
+    let (name, _) = file.split_once('.')?;
+    if !matches!(
+        name,
+        "hq720" | "maxresdefault" | "sddefault" | "hqdefault" | "mqdefault" | "default"
+    ) {
+        return None; // Animated previews, chapter images and sprite sheets are not posters.
+    }
+    let canonical = |name: &str| format!("https://i.ytimg.com/vi/{id}/{name}.jpg");
+    let mut candidates = Vec::with_capacity(5);
+    if max_width == 0 || max_width > 320 {
+        if matches!(name, "hq720" | "maxresdefault") && url != canonical("hq720") {
+            candidates.push((Poster::Renderer, url.to_owned()));
+        }
+        candidates.extend([
+            (Poster::Hd, canonical("hq720")),
+            (Poster::Sd, canonical("sddefault")),
+            (Poster::Hq, canonical("hqdefault")),
+        ]);
+    }
+    candidates.push((Poster::Medium, canonical("mqdefault")));
+    Some((id.to_owned(), candidates))
+}
+
+const MISSING_VARIANT_TTL: Duration = Duration::from_secs(600);
+type MissingPoster = (String, Poster);
+
+fn missing_posters() -> &'static Mutex<VecDeque<(MissingPoster, Instant)>> {
+    static MISSING: OnceLock<Mutex<VecDeque<(MissingPoster, Instant)>>> = OnceLock::new();
+    MISSING.get_or_init(Default::default)
+}
+
+async fn fetch_image(url: &str, max_width: u32) -> Result<RgbaImage> {
+    let Some((id, candidates)) = poster_candidates(url, max_width) else {
+        let bytes = client().get_bytes(url).await?;
+        return decode_worker(bytes, max_width, None).await;
+    };
+    let mut failure = None;
+    for (kind, candidate) in candidates {
+        let missing_key = (
+            if kind == Poster::Renderer {
+                candidate.clone()
+            } else {
+                id.clone()
+            },
+            kind,
+        );
+        {
+            let mut missing = missing_posters().lock().unwrap_or_else(|e| e.into_inner());
+            while missing
+                .front()
+                .is_some_and(|(_, at)| at.elapsed() >= MISSING_VARIANT_TTL)
+            {
+                missing.pop_front();
+            }
+            if missing.iter().any(|(key, _)| key == &missing_key) {
+                continue;
+            }
+        }
+        match client().get_bytes_if_present(&candidate).await {
+            Ok(Some(bytes)) => match decode_worker(bytes, max_width, Some(kind)).await {
+                Ok(img) => return Ok(img),
+                Err(Error::Parse(message)) if message == "Thumbnail variant is a placeholder" => {}
+                Err(e) => {
+                    failure = Some(e);
+                    continue;
+                }
+            },
+            Ok(None) => {}
+            Err(e @ Error::Fixture(_)) => {
+                failure = Some(e);
+                continue;
+            }
+            Err(e) => return Err(e),
+        }
+        if kind != Poster::Medium {
+            let mut missing = missing_posters().lock().unwrap_or_else(|e| e.into_inner());
+            if missing.len() >= 2048 {
+                missing.pop_front();
+            }
+            missing.push_back((missing_key, Instant::now()));
+        }
+    }
+    Err(failure.unwrap_or_else(|| Error::Network("Video thumbnail is unavailable".into())))
+}
+
+async fn decode_worker(
+    bytes: bytes::Bytes,
+    max_width: u32,
+    poster: Option<Poster>,
+) -> Result<RgbaImage> {
+    tokio::task::spawn_blocking(move || {
+        let started = Instant::now();
+        let decoded = decode_image(&bytes, max_width, poster);
+        if std::env::var_os("NT_IMAGE_TRACE").is_some() {
+            eprintln!(
+                "image decode: {:?} bytes={} width={max_width} ms={:.2}",
+                poster,
+                bytes.len(),
+                started.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+        decoded
+    })
+    .await
+    .map_err(|_| Error::Cancelled)?
 }
 
 /// Decoded bytes currently held by the cache.
@@ -178,11 +313,30 @@ pub fn cached_bytes() -> usize {
 }
 
 pub fn decode(bytes: &[u8], max_width: u32) -> Result<RgbaImage> {
-    let img = image::load_from_memory(bytes).map_err(|e| Error::Parse(format!("image: {e}")))?;
+    decode_image(bytes, max_width, None)
+}
+
+fn decode_image(bytes: &[u8], max_width: u32, poster: Option<Poster>) -> Result<RgbaImage> {
+    let mut img =
+        image::load_from_memory(bytes).map_err(|e| Error::Parse(format!("image: {e}")))?;
+    if let Some(kind) = poster {
+        if kind != Poster::Medium && img.width() < 320 {
+            return Err(Error::Parse("Thumbnail variant is a placeholder".into()));
+        }
+        let crop_h = (u64::from(img.width()) * 9 / 16).max(1) as u32;
+        if img.height() > crop_h {
+            img = img.crop_imm(0, (img.height() - crop_h) / 2, img.width(), crop_h);
+        }
+    }
     let img = if max_width > 0 && img.width() > max_width {
         let h =
             (u64::from(img.height()) * u64::from(max_width) / u64::from(img.width())).max(1) as u32;
-        img.resize_exact(max_width, h, image::imageops::FilterType::Triangle)
+        let filter = if img.width() >= max_width.saturating_mul(2) {
+            image::imageops::FilterType::Lanczos3
+        } else {
+            image::imageops::FilterType::Triangle
+        };
+        img.resize_exact(max_width, h, filter)
     } else {
         img
     };
@@ -227,7 +381,13 @@ mod tests {
         let a = done(1000);
         {
             let mut c = cache().lock().unwrap();
-            c.slots.insert(k("a"), a.clone());
+            c.slots.insert(
+                k("a"),
+                Entry {
+                    slot: a.clone(),
+                    bytes: None,
+                },
+            );
             c.order.push_back(k("a"));
         }
         admit(&k("a"), &a, 1000);

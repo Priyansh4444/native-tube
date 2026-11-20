@@ -20,6 +20,9 @@ pub enum Mode {
 pub struct Fixtures {
     dir: PathBuf,
     mode: Mode,
+    /// Every key asked for, so tests can check which requests a call makes.
+    #[cfg(test)]
+    pub(crate) asked: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 impl Fixtures {
@@ -31,7 +34,16 @@ impl Fixtures {
             _ => Mode::Replay,
         };
         let _ = std::fs::create_dir_all(&dir);
-        Some(Fixtures { dir, mode })
+        Some(Fixtures::new(dir, mode))
+    }
+
+    pub(crate) fn new(dir: PathBuf, mode: Mode) -> Fixtures {
+        Fixtures {
+            dir,
+            mode,
+            #[cfg(test)]
+            asked: Default::default(),
+        }
     }
 
     fn path(&self, key: &str) -> PathBuf {
@@ -40,6 +52,11 @@ impl Fixtures {
 
     /// `Ok(None)` means "go to the network".
     pub fn lookup(&self, key: &str) -> Result<Option<bytes::Bytes>> {
+        #[cfg(test)]
+        self.asked
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(key.to_string());
         if self.mode == Mode::Record {
             return Ok(None);
         }
