@@ -86,8 +86,6 @@ agent hour. The **Core** column is shared work in `nt-core`, done once for all t
 | Feature | YouTube | GPUI | iced | Rune | Core | G | I | R |
 |---|---|---|---|---|---|---|---|---|
 | Guide: ☰ opens the full sidebar (Home, Shorts, Subscriptions, You, History, Watch later, playlists) | yes | ✗ rail only | ✗ | ✗ | – | S | M | M |
-| Shorts player (vertical, swipe/wheel to the next) | yes | ✗ | ✗ | ✗ | reel feed (L) | L | XL | L |
-| Live: chat beside the player, "N watching", DVR seek | yes | ✗ | ✗ | ✗ | live chat polling (L) | M | L | M |
 | `?` keyboard shortcut sheet | yes | ✗ | ✗ | ✗ | – | S | S | S |
 | Back/Forward keep scroll, query, video position | yes | ✓ | in progress | in progress | – | – | – | – |
 | Keyboard focus rings and Tab order | yes | ✗ | ◐ | ◐ | – | M | M | M |
@@ -107,6 +105,7 @@ See the terms-of-service note in the [README](../../README.md):
 - Download
 - Report
 - Clip and Thanks
+- Shorts and live chat (owner's call, 2026-11-18: core YouTube only)
 
 ## Totals
 
@@ -115,8 +114,7 @@ per agent hour. Treat them as ±50%.
 
 | | GPUI | iced | Rune |
 |---|---|---|---|
-| UI work, excluding Shorts and live chat | ~28 h · ~$780 | ~44 h · ~$1,220 | ~40 h · ~$1,100 |
-| With Shorts and live chat | ~34 h · ~$940 | ~56 h · ~$1,550 | ~45 h · ~$1,260 |
+| UI work | ~28 h · ~$780 | ~44 h · ~$1,220 | ~40 h · ~$1,100 |
 | Shared core work (once, for all three) | | ~36 h · ~$1,000 | |
 
 GPUI needs about two thirds of iced's effort for the same result. Rune is close to iced.
@@ -175,4 +173,4 @@ work.
    queue, the inline preview player, feed chips.
 4. **UI, round B.** Miniplayer, inline preview, the guide, search filters, channel tabs,
    playlists, the transcript.
-5. **Later:** Shorts, live chat, quality above 1080p (needs the GPU video path).
+5. **Later:** quality above 1080p (needs the GPU video path).
