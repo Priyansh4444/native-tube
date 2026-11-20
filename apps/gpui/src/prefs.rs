@@ -2,19 +2,25 @@
 //! video was watched (for resume and the red progress bar on thumbnails). Saved as JSON next to
 //! the library, written on a core worker so the UI thread never touches the disk.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 /// Watch positions kept, newest first; older ones are dropped.
 const MAX_POSITIONS: usize = 400;
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Prefs {
     pub autoplay: bool,
+    /// The full guide is open (pushing the page), remembered across sessions.
+    pub guide: bool,
     /// video id → (position s, duration s, sequence) ; the sequence orders entries for eviction.
     positions: HashMap<String, (f64, f64, u64)>,
     seq: u64,
     path: PathBuf,
+    save_seq: Cell<u64>,
+    saved_seq: Arc<Mutex<u64>>,
 }
 
 impl Prefs {
@@ -22,9 +28,12 @@ impl Prefs {
         let path = nt_core::data_dir().join("gpui-prefs.json");
         let mut p = Prefs {
             autoplay: true,
+            guide: false,
             positions: HashMap::new(),
             seq: 0,
             path,
+            save_seq: Cell::new(0),
+            saved_seq: Arc::new(Mutex::new(0)),
         };
         let Ok(bytes) = std::fs::read(&p.path) else {
             return p;
@@ -34,6 +43,9 @@ impl Prefs {
         };
         if let Some(a) = v.get("autoplay").and_then(|a| a.as_bool()) {
             p.autoplay = a;
+        }
+        if let Some(g) = v.get("guide").and_then(|g| g.as_bool()) {
+            p.guide = g;
         }
         if let Some(list) = v.get("positions").and_then(|l| l.as_array()) {
             for item in list {
@@ -88,10 +100,20 @@ impl Prefs {
         list.sort_by_key(|(_, v)| v.2);
         let json = serde_json::json!({
             "autoplay": self.autoplay,
+            "guide": self.guide,
             "positions": list.iter().map(|(k, v)| serde_json::json!([k, v.0, v.1])).collect::<Vec<_>>(),
         });
         let path = self.path.clone();
+        let seq = self.save_seq.get().wrapping_add(1);
+        self.save_seq.set(seq);
+        let saved_seq = self.saved_seq.clone();
         nt_core::runtime().spawn_blocking(move || {
+            let Ok(mut saved) = saved_seq.lock() else {
+                return;
+            };
+            if *saved >= seq {
+                return;
+            }
             let Ok(bytes) = serde_json::to_vec(&json) else {
                 return;
             };
@@ -99,8 +121,8 @@ impl Prefs {
                 let _ = std::fs::create_dir_all(dir);
             }
             let tmp = path.with_extension("json.tmp");
-            if std::fs::write(&tmp, bytes).is_ok() {
-                let _ = std::fs::rename(&tmp, &path);
+            if std::fs::write(&tmp, bytes).is_ok() && std::fs::rename(&tmp, &path).is_ok() {
+                *saved = seq;
             }
         });
     }

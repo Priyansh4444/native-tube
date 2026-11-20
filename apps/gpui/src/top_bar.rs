@@ -2,19 +2,24 @@
 //! view: it re-renders only when it is notified (typing, suggestions, focus), never on a scroll or
 //! video frame.
 
+use crate::chrome::focus_ring;
 use crate::icons::icon;
+use crate::probe::{self, Layer, target};
 use crate::theme::*;
 use gpui::prelude::*;
 use gpui::{
     Context, Entity, EventEmitter, Focusable as _, HighlightStyle, MouseButton, MouseDownEvent,
     SharedString, StyledText, Subscription, Window, deferred, div, px,
 };
+use gpui_component::StyledExt;
 use gpui_component::input::{Escape, Input, InputEvent, InputState, MoveDown, MoveUp};
 use std::time::Duration;
 
 pub enum TopBarEvent {
     Submit(String),
     Back,
+    /// ☰: open or close the guide.
+    Guide,
 }
 
 pub struct TopBar {
@@ -57,6 +62,14 @@ impl TopBar {
 
     pub fn is_focused(&self, window: &Window, cx: &gpui::App) -> bool {
         self.search.read(cx).focus_handle(cx).is_focused(window)
+    }
+
+    pub fn query(&self, cx: &gpui::App) -> Option<SharedString> {
+        (!self.compact || self.expanded).then(|| self.search.read(cx).value())
+    }
+
+    pub fn suggestions_shown(&self) -> bool {
+        self.open && self.focused && !self.items.is_empty() && (!self.compact || self.expanded)
     }
 
     /// `/` focuses search. The "/" itself can still arrive through the input method after the
@@ -201,6 +214,7 @@ impl TopBar {
         let typed = self.typed.trim_start().to_lowercase();
         let mut list = div()
             .id("suggestions")
+            .children(target(cx, Layer::Suggestions, "_panel", ""))
             .occlude()
             .absolute()
             .top(px(44.0))
@@ -239,6 +253,7 @@ impl TopBar {
             list = list.child(
                 div()
                     .id(("sugg", i))
+                    .children(target(cx, Layer::Suggestions, "suggestion", s.as_str()))
                     .h(px(32.0))
                     .px(px(16.0))
                     .flex()
@@ -273,14 +288,19 @@ impl TopBar {
         Some(deferred(list).with_priority(1))
     }
 
-    fn search_box(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn search_box(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let has_text = !self.search.read(cx).value().is_empty();
         let border = if self.focused {
             search_focus()
         } else {
             search_border()
         };
+        let keyboard = self.is_focused(window, cx) && window.last_input_was_keyboard();
         let field = div()
+            .children(target(cx, Layer::Chrome, "search_field", "Search"))
+            .when(keyboard, |d| {
+                d.refine_style(&focus_ring(Default::default()))
+            })
             .flex_1()
             .h_full()
             .min_w(px(0.0))
@@ -297,6 +317,7 @@ impl TopBar {
             .child(
                 Input::new(&self.search)
                     .appearance(false)
+                    .tab_index(2)
                     .w_full()
                     .text_size(px(16.0)),
             )
@@ -304,6 +325,9 @@ impl TopBar {
                 d.child(
                     div()
                         .id("search-clear")
+                        .tab_index(3)
+                        .focus_visible(focus_ring)
+                        .children(target(cx, Layer::Chrome, "clear", "Clear search"))
                         .size(px(40.0))
                         .flex()
                         .flex_none()
@@ -324,6 +348,9 @@ impl TopBar {
             });
         let go = div()
             .id("search-go")
+            .tab_index(4)
+            .focus_visible(focus_ring)
+            .children(target(cx, Layer::Chrome, "search_button", "Search"))
             .w(px(64.0))
             .h_full()
             .flex()
@@ -386,7 +413,16 @@ impl TopBar {
             .justify_center()
             .rounded_full()
             .when(enabled, |d| {
-                d.cursor_pointer()
+                let (kind, label) = match id {
+                    "guide" => ("guide", "Guide"),
+                    "back" => ("back", "Back"),
+                    "search-open" => ("search_button", "Search"),
+                    _ => ("back", "Close search"),
+                };
+                d.tab_index(if id == "guide" { 0 } else { 1 })
+                    .focus_visible(focus_ring)
+                    .children(target(cx, Layer::Chrome, kind, label))
+                    .cursor_pointer()
                     .hover(|s| s.bg(fill()))
                     .on_click(cx.listener(move |this, _, window, cx| on(this, window, cx)))
             })
@@ -395,8 +431,13 @@ impl TopBar {
 }
 
 impl Render for TopBar {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        probe::begin(cx, &[Layer::Chrome, Layer::Suggestions]);
         let bar = div()
+            .id("top-bar")
+            .tab_group()
+            .tab_index(1)
+            .tab_stop(false)
             .size_full()
             .bg(bg())
             .flex()
@@ -416,19 +457,26 @@ impl Render for TopBar {
                         this.close(cx);
                     },
                 ))
-                .child(div().flex_1().child(self.search_box(cx)));
+                .child(div().flex_1().child(self.search_box(window, cx)));
         }
         let left = div()
             .flex()
             .flex_none()
             .items_center()
-            .gap(px(12.0))
+            .gap(px(4.0))
+            .child(self.round_button("guide", "menu", true, cx, |_, _, cx| {
+                cx.emit(TopBarEvent::Guide)
+            }))
             .child(
                 self.round_button("back", "arrow_back", self.can_back, cx, |_, _, cx| {
                     cx.emit(TopBarEvent::Back)
                 }),
             )
-            .child(txt("NativeTube", 20.0, 28.0, W700, text()).whitespace_nowrap());
+            .child(
+                txt("NativeTube", 20.0, 28.0, W700, text())
+                    .ml(px(8.0))
+                    .whitespace_nowrap(),
+            );
         if self.compact {
             return bar.justify_between().child(left).child(self.round_button(
                 "search-open",
@@ -442,7 +490,7 @@ impl Render for TopBar {
                 },
             ));
         }
-        bar.child(left.w(px(200.0)))
+        bar.child(left.w(px(224.0)))
             .child(
                 div()
                     .flex_1()
@@ -450,8 +498,8 @@ impl Render for TopBar {
                     .px(px(16.0))
                     .flex()
                     .justify_center()
-                    .child(self.search_box(cx)),
+                    .child(self.search_box(window, cx)),
             )
-            .child(div().w(px(200.0)).flex_shrink(1.0))
+            .child(div().w(px(224.0)).flex_shrink(1.0))
     }
 }

@@ -2,9 +2,11 @@
 //! Rendered inside `PageView` (a cached view) with `NtApp` as the context, so every listener
 //! acts on the app directly.
 
-use crate::app::{NtApp, now};
+use crate::app::{NtApp, Overlay, now};
+use crate::chrome::focus_ring;
 use crate::icons::icon;
 use crate::pages::*;
+use crate::probe::{self, Layer, target};
 use crate::theme::*;
 use gpui::prelude::*;
 use gpui::{
@@ -14,7 +16,7 @@ use gpui::{
 };
 use gpui_component::Sizable as _;
 use gpui_component::spinner::Spinner;
-use nt_core::{TOPICS, Video};
+use nt_core::{ChannelTab, Comment, PlaylistRef, TOPICS, Video};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -30,11 +32,17 @@ struct Ctx<'a> {
     /// The visible band (not the overscan): only here do spinners animate.
     vis: (f32, f32),
     win_w: f32,
+    tab: bool,
+    request_images: bool,
+    preview: Option<(usize, gpui::Entity<crate::preview::HoverPreview>)>,
 }
 
 impl Ctx<'_> {
     fn image(&mut self, url: Option<&str>, w: f32, cx: &mut Cx) -> Option<Arc<RenderImage>> {
         let url = url.filter(|u| !u.is_empty())?;
+        if !self.request_images {
+            return self.images.ready(url);
+        }
         self.images.get(
             url,
             w * self.scale,
@@ -87,6 +95,8 @@ fn pill(id: impl Into<gpui::ElementId>, primary: bool) -> gpui::Stateful<Div> {
     };
     div()
         .id(id)
+        .tab_index(0)
+        .focus_visible(focus_ring)
         .h(px(36.0))
         .px(px(16.0))
         .flex()
@@ -101,6 +111,9 @@ fn pill(id: impl Into<gpui::ElementId>, primary: bool) -> gpui::Stateful<Div> {
 }
 
 fn badge(v: &Video) -> Option<Div> {
+    if v.upcoming.is_some() {
+        return None;
+    }
     let (label, bg_) = if v.is_live {
         ("LIVE".to_string(), red())
     } else {
@@ -120,10 +133,24 @@ fn badge(v: &Video) -> Option<Div> {
 }
 
 /// A thumbnail with its badge, the red "watched" bar, and press feedback.
-fn thumb(ctx: &mut Ctx, v: &Video, w: f32, h: f32, radius: f32, cx: &mut Cx) -> Div {
+fn thumb(
+    ctx: &mut Ctx,
+    v: &Video,
+    (w, h): (f32, f32),
+    radius: f32,
+    index: usize,
+    cx: &mut Cx,
+) -> Div {
     let src = ctx.image(Some(&v.thumbnail), w, cx);
     let watched = ctx.prefs.watched(&v.id);
     let mut p = picture(src, w, h, radius).relative();
+    if let Some((_, preview)) = ctx.preview.as_ref().filter(|(i, _)| *i == index) {
+        p = p.child(
+            preview
+                .clone()
+                .cached(gpui::StyleRefinement::default().absolute().inset_0()),
+        );
+    }
     if let Some(b) = badge(v) {
         p = p.child(b);
     }
@@ -142,6 +169,49 @@ fn thumb(ctx: &mut Ctx, v: &Video, w: f32, h: f32, radius: f32, cx: &mut Cx) -> 
     p
 }
 
+/// The meta line ("2M views • 3 days ago"), or "Premieres in 3 hours" for an upcoming video.
+/// Core words `published` the way YouTube does (§0b), transcript matches included.
+fn meta_line(v: &Video) -> String {
+    match &v.upcoming {
+        Some(upcoming) => upcoming.clone(),
+        None => v.meta_line(),
+    }
+}
+
+fn verified(
+    name: impl Into<SharedString>,
+    size: f32,
+    lh: f32,
+    weight: gpui::FontWeight,
+    color: gpui::Hsla,
+    on: bool,
+) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(4.0))
+        .min_w(px(0.0))
+        .child(line(name, size, lh, weight, color).min_w(px(0.0)))
+        .when(on, |d| d.child(icon("check_circle", size, color)))
+}
+
+fn video_badges(v: &Video) -> Option<Div> {
+    let mut tags = v.badges.iter().filter(|b| b.as_str() != "LIVE").peekable();
+    tags.peek()?;
+    Some(
+        div()
+            .flex()
+            .items_center()
+            .gap(px(4.0))
+            .children(tags.take(5).map(|label| {
+                txt(label.clone(), 11.0, 16.0, W500, text2())
+                    .px(px(4.0))
+                    .rounded(px(2.0))
+                    .bg(fill())
+            })),
+    )
+}
+
 /// The "⋮" button shown on hover; it opens the card menu at the pointer.
 fn more_button(
     id: impl Into<gpui::ElementId>,
@@ -152,6 +222,7 @@ fn more_button(
 ) -> impl IntoElement {
     div()
         .id(id)
+        .children(target(cx, Layer::Page, "more", "More actions"))
         .absolute()
         .top(px(-8.0))
         .right(px(-12.0))
@@ -282,12 +353,24 @@ fn spinner_block(ctx: &Ctx, b: &Block) -> AnyElement {
 
 impl NtApp {
     pub fn render_page(&mut self, window: &mut Window, cx: &mut Cx) -> AnyElement {
+        probe::begin(cx, &[Layer::Page]);
         let geo = self.geo;
         let t = now();
-        if self.chip_widths.is_empty() {
-            self.chip_widths = TOPICS
+        let dynamic = self
+            .top()
+            .map(|p| p.home_chips.as_slice())
+            .unwrap_or_default();
+        let labels: Vec<String> = if !self.top().is_some_and(Page::is_home) {
+            Vec::new()
+        } else if dynamic.is_empty() {
+            TOPICS.iter().map(|t| t.title.to_owned()).collect()
+        } else {
+            dynamic.iter().map(|t| t.label.clone()).collect()
+        };
+        if self.chip_widths.len() != labels.len() {
+            self.chip_widths = labels
                 .iter()
-                .map(|tp| measure_width(window, tp.title, 14.0, 500) + 24.0)
+                .map(|label| measure_width(window, label, 14.0, 500) + 24.0)
                 .collect();
         }
         let NtApp {
@@ -316,11 +399,14 @@ impl NtApp {
             Some((_, lay)) => {
                 let (a, b) = (offset - vh * 0.5, offset + vh * 1.5);
                 let built: Vec<Block> = lay.visible(a, b).cloned().collect();
-                let pre: Vec<Block> = lay
-                    .visible(offset - vh, offset + 2.0 * vh)
-                    .filter(|bl| bl.y + bl.h <= a || bl.y >= b)
-                    .cloned()
-                    .collect();
+                let pre = if watch {
+                    Vec::new()
+                } else {
+                    lay.visible(offset - vh, offset + 2.0 * vh)
+                        .filter(|bl| bl.y + bl.h <= a || bl.y >= b)
+                        .cloned()
+                        .collect()
+                };
                 (built, pre, lay.content_h)
             }
             None => (Vec::new(), Vec::new(), 0.0),
@@ -333,6 +419,13 @@ impl NtApp {
             t,
             vis: (offset, offset + vh),
             win_w: geo.win_w,
+            tab: false,
+            request_images: true,
+            preview: self
+                .hover_video
+                .as_ref()
+                .filter(|(id, _)| *id == page.id)
+                .map(|(_, index)| (*index, self.preview.clone())),
         };
         for b in &prefetch {
             prefetch_images(&mut ctx, b, cx);
@@ -345,7 +438,6 @@ impl NtApp {
             .w(px(cw))
             .h(px(vh))
             .overflow_hidden()
-            .track_focus(&self.focus)
             .on_scroll(cx.listener(|this, ev: &ScrollEvent, window, cx| {
                 cx.stop_propagation();
                 this.on_scroll_event(ev, window, cx)
@@ -358,6 +450,11 @@ impl NtApp {
                 }),
             );
         for b in &blocks {
+            ctx.tab = b.y + b.h > offset && b.y < offset + vh;
+            // Related rows are cheap to build, but rapid Watch navigation rarely visits the
+            // second viewport. Give visible posters and one or two rows of lead time priority.
+            ctx.request_images =
+                !watch || (b.y + b.h > offset - 144.0 && b.y < offset + vh + 144.0);
             let el = block(&mut ctx, b, cx);
             area = area.child(
                 div()
@@ -371,31 +468,50 @@ impl NtApp {
         }
         let sb = scrollbar(self, vh, content_h, top, t, cx);
         area = area.children(sb);
-        let mut root = div().relative().size_full().bg(bg()).child(area);
+        let mut root = div()
+            .id("content")
+            .tab_group()
+            .tab_index(4)
+            .tab_stop(false)
+            .relative()
+            .size_full();
         if let Some(topic) = topic {
-            root = root.child(self.chips_bar(topic, cw, geo.pad(), cx));
+            root = root.child(self.chips_bar(topic, &labels, cw, geo.pad(), cx));
         }
-        root.into_any_element()
+        root.child(area).into_any_element()
     }
 
-    fn chips_bar(&mut self, selected: usize, cw: f32, pad: f32, cx: &mut Cx) -> AnyElement {
+    fn chips_bar(
+        &mut self,
+        selected: usize,
+        labels: &[String],
+        cw: f32,
+        pad: f32,
+        cx: &mut Cx,
+    ) -> AnyElement {
         let total: f32 = self.chip_widths.iter().sum::<f32>()
             + 12.0 * (self.chip_widths.len().saturating_sub(1)) as f32;
         let avail = cw - 2.0 * pad;
         self.chips_max = (total - avail).max(0.0);
         self.chips_x = self.chips_x.clamp(0.0, self.chips_max);
         let x = self.chips_x;
+        let mut chip_x = pad - x;
         let mut row = div()
             .absolute()
             .top(px(12.0))
             .left(px(pad - x))
             .flex()
             .gap(px(12.0));
-        for (i, tp) in TOPICS.iter().enumerate() {
+        for (i, label) in labels.iter().enumerate() {
             let on = i == selected;
+            let width = self.chip_widths.get(i).copied().unwrap_or(0.0);
+            let on_screen = chip_x + width > 0.0 && chip_x < cw;
+            chip_x += width + 12.0;
             row = row.child(
                 div()
                     .id(("chip", i))
+                    .when(on_screen, |d| d.tab_index(0).focus_visible(focus_ring))
+                    .children(target(cx, Layer::Page, "chip", label.as_str()))
                     .flex_none()
                     .h(px(32.0))
                     .px(px(12.0))
@@ -407,7 +523,7 @@ impl NtApp {
                     .when(!on, |d| d.hover(|s| s.bg(fill_hover())))
                     .on_click(cx.listener(move |this, _, _, cx| this.select_topic(i, cx)))
                     .child(txt(
-                        tp.title,
+                        label.clone(),
                         14.0,
                         20.0,
                         W500,
@@ -524,18 +640,6 @@ fn prefetch_images(ctx: &mut Ctx, b: &Block, cx: &mut Cx) {
                 ctx.image(v.channel_avatar.as_deref(), 24.0, cx);
             }
         }
-        BlockKind::CompactRow(i) => {
-            if let Some(v) = page.feed.items.get(*i) {
-                ctx.image(Some(&v.thumbnail), COMPACT_THUMB_W, cx);
-            }
-        }
-        BlockKind::Comment { i, .. } => {
-            let url = page
-                .watch()
-                .and_then(|w| w.comments.get(*i))
-                .and_then(|c| c.author_avatar.as_deref());
-            ctx.image(url, 40.0, cx);
-        }
         _ => {}
     }
 }
@@ -622,7 +726,6 @@ fn scrollbar(
 // ---- blocks ------------------------------------------------------------------------------
 
 fn block(ctx: &mut Ctx, b: &Block, cx: &mut Cx) -> AnyElement {
-    let page_id = ctx.page.id;
     match &b.kind {
         BlockKind::GridRow {
             first,
@@ -739,19 +842,70 @@ fn block(ctx: &mut Ctx, b: &Block, cx: &mut Cx) -> AnyElement {
             error_state(&p, "retry-page", cx, |this, cx| this.retry_page(cx))
         }
         BlockKind::MoreError => {
-            let Some(p) = ctx.page.feed.more_error.clone() else {
-                return div().into_any_element();
-            };
-            error_state(&p, "retry-more", cx, |this, cx| this.retry_more(cx))
+            retry_row("retry-more", "Couldn't load more", cx, NtApp::retry_more)
         }
-        BlockKind::CommentsError => {
-            let Some(CommentsState::Failed(p)) = ctx.page.watch().map(|w| w.comments_state.clone())
-            else {
-                return div().into_any_element();
-            };
-            error_state(&p, "retry-comments", cx, |this, cx| this.retry_comments(cx))
-        }
+        BlockKind::CommentsError => retry_row(
+            "retry-comments",
+            "Couldn't load comments",
+            cx,
+            NtApp::retry_comments,
+        ),
         BlockKind::Empty(kind) => empty_state(kind, cx),
+        BlockKind::Notice(i) => notice(ctx, *i, cx),
+        BlockKind::SearchChips => search_chips(ctx, cx),
+        BlockKind::SearchEntry(i) => search_entry(ctx, *i, b.w, b.h, cx),
+        BlockKind::SectionLabel => div()
+            .size_full()
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            .child(txt(
+                "Matches in video transcripts · search.pronsh.dev",
+                16.0,
+                22.0,
+                W500,
+                text(),
+            ))
+            .into_any_element(),
+        BlockKind::ContinueWatching => {
+            let Some((v, at)) = &ctx.page.resume else {
+                return div().into_any_element();
+            };
+            let art = ctx.image(Some(&v.thumbnail), 144.0, cx);
+            let (video, start) = (v.clone(), *at);
+            div()
+                .id("continue-watching")
+                .w_full()
+                .h_full()
+                .flex()
+                .items_center()
+                .gap(px(16.0))
+                .px(px(12.0))
+                .rounded(px(12.0))
+                .bg(fill())
+                .hover(|s| s.bg(fill_hover()))
+                .cursor_pointer()
+                .when(ctx.tab, |d| d.tab_index(0).focus_visible(focus_ring))
+                .children(target(cx, Layer::Page, "resume", v.title.as_str()))
+                .child(picture(art, 144.0, 81.0, 8.0))
+                .child(
+                    div()
+                        .min_w(px(0.0))
+                        .flex_1()
+                        .child(txt(
+                            format!("Continue watching · {}", nt_core::format::clock(start)),
+                            12.0,
+                            18.0,
+                            W500,
+                            text2(),
+                        ))
+                        .child(lines(v.title.clone(), 16.0, 22.0, W500, text(), 2)),
+                )
+                .on_click(cx.listener(move |a, _, window, cx| {
+                    a.open_video_at(video.clone(), Some(start), window, cx)
+                }))
+                .into_any_element()
+        }
         BlockKind::PageTitle => {
             let history = matches!(ctx.page.kind, Kind::History);
             let has = !ctx.page.feed.items.is_empty();
@@ -790,49 +944,539 @@ fn block(ctx: &mut Ctx, b: &Block, cx: &mut Cx) -> AnyElement {
             picture(src, b.w, b.h, 16.0).into_any_element()
         }
         BlockKind::ChannelHeader => channel_header(ctx, b.w, cx),
-        BlockKind::ChannelTabs => div()
-            .size_full()
-            .border_b_1()
-            .border_color(divider())
-            .flex()
-            .items_end()
-            .child(
-                div()
-                    .h(px(48.0))
-                    .px(px(12.0))
-                    .flex()
-                    .items_center()
-                    .border_b_2()
-                    .border_color(text())
-                    .child(txt("Videos", 16.0, 22.0, W500, text())),
-            )
-            .into_any_element(),
-        BlockKind::SubsStrip => subs_strip(ctx, b.w, cx),
-        BlockKind::Player => {
-            let theatre = b.x == 0.0 && b.w >= ctx.win_w - 1.0;
-            div()
-                .size_full()
-                .bg(black())
-                .when(!theatre, |d| d.rounded(px(12.0)))
-                .into_any_element()
+        BlockKind::ChannelTabs => channel_tabs(ctx, cx),
+        BlockKind::ChannelSort => channel_sort(ctx, cx),
+        BlockKind::ChannelPlaylist(i) => {
+            let Kind::Channel {
+                info: Some(info), ..
+            } = &ctx.page.kind
+            else {
+                return div().into_any_element();
+            };
+            let Some(playlist) = info.playlists.items.get(*i) else {
+                return div().into_any_element();
+            };
+            playlist_result(ctx, playlist, *i, b.w, b.h, cx)
         }
+        BlockKind::SubsStrip => subs_strip(ctx, b.w, cx),
+        BlockKind::Player => div().into_any_element(),
         BlockKind::WatchMeta { title_h } => watch_meta(ctx, b.w, *title_h, cx),
         BlockKind::WatchDesc { lines, shown } => watch_desc(ctx, *lines, *shown, cx),
-        BlockKind::CommentsHeader => {
-            let total = ctx.page.watch().and_then(|w| w.comments_total.clone());
-            let title = match total {
-                Some(n) => format!("{n} Comments"),
-                None => "Comments".to_string(),
+        BlockKind::Chapter(i) => chapter_row(ctx, *i, cx),
+        BlockKind::RelatedChips => related_chips(ctx, cx),
+        BlockKind::PlaylistHeader => ctx
+            .page
+            .watch()
+            .and_then(|w| w.info.as_ref())
+            .and_then(|i| i.playlist.as_ref())
+            .map(|p| {
+                line(p.title.clone(), 16.0, 22.0, W700, text())
+                    .pt(px(8.0))
+                    .into_any_element()
+            })
+            .unwrap_or_else(|| div().into_any_element()),
+        BlockKind::PlaylistVideo(i) => watch_playlist_row(ctx, *i, cx),
+        BlockKind::PlaylistMore => {
+            let Some(w) = ctx.page.watch() else {
+                return div().into_any_element();
             };
-            div()
-                .size_full()
-                .child(txt(title, 20.0, 28.0, W700, text()))
+            let id = ctx.page.id;
+            if w.playlist_loading {
+                spinner_block(ctx, b)
+            } else {
+                let label = if w.playlist_error {
+                    "Couldn't load more · Retry"
+                } else {
+                    "Show more videos"
+                };
+                pill("playlist-more", false)
+                    .child(txt(label, 14.0, 20.0, W500, text()))
+                    .children(target(cx, Layer::Page, "playlist_more", label))
+                    .on_click(cx.listener(move |a, _, _, cx| a.more_watch_playlist(id, cx)))
+                    .into_any_element()
+            }
+        }
+        BlockKind::CommentsHeader => comments_header(ctx, cx),
+        BlockKind::Comment { i, lines, shown } => {
+            let Some(w) = ctx.page.watch() else {
+                return div().into_any_element();
+            };
+            let Some(c) = w.comments.get(*i) else {
+                return div().into_any_element();
+            };
+            comment(ctx, c, Some(*i), b.w, *lines, *shown, cx)
+        }
+        BlockKind::Reply {
+            parent,
+            index,
+            lines,
+        } => {
+            let Some(c) = ctx
+                .page
+                .watch()
+                .and_then(|w| w.replies.get(parent))
+                .and_then(|r| r.items.get(*index))
+            else {
+                return div().into_any_element();
+            };
+            comment(ctx, c, None, b.w, *lines, *lines, cx)
+        }
+        BlockKind::ReplyTail(i) => {
+            let Some(r) = ctx.page.watch().and_then(|w| w.replies.get(i)) else {
+                return div().into_any_element();
+            };
+            if r.status == CommentsState::Loading {
+                return spinner_block(ctx, b);
+            }
+            let i = *i;
+            let label = if matches!(r.status, CommentsState::Failed(_)) {
+                "Couldn't load replies · Retry"
+            } else {
+                "Show more replies"
+            };
+            pill(("replies-more", i), false)
+                .children(target(cx, Layer::Page, "comment_replies", label))
+                .child(txt(label, 14.0, 20.0, W500, link()))
+                .on_click(cx.listener(move |a, _, _, cx| a.more_replies(i, cx)))
                 .into_any_element()
         }
-        BlockKind::Comment { i, lines, shown } => {
-            comment(ctx, page_id, *i, b.w, *lines, *shown, cx)
-        }
     }
+}
+
+fn retry_row(
+    id: &'static str,
+    label: &'static str,
+    cx: &mut Cx,
+    retry: fn(&mut NtApp, &mut Cx),
+) -> AnyElement {
+    div()
+        .size_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .gap(px(12.0))
+        .child(txt(label, 14.0, 20.0, W400, text2()))
+        .child(
+            pill(id, false)
+                .children(target(cx, Layer::Page, "retry", "Retry"))
+                .child(txt("Retry", 14.0, 20.0, W500, link()))
+                .on_click(cx.listener(move |a, _, _, cx| retry(a, cx))),
+        )
+        .into_any_element()
+}
+
+fn watch_playlist_row(ctx: &mut Ctx, i: usize, cx: &mut Cx) -> AnyElement {
+    let Some(panel) = ctx
+        .page
+        .watch()
+        .and_then(|w| w.info.as_ref())
+        .and_then(|info| info.playlist.as_ref())
+    else {
+        return div().into_any_element();
+    };
+    let Some(v) = panel.items.get(i) else {
+        return div().into_any_element();
+    };
+    let on = panel.index == Some(i);
+    let art = ctx.image(Some(&v.thumbnail), 112.0, cx);
+    div()
+        .id(("playlist-video", i))
+        .size_full()
+        .flex()
+        .items_center()
+        .gap(px(10.0))
+        .p(px(4.0))
+        .rounded(px(8.0))
+        .when(on, |d| d.bg(fill()))
+        .when(!on, |d| {
+            d.cursor_pointer()
+                .hover(|s| s.bg(fill()))
+                .tab_index(0)
+                .focus_visible(focus_ring)
+                .children(target(cx, Layer::Page, "playlist_video", v.title.as_str()))
+                .on_click(
+                    cx.listener(move |a, _, window, cx| a.open_watch_playlist_row(i, window, cx)),
+                )
+        })
+        .child(picture(art, 112.0, 63.0, 6.0))
+        .child(
+            div()
+                .min_w(px(0.0))
+                .flex_1()
+                .child(lines(v.title.clone(), 14.0, 20.0, W500, text(), 2))
+                .child(line(v.channel.clone(), 12.0, 18.0, W400, text2())),
+        )
+        .into_any_element()
+}
+
+fn related_chips(ctx: &Ctx, cx: &mut Cx) -> AnyElement {
+    let Some(w) = ctx.page.watch() else {
+        return div().into_any_element();
+    };
+    let Some(info) = &w.info else {
+        return div().into_any_element();
+    };
+    div()
+        .id("related-chips")
+        .w_full()
+        .h_full()
+        .overflow_x_scroll()
+        .flex()
+        .items_center()
+        .gap(px(8.0))
+        .children(info.related_chips.iter().enumerate().map(|(i, chip)| {
+            let on = w
+                .related_selected
+                .map_or(chip.selected, |active| active == i);
+            pill(("related-chip", i), on)
+                .children(target(cx, Layer::Page, "chip", chip.label.as_str()))
+                .child(
+                    txt(
+                        chip.label.clone(),
+                        14.0,
+                        20.0,
+                        W500,
+                        if on { on_light() } else { text() },
+                    )
+                    .whitespace_nowrap(),
+                )
+                .on_click(cx.listener(move |a, _, _, cx| a.select_related(i, cx)))
+        }))
+        .into_any_element()
+}
+
+fn search_chips(ctx: &Ctx, cx: &mut Cx) -> AnyElement {
+    let Kind::Search { view, .. } = &ctx.page.kind else {
+        return div().into_any_element();
+    };
+    div()
+        .size_full()
+        .flex()
+        .items_center()
+        .gap(px(12.0))
+        .child(
+            div()
+                .id("search-chips")
+                .flex_1()
+                .min_w(px(0.0))
+                .overflow_x_scroll()
+                .flex()
+                .gap(px(8.0))
+                .children(view.chips.iter().enumerate().map(|(i, option)| {
+                    let filter = option.filter.clone();
+                    pill(("search-chip", i), option.selected)
+                        .child(
+                            txt(
+                                option.label.clone(),
+                                14.0,
+                                20.0,
+                                W500,
+                                if option.selected { on_light() } else { text() },
+                            )
+                            .whitespace_nowrap(),
+                        )
+                        .when_some(filter, |d, filter| {
+                            d.children(target(cx, Layer::Page, "chip", option.label.as_str()))
+                                .on_click(cx.listener(move |a, _, window, cx| {
+                                    a.filter_search(filter.clone(), window, cx)
+                                }))
+                        })
+                })),
+        )
+        .when(!view.filters.is_empty(), |d| {
+            d.child(
+                pill("search-filters", false)
+                    .children(target(cx, Layer::Page, "filters", "Filters"))
+                    .child(icon("tune", 20.0, text()))
+                    .child(txt("Filters", 14.0, 20.0, W500, text()))
+                    .on_click(cx.listener(|a, _, _, cx| a.set_overlay(Overlay::Filters, cx))),
+            )
+        })
+        .into_any_element()
+}
+
+fn search_entry(ctx: &mut Ctx, i: usize, w: f32, h: f32, cx: &mut Cx) -> AnyElement {
+    let Kind::Search { view, .. } = &ctx.page.kind else {
+        return div().into_any_element();
+    };
+    let tw = list_thumb_w(w);
+    match view.rows.get(i) {
+        Some(SearchRow::Shelf(title)) => div()
+            .size_full()
+            .border_t_1()
+            .border_color(divider())
+            .flex()
+            .items_center()
+            .child(txt(title.clone(), 18.0, 26.0, W500, text()))
+            .into_any_element(),
+        Some(SearchRow::Playlist(p)) => playlist_result(ctx, p, i, w, h, cx),
+        Some(SearchRow::Channel(c)) => {
+            let art = ctx.image(c.channel.avatar.as_deref(), 112.0, cx);
+            let id = c.channel.id.clone();
+            let meta = [c.handle.as_deref(), c.channel.subscribers.as_deref()]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(" • ");
+            div()
+                .id(("search-channel", i))
+                .size_full()
+                .flex()
+                .items_center()
+                .gap(px(16.0))
+                .cursor_pointer()
+                .when(ctx.tab, |d| d.tab_index(0).focus_visible(focus_ring))
+                .children(target(cx, Layer::Page, "row", c.channel.name.as_str()))
+                .on_click(
+                    cx.listener(move |a, _, window, cx| a.open_channel(id.clone(), window, cx)),
+                )
+                .child(
+                    div()
+                        .w(px(tw))
+                        .flex_none()
+                        .flex()
+                        .justify_center()
+                        .child(avatar(art, 112.0)),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(6.0))
+                        .child(verified(
+                            c.channel.name.clone(),
+                            18.0,
+                            26.0,
+                            W400,
+                            text(),
+                            c.verified,
+                        ))
+                        .child(line(meta, 12.0, 18.0, W400, text2())),
+                )
+                .into_any_element()
+        }
+        _ => div().into_any_element(),
+    }
+}
+
+fn playlist_result(
+    ctx: &mut Ctx,
+    playlist: &PlaylistRef,
+    i: usize,
+    w: f32,
+    h: f32,
+    cx: &mut Cx,
+) -> AnyElement {
+    let tw = list_thumb_w(w);
+    let art = ctx.image(playlist.thumbnail.as_deref(), tw, cx);
+    let id = playlist.id.clone();
+    div()
+        .id(("search-playlist", i))
+        .size_full()
+        .flex()
+        .items_center()
+        .cursor_pointer()
+        .tab_index(0)
+        .focus_visible(focus_ring)
+        .children(target(cx, Layer::Page, "playlist", playlist.title.as_str()))
+        .on_click(cx.listener(move |a, _, _, cx| a.open_playlist(&id, cx)))
+        .gap(px(16.0))
+        .child(
+            div()
+                .w(px(tw))
+                .relative()
+                .child(
+                    div()
+                        .absolute()
+                        .left(px(12.0))
+                        .right(px(12.0))
+                        .top(px(-5.0))
+                        .h(px(12.0))
+                        .rounded(px(8.0))
+                        .bg(fill()),
+                )
+                .child(picture(art, tw, h.min(tw * 9.0 / 16.0), 12.0))
+                .when_some(playlist.video_count.clone(), |d, count| {
+                    d.child(
+                        div()
+                            .absolute()
+                            .right(px(8.0))
+                            .bottom(px(8.0))
+                            .bg(badge_bg())
+                            .rounded(px(4.0))
+                            .px(px(6.0))
+                            .child(txt(count, 12.0, 18.0, W500, text())),
+                    )
+                }),
+        )
+        .child(lines(playlist.title.clone(), 18.0, 26.0, W500, text(), 2))
+        .into_any_element()
+}
+
+fn channel_tabs(ctx: &Ctx, cx: &mut Cx) -> AnyElement {
+    let Kind::Channel {
+        info: Some(info),
+        tab,
+        ..
+    } = &ctx.page.kind
+    else {
+        return div().into_any_element();
+    };
+    let fallback = [ChannelTab::Videos];
+    let tabs = if info.tabs.is_empty() {
+        &fallback[..]
+    } else {
+        &info.tabs
+    };
+    div()
+        .size_full()
+        .border_b_1()
+        .border_color(divider())
+        .flex()
+        .items_end()
+        .children(tabs.iter().copied().enumerate().map(|(i, choice)| {
+            let label = match choice {
+                ChannelTab::Home => "Home",
+                ChannelTab::Videos => "Videos",
+                ChannelTab::Live => "Live",
+                ChannelTab::Playlists => "Playlists",
+            };
+            div()
+                .id(("channel-tab", i))
+                .h(px(48.0))
+                .px(px(12.0))
+                .flex()
+                .items_center()
+                .cursor_pointer()
+                .tab_index(0)
+                .focus_visible(focus_ring)
+                .when(choice == *tab, |d| d.border_b_2().border_color(text()))
+                .children(target(cx, Layer::Page, "tab", label))
+                .child(txt(
+                    label,
+                    16.0,
+                    22.0,
+                    W500,
+                    if choice == *tab { text() } else { text2() },
+                ))
+                .on_click(cx.listener(move |a, _, _, cx| a.channel_tab(choice, cx)))
+        }))
+        .into_any_element()
+}
+
+fn channel_sort(ctx: &Ctx, cx: &mut Cx) -> AnyElement {
+    let Kind::Channel {
+        info: Some(info),
+        sort,
+        ..
+    } = &ctx.page.kind
+    else {
+        return div().into_any_element();
+    };
+    div()
+        .size_full()
+        .flex()
+        .items_center()
+        .gap(px(8.0))
+        .children(info.video_sort.iter().enumerate().map(|(i, chip)| {
+            let on = sort.map_or(chip.selected, |s| s == i);
+            pill(("channel-sort", i), on)
+                .children(target(cx, Layer::Page, "chip", chip.label.as_str()))
+                .child(txt(
+                    chip.label.clone(),
+                    14.0,
+                    20.0,
+                    W500,
+                    if on { on_light() } else { text() },
+                ))
+                .on_click(cx.listener(move |a, _, _, cx| a.channel_sort(i, cx)))
+        }))
+        .into_any_element()
+}
+
+fn chapter_row(ctx: &mut Ctx, i: usize, cx: &mut Cx) -> AnyElement {
+    let Some(chapter) = ctx
+        .page
+        .watch()
+        .and_then(|w| w.info.as_ref())
+        .and_then(|info| info.chapters.get(i))
+    else {
+        return div().into_any_element();
+    };
+    let start = chapter.start;
+    let art = ctx.image(chapter.thumbnail.as_deref(), 84.0, cx);
+    div()
+        .id(("chapter", i))
+        .h_full()
+        .w_full()
+        .px(px(12.0))
+        .flex()
+        .items_center()
+        .gap(px(12.0))
+        .rounded(px(8.0))
+        .bg(fill())
+        .hover(|s| s.bg(fill_hover()))
+        .cursor_pointer()
+        .tab_index(0)
+        .focus_visible(focus_ring)
+        .children(target(cx, Layer::Page, "chapter", chapter.title.as_str()))
+        .child(picture(art, 84.0, 48.0, 6.0))
+        .child(txt(nt_core::format::clock(start), 14.0, 20.0, W500, link()))
+        .child(line(chapter.title.clone(), 14.0, 20.0, W500, text()))
+        .on_click(cx.listener(move |a, _, _, cx| a.player.update(cx, |p, cx| p.seek_to(start, cx))))
+        .into_any_element()
+}
+
+fn comments_header(ctx: &Ctx, cx: &mut Cx) -> AnyElement {
+    let Some(w) = ctx.page.watch() else {
+        return div().into_any_element();
+    };
+    let title = w
+        .comments_total
+        .as_ref()
+        .map_or_else(|| "Comments".to_string(), |n| format!("{n} Comments"));
+    div()
+        .size_full()
+        .flex()
+        .flex_col()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(16.0))
+                .child(txt(title, 20.0, 28.0, W700, text()))
+                .when(!w.comments_sort.is_empty(), |d| {
+                    d.child(
+                        pill("comments-sort", false)
+                            .children(target(cx, Layer::Page, "sort", "Sort by"))
+                            .child(icon("tune", 20.0, text()))
+                            .child(txt("Sort by", 14.0, 20.0, W500, text()))
+                            .on_click(cx.listener(|a, _, _, cx| a.toggle_comment_sort(cx))),
+                    )
+                }),
+        )
+        .when(w.sort_open, |d| {
+            d.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .mt(px(8.0))
+                    .children(w.comments_sort.iter().enumerate().map(|(i, sort)| {
+                        pill(("comment-sort", i), sort.selected)
+                            .children(target(cx, Layer::Page, "menu_item", sort.label.as_str()))
+                            .child(txt(
+                                sort.label.clone(),
+                                14.0,
+                                20.0,
+                                W500,
+                                if sort.selected { on_light() } else { text() },
+                            ))
+                            .on_click(cx.listener(move |a, _, _, cx| a.sort_comments(i, cx)))
+                    })),
+            )
+        })
+        .into_any_element()
 }
 
 fn error_state(
@@ -862,6 +1506,89 @@ fn error_state(
                 .child(txt("Retry", 14.0, 20.0, W500, text())),
         )
         .into_any_element()
+}
+
+/// Highlights must be sorted and must not overlap.
+fn sorted_disjoint(
+    mut v: Vec<(Range<usize>, HighlightStyle)>,
+) -> Vec<(Range<usize>, HighlightStyle)> {
+    v.sort_by_key(|(r, _)| r.start);
+    let mut out: Vec<(Range<usize>, HighlightStyle)> = Vec::new();
+    for (r, st) in v {
+        match out.last_mut() {
+            Some((last, _)) if r.start < last.end => last.end = last.end.max(r.end),
+            _ => out.push((r, st)),
+        }
+    }
+    out
+}
+
+/// A search link inside a notice ("Did you mean", "Search instead for").
+fn query_link(id: (&'static str, usize), q: String, size: f32, cx: &mut Cx) -> impl IntoElement {
+    let label = q.clone();
+    div()
+        .id(id)
+        .cursor_pointer()
+        .on_click(cx.listener(move |this, _, window, cx| this.submit_search(q.clone(), window, cx)))
+        .child(
+            txt(label, size, size + 6.0, W500, link())
+                .italic()
+                .hover(|s| s.underline()),
+        )
+}
+
+fn notice(ctx: &mut Ctx, i: usize, cx: &mut Cx) -> AnyElement {
+    let Kind::Search { view, .. } = &ctx.page.kind else {
+        return div().into_any_element();
+    };
+    let Some(n) = view.notices.get(i).cloned() else {
+        return div().into_any_element();
+    };
+    match n {
+        nt_core::SearchNotice::AgeGated { title, body } => div()
+            .size_full()
+            .p(px(16.0))
+            .rounded(px(12.0))
+            .border_1()
+            .border_color(divider())
+            .flex()
+            .flex_col()
+            .gap(px(4.0))
+            .child(txt(title, 20.0, 28.0, W700, text()))
+            .child(txt(body, 14.0, 20.0, W400, text2()))
+            .into_any_element(),
+        nt_core::SearchNotice::Corrected { showing, original } => div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .justify_center()
+            .child(
+                div()
+                    .flex()
+                    .items_baseline()
+                    .gap(px(6.0))
+                    .child(txt("Showing results for", 16.0, 22.0, W400, text()))
+                    .child(query_link(("notice-show", i), showing, 16.0, cx)),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_baseline()
+                    .gap(px(6.0))
+                    .child(txt("Search instead for", 14.0, 20.0, W400, text2()))
+                    .child(query_link(("notice-orig", i), original, 14.0, cx)),
+            )
+            .into_any_element(),
+        nt_core::SearchNotice::DidYouMean { suggestion } => div()
+            .size_full()
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .child(txt("Did you mean:", 16.0, 22.0, W400, text()))
+            .child(query_link(("notice-dym", i), suggestion, 16.0, cx))
+            .into_any_element(),
+        nt_core::SearchNotice::NoResults => div().into_any_element(),
+    }
 }
 
 fn empty_state(kind: &Empty, cx: &mut Cx) -> AnyElement {
@@ -928,7 +1655,7 @@ fn card(ctx: &mut Ctx, index: usize, w: f32, show_avatar: bool, cx: &mut Cx) -> 
         return div().into_any_element();
     };
     let th = w * 9.0 / 16.0;
-    let pic = thumb(ctx, v, w, th, 12.0, cx);
+    let pic = thumb(ctx, v, (w, th), 12.0, index, cx);
     let av = if show_avatar {
         ctx.image(v.channel_avatar.as_deref(), AVATAR, cx)
     } else {
@@ -946,7 +1673,14 @@ fn card(ctx: &mut Ctx, index: usize, w: f32, show_avatar: bool, cx: &mut Cx) -> 
                 }))
         })
         .hover(|s| s.text_color(text()))
-        .child(line(v.channel.clone(), 14.0, 20.0, W400, text2()));
+        .child(verified(
+            v.channel.clone(),
+            14.0,
+            20.0,
+            W400,
+            text2(),
+            v.channel_verified,
+        ));
     let av_el = div()
         .id(("card-av", index))
         .when_some(channel_id, |d, cid| {
@@ -957,9 +1691,26 @@ fn card(ctx: &mut Ctx, index: usize, w: f32, show_avatar: bool, cx: &mut Cx) -> 
                 }))
         })
         .child(avatar(av, AVATAR));
+    // Hover: a #272727 plate bleeding 8 px around the card, radius 12 (YouTube's 2024 grid).
+    let plate = div()
+        .absolute()
+        .top(px(-8.0))
+        .left(px(-8.0))
+        .right(px(-8.0))
+        .bottom(px(-8.0))
+        .rounded(px(12.0))
+        .group_hover("card", |s| s.bg(c(0x272727)));
+    let hover_id = v.id.clone();
     div()
         .id(("card", index))
+        .on_hover(cx.listener(move |a, active: &bool, _, cx| {
+            a.hover_card((page_id, index), &hover_id, w, *active, cx);
+        }))
+        .when(ctx.tab, |d| d.tab_index(0).focus_visible(focus_ring))
+        .children(target(cx, Layer::Page, "card", v.title.as_str()))
         .group("card")
+        .relative()
+        .child(plate)
         .on_mouse_down(
             MouseButton::Right,
             cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
@@ -996,7 +1747,15 @@ fn card(ctx: &mut Ctx, index: usize, w: f32, show_avatar: bool, cx: &mut Cx) -> 
                         .flex_col()
                         .child(lines(v.title.clone(), 16.0, 22.0, W500, text(), 2).w(px(tw)))
                         .when(show_avatar, |d| d.child(name))
-                        .child(line(v.meta_line(), 14.0, 20.0, W400, text2()))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(4.0))
+                                .min_w(px(0.0))
+                                .child(line(meta_line(v), 14.0, 20.0, W400, text2()).min_w(px(0.0)))
+                                .children(video_badges(v)),
+                        )
                         .child(more_button(
                             ("card-more", index),
                             "card",
@@ -1012,7 +1771,7 @@ fn card(ctx: &mut Ctx, index: usize, w: f32, show_avatar: bool, cx: &mut Cx) -> 
 fn list_row(ctx: &mut Ctx, index: usize, w: f32, h: f32, cx: &mut Cx) -> AnyElement {
     let page_id = ctx.page.id;
     let query = match &ctx.page.kind {
-        Kind::Search { query } => Some(query.as_str()),
+        Kind::Search { query, .. } => Some(query.as_str()),
         _ => None,
     };
     let Some(v) = ctx.page.feed.items.get(index) else {
@@ -1020,7 +1779,7 @@ fn list_row(ctx: &mut Ctx, index: usize, w: f32, h: f32, cx: &mut Cx) -> AnyElem
     };
     let tw = list_thumb_w(w);
     let th = (tw * 9.0 / 16.0).round();
-    let pic = thumb(ctx, v, tw, th, 12.0, cx);
+    let pic = thumb(ctx, v, (tw, th), 12.0, index, cx);
     let av = ctx.image(v.channel_avatar.as_deref(), 24.0, cx);
     let channel_id = v.channel_id.clone();
     let ch = div()
@@ -1037,8 +1796,69 @@ fn list_row(ctx: &mut Ctx, index: usize, w: f32, h: f32, cx: &mut Cx) -> AnyElem
                 }))
         })
         .when(v.channel_avatar.is_some(), |d| d.child(avatar(av, 24.0)))
-        .child(line(v.channel.clone(), 12.0, 18.0, W400, text2()));
-    let snippet = v.snippet.as_ref().map(|s| {
+        .child(verified(
+            v.channel.clone(),
+            12.0,
+            18.0,
+            W400,
+            text2(),
+            v.channel_verified,
+        ));
+    let moment = v.moment.as_ref().map(|m| {
+        let label = if m.label.is_empty() {
+            nt_core::format::clock(m.start_secs)
+        } else {
+            m.label.clone()
+        };
+        let chip = div()
+            .h(px(24.0))
+            .px(px(8.0))
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(px(2.0))
+            .rounded(px(4.0))
+            .bg(fill())
+            .child(icon("play_arrow", 16.0, text()))
+            .child(txt(label, 12.0, 18.0, W500, text()));
+        let highlights: Vec<(Range<usize>, HighlightStyle)> = m
+            .highlights
+            .iter()
+            .filter(|r| {
+                r.start < r.end
+                    && m.snippet.is_char_boundary(r.start)
+                    && m.snippet.is_char_boundary(r.end.min(m.snippet.len()))
+                    && r.end <= m.snippet.len()
+            })
+            .map(|r| {
+                (
+                    r.clone(),
+                    HighlightStyle {
+                        font_weight: Some(W700),
+                        color: Some(text()),
+                        ..Default::default()
+                    },
+                )
+            })
+            .collect();
+        let snippet = StyledText::new(SharedString::from(m.snippet.clone()))
+            .with_highlights(sorted_disjoint(highlights));
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(6.0))
+            .child(div().flex().child(chip))
+            .child(
+                div()
+                    .text_size(px(12.0))
+                    .line_height(px(18.0))
+                    .text_color(text2())
+                    .line_clamp(2)
+                    .text_ellipsis()
+                    .child(snippet),
+            )
+    });
+    let snippet = v.snippet.as_ref().filter(|_| v.moment.is_none()).map(|s| {
         let ranges = query.map(|q| term_ranges(s, q)).unwrap_or_default();
         let styled = StyledText::new(SharedString::from(s.clone())).with_highlights(
             ranges.into_iter().map(|r| {
@@ -1061,8 +1881,14 @@ fn list_row(ctx: &mut Ctx, index: usize, w: f32, h: f32, cx: &mut Cx) -> AnyElem
             .text_ellipsis()
             .child(styled)
     });
+    let hover_id = v.id.clone();
     div()
         .id(("row", index))
+        .on_hover(cx.listener(move |a, active: &bool, _, cx| {
+            a.hover_card((page_id, index), &hover_id, tw, *active, cx);
+        }))
+        .when(ctx.tab, |d| d.tab_index(0).focus_visible(focus_ring))
+        .children(target(cx, Layer::Page, "row", v.title.as_str()))
         .group("row")
         .on_mouse_down(
             MouseButton::Right,
@@ -1094,9 +1920,11 @@ fn list_row(ctx: &mut Ctx, index: usize, w: f32, h: f32, cx: &mut Cx) -> AnyElem
                 .flex()
                 .flex_col()
                 .child(lines(v.title.clone(), 18.0, 26.0, W400, text(), 2).pr(px(40.0)))
-                .child(line(v.meta_line(), 12.0, 18.0, W400, text2()))
+                .child(line(meta_line(v), 12.0, 18.0, W400, text2()))
                 .child(ch)
                 .children(snippet)
+                .children(video_badges(v))
+                .children(moment)
                 .child(more_button(("row-more", index), "row", page_id, index, cx)),
         )
         .into_any_element()
@@ -1107,9 +1935,11 @@ fn compact_row(ctx: &mut Ctx, index: usize, cx: &mut Cx) -> AnyElement {
     let Some(v) = ctx.page.feed.items.get(index) else {
         return div().into_any_element();
     };
-    let pic = thumb(ctx, v, COMPACT_THUMB_W, COMPACT_THUMB_H, 8.0, cx);
+    let pic = thumb(ctx, v, (COMPACT_THUMB_W, COMPACT_THUMB_H), 8.0, index, cx);
     div()
         .id(("rel", index))
+        .when(ctx.tab, |d| d.tab_index(0).focus_visible(focus_ring))
+        .children(target(cx, Layer::Page, "related", v.title.as_str()))
         .group("rel")
         .on_mouse_down(
             MouseButton::Right,
@@ -1141,8 +1971,15 @@ fn compact_row(ctx: &mut Ctx, index: usize, cx: &mut Cx) -> AnyElement {
                 .flex_col()
                 .gap(px(4.0))
                 .child(lines(v.title.clone(), 14.0, 20.0, W500, text(), 2).pr(px(24.0)))
-                .child(line(v.channel.clone(), 12.0, 18.0, W400, text2()))
-                .child(line(v.meta_line(), 12.0, 18.0, W400, text2()))
+                .child(verified(
+                    v.channel.clone(),
+                    12.0,
+                    18.0,
+                    W400,
+                    text2(),
+                    v.channel_verified,
+                ))
+                .child(line(meta_line(v), 12.0, 18.0, W400, text2()))
                 .child(more_button(("rel-more", index), "rel", page_id, index, cx)),
         )
         .into_any_element()
@@ -1150,6 +1987,16 @@ fn compact_row(ctx: &mut Ctx, index: usize, cx: &mut Cx) -> AnyElement {
 
 fn subscribe_button(subscribed: bool, cx: &mut Cx) -> impl IntoElement {
     let b = pill("subscribe", !subscribed)
+        .children(target(
+            cx,
+            Layer::Page,
+            "subscribe",
+            if subscribed {
+                "Subscribed"
+            } else {
+                "Subscribe"
+            },
+        ))
         .on_click(cx.listener(|this, _, _, cx| this.toggle_subscribe(cx)));
     if subscribed {
         b.child(icon("notifications", 24.0, text()))
@@ -1164,7 +2011,6 @@ fn channel_header(ctx: &mut Ctx, w: f32, cx: &mut Cx) -> AnyElement {
     let Kind::Channel {
         info: Some(info),
         subscribed,
-        desc_expanded,
         ..
     } = &ctx.page.kind
     else {
@@ -1179,37 +2025,28 @@ fn channel_header(ctx: &mut Ctx, w: f32, cx: &mut Cx) -> AnyElement {
     meta.extend(info.video_count.clone());
     let tw = channel_text_w(w, size);
     let desc = info.description.trim().to_string();
-    let expanded = *desc_expanded;
-    let desc_el = (!desc.is_empty()).then(|| {
-        let body = if expanded {
-            txt(desc, 14.0, 20.0, W400, text2())
-        } else {
-            line(desc, 14.0, 20.0, W400, text2())
-                .flex_shrink(1.0)
-                .min_w(px(0.0))
-        };
+    let desc_el = (!desc.is_empty() || info.about.is_some() || !info.links.is_empty()).then(|| {
         div()
             .id("channel-desc")
             .w(px(tw))
-            .when(!expanded, |d| d.flex().items_center())
+            .flex()
+            .items_center()
+            .gap(px(6.0))
             .cursor_pointer()
-            .on_click(cx.listener(|this, _, _, cx| {
-                if let Some(page) = this.top_mut() {
-                    if let Kind::Channel { desc_expanded, .. } = &mut page.kind {
-                        *desc_expanded = !*desc_expanded;
-                    }
-                    page.touch();
-                }
-                this.content_changed(cx);
-            }))
-            .child(body)
-            .when(!expanded, |d| {
-                d.child(
-                    txt("...more", 14.0, 20.0, W500, text())
-                        .flex_none()
-                        .whitespace_nowrap(),
-                )
-            })
+            .tab_index(0)
+            .focus_visible(focus_ring)
+            .children(target(cx, Layer::Page, "about", "Channel info"))
+            .on_click(cx.listener(|a, _, _, cx| a.open_channel_about(cx)))
+            .child(
+                line(desc, 14.0, 20.0, W400, text2())
+                    .flex_shrink(1.0)
+                    .min_w(px(0.0)),
+            )
+            .child(
+                txt("...more", 14.0, 20.0, W500, text())
+                    .flex_none()
+                    .whitespace_nowrap(),
+            )
     });
     div()
         .size_full()
@@ -1224,15 +2061,28 @@ fn channel_header(ctx: &mut Ctx, w: f32, cx: &mut Cx) -> AnyElement {
                 .flex()
                 .flex_col()
                 .justify_center()
-                .child(line(
+                .child(verified(
                     info.name.clone(),
                     if small { 24.0 } else { 36.0 },
                     if small { 32.0 } else { 44.0 },
                     W700,
                     text(),
+                    info.verified,
                 ))
                 .child(line(meta.join(" • "), 14.0, 20.0, W400, text2()).mt(px(8.0)))
                 .children(desc_el.map(|d| d.mt(px(8.0))))
+                .when_some(info.links_label.clone(), |d, label| {
+                    d.child(
+                        div()
+                            .id("channel-links")
+                            .cursor_pointer()
+                            .tab_index(0)
+                            .focus_visible(focus_ring)
+                            .children(target(cx, Layer::Page, "about", label.as_str()))
+                            .on_click(cx.listener(|a, _, _, cx| a.open_channel_about(cx)))
+                            .child(line(label, 14.0, 20.0, W500, link())),
+                    )
+                })
                 .child(
                     div()
                         .mt(px(12.0))
@@ -1336,7 +2186,14 @@ fn watch_meta(ctx: &mut Ctx, w: f32, title_h: f32, cx: &mut Cx) -> AnyElement {
                             this.open_channel(cid.clone(), window, cx)
                         }))
                 })
-                .child(line(name, 16.0, 22.0, W500, text()))
+                .child(verified(
+                    name,
+                    16.0,
+                    22.0,
+                    W500,
+                    text(),
+                    info.channel_verified,
+                ))
                 .child(line(
                     info.channel.subscribers.clone().unwrap_or_default(),
                     12.0,
@@ -1377,12 +2234,14 @@ fn watch_meta(ctx: &mut Ctx, w: f32, title_h: f32, cx: &mut Cx) -> AnyElement {
                 .child(icon("thumb_down", 24.0, text())),
         );
     let share = pill("share", false)
+        .children(target(cx, Layer::Page, "share", "Share"))
         .on_click(cx.listener(move |this, _, _, cx| this.copy_link(&vid, cx)))
         .child(icon("share", 24.0, text()))
         .when(!compact, |d| {
             d.child(txt("Share", 14.0, 20.0, W500, text()))
         });
     let later = pill("watch-later", false)
+        .children(target(cx, Layer::Page, "watch_later", "Watch later"))
         .on_click(cx.listener(|this, _, _, cx| this.toggle_watch_later(cx)))
         .child(icon(
             if saved { "bookmark_fill1" } else { "bookmark" },
@@ -1472,17 +2331,13 @@ fn watch_desc(ctx: &mut Ctx, lines_: usize, shown: usize, cx: &mut Cx) -> AnyEle
                 LinkKind::Tag => this.submit_search(s.clone(), window, cx),
                 LinkKind::Time(secs) => {
                     let at = *secs;
-                    this.player.update(cx, |p, cx| {
-                        let d = p.state.duration;
-                        if d > 0.0 {
-                            p.seek_fraction(at / d, cx);
-                        }
-                    });
+                    this.player.update(cx, |p, cx| p.seek_to(at, cx));
                 }
             }
         });
     });
-    let more = (!expanded && lines_ > DESC_CLAMP).then(|| {
+    let has_chapters = !info.chapters.is_empty();
+    let more = (!expanded && (lines_ > DESC_CLAMP || has_chapters)).then(|| {
         div()
             .absolute()
             .right_0()
@@ -1523,7 +2378,7 @@ fn watch_desc(ctx: &mut Ctx, lines_: usize, shown: usize, cx: &mut Cx) -> AnyEle
                     .children(more),
             )
         })
-        .when(expanded && lines_ > DESC_CLAMP, |d| {
+        .when(expanded && (lines_ > DESC_CLAMP || has_chapters), |d| {
             d.child(
                 div()
                     .id("desc-less")
@@ -1538,22 +2393,25 @@ fn watch_desc(ctx: &mut Ctx, lines_: usize, shown: usize, cx: &mut Cx) -> AnyEle
 
 fn comment(
     ctx: &mut Ctx,
-    page_id: PageId,
-    i: usize,
+    cm: &Comment,
+    index: Option<usize>,
     w: f32,
-    lines_: usize,
+    lines: usize,
     shown: usize,
     cx: &mut Cx,
 ) -> AnyElement {
-    let url = ctx
+    let av = ctx.image(cm.author_avatar.as_deref(), 40.0, cx);
+    let creator = ctx
         .page
         .watch()
-        .and_then(|w| w.comments.get(i))
-        .and_then(|c| c.author_avatar.clone());
-    let av = ctx.image(url.as_deref(), 40.0, cx);
-    let Some(cm) = ctx.page.watch().and_then(|w| w.comments.get(i)) else {
-        return div().into_any_element();
+        .and_then(|w| w.info.as_ref())
+        .map(|i| &i.channel);
+    let creator_avatar = if cm.hearted {
+        ctx.image(creator.and_then(|c| c.avatar.as_deref()), 20.0, cx)
+    } else {
+        None
     };
+    let lines_ = lines;
     let expanded = shown >= lines_;
     let clamped = lines_ > COMMENT_CLAMP;
     let tw = comment_text_w(w);
@@ -1567,8 +2425,25 @@ fn comment(
         .when_some(cm.likes.clone().filter(|l| l != "0"), |d, l| {
             d.child(txt(l, 12.0, 18.0, W400, text2()))
         })
-        .child(icon("thumb_down", 20.0, text()).ml(px(12.0)));
-    let _ = page_id;
+        .child(icon("thumb_down", 20.0, text()).ml(px(12.0)))
+        .when(cm.hearted, |d| {
+            d.child(
+                div()
+                    .relative()
+                    .ml(px(12.0))
+                    .child(avatar(creator_avatar, 20.0))
+                    .child(
+                        div()
+                            .absolute()
+                            .right(px(-3.0))
+                            .bottom(px(-3.0))
+                            .child(icon("favorite", 12.0, red())),
+                    ),
+            )
+        });
+    let expanded_replies = index
+        .and_then(|i| ctx.page.watch().and_then(|w| w.replies.get(&i)))
+        .is_some_and(|r| r.expanded);
     div()
         .w(px(w))
         .flex()
@@ -1579,12 +2454,34 @@ fn comment(
                 .w(px(tw))
                 .flex()
                 .flex_col()
+                .when(index.is_some() && cm.pinned, |d| {
+                    d.child(
+                        txt(
+                            format!(
+                                "Pinned by {}",
+                                creator.map_or("the creator", |c| c.name.as_str())
+                            ),
+                            12.0,
+                            18.0,
+                            W500,
+                            text2(),
+                        )
+                        .h(px(22.0)),
+                    )
+                })
                 .child(
                     div()
                         .flex()
                         .items_baseline()
                         .gap(px(4.0))
-                        .child(line(cm.author.clone(), 13.0, 18.0, W500, text()))
+                        .child(verified(
+                            cm.author.clone(),
+                            13.0,
+                            18.0,
+                            W500,
+                            text(),
+                            cm.author_verified,
+                        ))
                         .when_some(cm.published.clone(), |d, p| {
                             d.child(txt(p, 12.0, 18.0, W400, text2()).whitespace_nowrap())
                         }),
@@ -1599,7 +2496,7 @@ fn comment(
                                 .when(!expanded, |d| d.line_clamp(COMMENT_CLAMP).text_ellipsis()),
                         ),
                 )
-                .when(clamped, |d| {
+                .when_some(index.filter(|_| clamped), |d, i| {
                     d.child(
                         div()
                             .id(("read-more", i))
@@ -1615,7 +2512,37 @@ fn comment(
                             )),
                     )
                 })
-                .child(actions),
+                .child(actions)
+                .when_some(index.filter(|_| cm.replies.is_some()), |d, i| {
+                    let label = match cm.reply_count.as_deref() {
+                        Some("1") => "1 reply".to_string(),
+                        Some(n) => format!("{n} replies"),
+                        None => "Replies".to_string(),
+                    };
+                    d.child(
+                        div()
+                            .id(("replies", i))
+                            .h(px(36.0))
+                            .flex()
+                            .items_center()
+                            .gap(px(4.0))
+                            .cursor_pointer()
+                            .tab_index(0)
+                            .focus_visible(focus_ring)
+                            .children(target(cx, Layer::Page, "comment_replies", label.as_str()))
+                            .child(icon(
+                                if expanded_replies {
+                                    "expand_less"
+                                } else {
+                                    "expand_more"
+                                },
+                                20.0,
+                                link(),
+                            ))
+                            .child(txt(label, 14.0, 20.0, W500, link()))
+                            .on_click(cx.listener(move |a, _, _, cx| a.toggle_replies(i, cx))),
+                    )
+                }),
         )
         .into_any_element()
 }
@@ -1629,7 +2556,10 @@ impl NtApp {
             .and_then(|p| p.feed.items.get(index))
             .cloned();
         if let Some(v) = v {
-            self.open_video(v, window, cx);
+            crate::player::trace("card-click", &v.id);
+            // A transcript match plays from its moment.
+            let at = v.moment.as_ref().map(|m| m.start_secs);
+            self.open_video_at(v, at, window, cx);
         }
     }
 

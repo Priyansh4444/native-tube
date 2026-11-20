@@ -12,6 +12,131 @@
   `text_system().add_fonts`; the root and the kit theme use "Roboto". Icons: the shared Material
   Symbols SVGs, embedded and served by our `AssetSource` (`icons.rs`), tinted with `text_color`.
 
+## What changed in the parity round (2026-11-19, Opus + GPT 6.2 Sol in turns)
+
+**Fixes from the brief**
+- Posters and the up-next thumbnail are requested at the drawn width × scale factor (no fixed
+  320 px); every `images::image` call passes physical pixels, and GPUI samples linearly.
+- A watch page never shows black at 0:00 while its video starts: the player shows that video's
+  own last picture (Back) or its thumbnail at the player's width under the spinner, and starts
+  with `load_at` at the remembered position.
+- Escape in fullscreen: closes an open player menu first, then leaves fullscreen, whatever had
+  focus (verified: settings open → Esc → menu closed, still fullscreen → Esc → windowed).
+- Seek-bar hover when the pointer lands on the bar in the same motion that wakes the controls:
+  the bar didn't exist in that frame, so its own `on_mouse_move` missed it and no tooltip or
+  storyboard appeared until the next motion. The player's root move handler now tracks the
+  hover from the bar's last bounds.
+
+**Parity** (all in this app, data from core where noted)
+- Card / row / related menus: Play, Save to / Remove from Watch later, Add to queue, Share
+  (copies the link, toast), Go to channel, Not interested, Don't recommend channel (B13).
+  Hidden videos leave the list at once.
+- Card hover: a #272727 plate, radius 12, bleeding 8 px, plus "⋮".
+- Guide: ☰ opens the 240 px guide (icons, labels, dividers, "You", subscriptions); it pushes
+  the page on wide non-Watch pages (remembered in `gpui-prefs.json`) and is a drawer with a
+  scrim on Watch and narrow windows. `?` opens the shortcut sheet; Esc or a click outside
+  closes it.
+- Keyboard: Tab / Shift+Tab move through tab groups top bar (1) → rail/guide (2) → content
+  (3); `focus_visible` draws a 2 px #f1f1f1 ring at a 2 px offset (two box shadows: ring, then
+  a page-coloured gap), keyboard only. Enter/Space activate (GPUI's keyboard click).
+- Player: right-click menu (Copy video URL, … at current time `&t=Ns`, Loop, Stats for
+  nerds with live numbers and ×); settings: Subtitles/CC with auto-translate, Audio track,
+  Stable volume and Loop switches, Sleep timer (Off, 10–60 min, End of video; pauses when it
+  fires), speed, quality. C toggles captions. Chapters: segmented bar with 2 px gaps, "• Intro ›"
+  in the bar, chapter rows in the description. Heatmap over the bar on hover. Storyboard
+  preview + time + chapter above the pointer (A3).
+- Watch page: comment replies ("N replies"), Sort by (Top/Newest), pinned / hearted / verified
+  marks, related chips (none in logged-out answers), playlist and mix panel (B12), local queue
+  panel (B13), prepare_next for the up-next / queue / playlist successor (C2).
+- Search: notices in YouTube's wording (age gate, "Showing results for", "Did you mean"), the
+  "Matches in video transcripts · search.pronsh.dev" section with "▶ 9:52" chips and bold
+  highlights (a click plays from that time), filter chips and the Filters dialog (B9), mixed
+  results: playlists, channels, shelves (B10). "pronsh" shows "Confirm your age" + 7 matches.
+- Channel tabs (Home, Videos, Live, Playlists), Videos sort, links and About (B11). Home feed
+  chips from the server when it sends them, otherwise the fixed topics (B14). Badges: ✓, LIVE,
+  Upcoming, 4K/CC/New (A6). Muted hover preview on thumbnails (B15). "Continue watching" card
+  on Home from `last_played` (C5).
+- Lists never dead-end: next pages are fetched a screen and a half early, and a failed page
+  shows "Couldn't load more · Retry" in place, keeping what's loaded (C3).
+- GPU video (C6): the window is transparent, the page paints around the video rect
+  (`hardware::paint_around`, after Akshar Patel's yt-music-gpui `player_page.rs`), and core's
+  Wayland subsurface presents the video; the rect follows layout, scroll, theatre and
+  fullscreen. `NT_SOFTWARE_VIDEO=1`, a failed attach or a lease error fall back to the
+  RenderImage path.
+- State probe (`probe.rs`, `NT_PROBE=1`): one `NT_STATE` line per change (≤ 10/s) plus a 1 s
+  heartbeat. Targets are recorded in prepaint by zero-size canvases tagged with a layer, so the
+  rects are exactly what was laid out; a cached view keeps its last list until it renders
+  again; popups drop or trim what they cover.
+- Lints: `unwrap_used`, `expect_used`, `panic`, `string_slice`, `todo`, `unimplemented`,
+  `unreachable`, `unchecked_time_subtraction` are denied in Cargo.toml; clippy is clean.
+- New dependency: `raw-window-handle` 0.6 (already in GPUI's tree), for the window handles
+  core's `VideoSurface::attach` takes.
+
+**Captions placement and test hooks (C7)**
+- `PlayerView::place_captions` sends mpv `sub-pos` (core `set_caption_position`) like iced: 98
+  at rest (~8% above the picture's bottom), lifted above the 76 px of scrubber + bar row while
+  the controls show, eased over 200 ms (cubic ease-out, `request_animation_frame` while it
+  moves). The lift is computed from the player box and the video's aspect, so theatre,
+  fullscreen, resize and letterbox bars need less rise. Only changes ≥ 0.05 are sent.
+- Input-free test switches: `NT_TEST_CC=1`, `NT_TEST_CYCLE=controls` (3.2 s on/off),
+  `NT_TEST_FULLSCREEN=1`, `NT_TEST_THEATRE=1`, `NT_TEST_SCRUB=<0..1>` (holds the seek-bar
+  hover: tooltip, chapter, heatmap). Evidence: shots/parity/captions-montage.png,
+  heatmap-0y6RKiIk6cs.png. Dates come from core (`published_label`); the local ISO parser is gone.
+
+**Measurements** (NT-GPUI 1280×800, muted)
+- Playback CPU over 10 s on the 720p test clip: GPU surface 0.67 s, software path 3.89 s
+  (`NT_SOFTWARE_VIDEO=1`); RSS 310 MB vs 318 MB.
+- Stress, three rounds on one process (fixtures): each round 20 related clicks 0.7 s apart and
+  35 rapid Back/Forward (alt+Left ×2, alt+Right ×1, 150 ms apart), ~38 s; plus 10 cycles of
+  scrub drag, settings menu, context menu, theatre ×2, fullscreen + Esc. No panic, no stale
+  video (the probe logs any player/page id mismatch: 0), menus closed at the end. RSS 312 MB at
+  start → 644 → 606 → 650 MB after rounds 1–3, flat (606 → 606 MB) across the toggle cycles.
+- Start of the next video, live (probe, ±100 ms): Shift+N on the prepared successor 1.5 s,
+  a click on an unprepared related video 1.8–2.0 s (both include the watch-page request).
+
+**Performance follow-up**
+
+- After 20 scripted related opens on the same local clip, PSS settled at 404 MiB and RSS at
+  439 MiB. The previous build reached 599–612 MiB PSS. The updated run kept all 22 navigation
+  pages. In a second run, 35 scripted Back/Forward operations 75 ms apart ended at 267 MiB
+  PSS, with zero failed waits, panics or player/page mismatches.
+- Most of the increase was anonymous memory. Turning off grid images still left 546 MiB PSS.
+  One diagnostic `malloc_trim(0)` call cut PSS from 599 to 348 MiB with the same images, GPU
+  surface and pages alive. Running with mpv's `cache=auto` instead of core's forced read-ahead
+  reached 366 MiB PSS. GPUI now batches glibc reclamation on a background worker after every six
+  playback starts. The three calls took 22–32 ms each on that worker.
+- Watch pages only request row images within 144 px of the viewport. They reuse cached card
+  thumbnails during navigation, defer the full-size poster upgrade and drop it on the first
+  picture. The up-next thumbnail loads when its countdown opens. Core's decoded image cache
+  held 18 MiB after the run, down from 34 MiB. GPUI had 11 MiB of cached BGRA images and continued
+  evicting atlas tiles. Shared memory stayed near 35 MiB.
+- Playback starts ahead of the Watch metadata request. `NT_TRACE=1` records card activation,
+  navigation, core load submission, observed stream metadata, player readiness, first frame and
+  first paint. A diagnostic build also traced resolve and `loadfile` in core.
+
+  | Live action | Action → navigate → load | Resolve | `loadfile` → GPU frame | GPU frame → paint | Total |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | Related row (`Sntj4HmuykI`) | 0.1 + 0.1 ms | 98 ms | 544 ms | 8 ms | 651 ms |
+  | Next from that video (`wzzh7Not8XE`) | 0.1 + 0.3 ms | Prepared hit | 509 ms | 10 ms | 519 ms |
+
+  A baseline trace saw 817 ms for a related open and 366 ms for prepared Next, with different
+  videos returned by the live feed. Muted `ntctl play` measured 840 and 950 ms for the two
+  videos in the table, including resolution and software startup. The Next action after the
+  related open was exercised through the player callback. The physical Shift+N chord and
+  opening the shortcut sheet with `?` need input verification.
+
+**What was easy / hard in GPUI this round**
+- Easy: every popup (context menu, stats, sleep timer, guide drawer, shortcut sheet,
+  storyboard tooltip) is one more absolutely positioned or `deferred` element; `focus_visible`,
+  `tab_group`/`tab_index` and keyboard clicks are built in; `PathBuilder` drew the heatmap in
+  20 lines; the transparent window + painting around a hole is ~50 lines.
+- Hard: the probe. GPUI has no query for "where was this element laid out", so each target
+  carries a canvas child; cached views skip prepaint, so per-layer lists are kept between
+  frames. Hover that depends on an element which appears on the same event (the seek bar)
+  needs manual tracking. Every new callback had to be checked for re-entrancy.
+- Upstream write-ups: docs/upstream/gpui-axis-stop.md, gpui-reentrant-keystroke.md,
+  gpui-hide-cursor.md, with repros in shells/gpui/repros (each run on NT-GPUI).
+
 ## What changed in the v2 round
 
 **Stability**
@@ -181,18 +306,16 @@ first shows a picture.
 
 ## Remaining differences from YouTube, and why
 
-- **No captions, chapters, storyboard previews, comment replies, dislike counts or verified
-  marks:** the core doesn't provide them; spec v2 says to leave them out.
-- **Like and dislike aren't clickable:** the app never signs in.
-- **No inline hover previews on cards:** not specified, and would cost a second player.
-- **Rail labels:** "Subscriptions" at 10/14 fits; there's no hamburger or guide drawer.
+- **Miniplayer and the transcript panel:** not built (no core API for the transcript panel;
+  the miniplayer wasn't in this round's brief).
+- **Like and dislike aren't clickable:** the app never signs in. No dislike counts.
+- **Quality above 1080p:** core caps it.
 - **The spinner is the kit's (Lucide arc), not YouTube's red-and-grey spinner.**
-- **Subpixel (RGB) text antialiasing:** that's GPUI's renderer; YouTube in Chrome is grayscale
-  on Linux.
-- **No keyboard focus rings or Tab traversal across cards:** not done in this round. GPUI
-  supports `tab_index` and `focus_visible`; it needs a focus handle per interactive element.
-- **Frame-accurate stepping:** "," and "." are exact ±1/30 s seeks; the core has no frame-step
-  command.
+- **Subpixel (RGB) text antialiasing:** GPUI's renderer; YouTube in Chrome is grayscale on
+  Linux.
+- **"Search instead for" re-runs the query:** core has no "don't correct" flag, so YouTube may
+  correct it again.
+- **Frame-accurate stepping:** "," and "." are ±1/30 s seeks; core has no frame-step command.
 
 ## Not portable / unverified on macOS
 
@@ -205,5 +328,4 @@ and Cmd+W, and fullscreen there are unverified.
 1. A frame-step command (`frame-step` / `frame-back-step`) for `,` and `.`.
 2. Persistent watch positions and the autoplay choice in the library, so all three apps share
    them (this app keeps them in `gpui-prefs.json`).
-3. Comment replies, captions and chapters, which spec v2 lists as "not available from the core
-   yet".
+3. A "don't auto-correct" search flag for "Search instead for".

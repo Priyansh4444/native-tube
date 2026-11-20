@@ -1,13 +1,18 @@
 //! NativeTube, the GPUI frontend.
 
 mod app;
+mod chrome;
 mod content;
+mod hardware;
 mod icons;
 mod images;
 mod inhibit;
 mod pages;
 mod player;
+mod playlist;
 mod prefs;
+mod preview;
+mod probe;
 mod rail;
 mod theme;
 mod top_bar;
@@ -32,7 +37,8 @@ fn apply_theme(cx: &mut gpui::App) {
     let t = Theme::global_mut(cx);
     t.font_family = "Roboto".into();
     let col = &mut t.colors;
-    col.background = theme::bg();
+    // NtApp paints the window background, including around the optional native video.
+    col.background = gpui::transparent_black();
     col.foreground = theme::text();
     col.muted_foreground = theme::text2();
     col.border = theme::search_border();
@@ -42,6 +48,7 @@ fn apply_theme(cx: &mut gpui::App) {
     col.caret = theme::text();
     col.ring = theme::search_focus();
     col.selection = theme::c(0x264f78);
+    t.tokens.background = gpui::transparent_black().into();
 }
 
 /// Log panics with their location before the default hook runs.
@@ -112,6 +119,11 @@ fn main() {
             };
             let opened = cx.open_window(options, |window, cx| {
                 let view = cx.new(|cx| app::NtApp::new(window, cx));
+                let app = view.downgrade();
+                window.on_window_should_close(cx, move |_, cx| {
+                    let _ = app.update(cx, |a, cx| a.close_playback(cx));
+                    true
+                });
                 cx.new(|cx| Root::new(view, window, cx))
             });
             if let Err(e) = opened {

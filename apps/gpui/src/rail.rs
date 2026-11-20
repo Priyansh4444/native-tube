@@ -3,6 +3,7 @@
 
 use crate::icons::icon;
 use crate::pages::Root;
+use crate::probe::{self, Layer, target};
 use crate::theme::*;
 use gpui::prelude::*;
 use gpui::{Context, EventEmitter, Window, div, px};
@@ -35,7 +36,12 @@ const ENTRIES: [(Root, &str, &str, &str); 4] = [
 
 impl Render for Rail {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        probe::begin(cx, &[Layer::Rail]);
         let mut col = div()
+            .id("rail-list")
+            .tab_group()
+            .tab_index(2)
+            .tab_stop(false)
             .size_full()
             .bg(bg())
             .flex()
@@ -47,6 +53,9 @@ impl Render for Rail {
             col = col.child(
                 div()
                     .id(("rail", i))
+                    .tab_index(0)
+                    .focus_visible(crate::chrome::focus_ring)
+                    .children(target(cx, Layer::Rail, "rail", label))
                     .w(px(64.0))
                     .h(px(74.0))
                     .pt(px(16.0))

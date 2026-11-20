@@ -65,6 +65,19 @@ pub type Notify<T> = fn(&mut T, &mut Context<T>);
 pub type CacheOf<T> = fn(&mut T) -> &mut ImageCache;
 
 impl ImageCache {
+    /// The sharpest thumbnail already painted for this video, as an immediate poster.
+    pub fn ready(&self, url: &str) -> Option<Arc<RenderImage>> {
+        self.map
+            .get(url)?
+            .iter()
+            .filter_map(|entry| match &entry.slot {
+                Slot::Ready(image, _) => Some((entry.width, image)),
+                _ => None,
+            })
+            .max_by_key(|(width, _)| *width)
+            .map(|(_, image)| image.clone())
+    }
+
     /// Start of a frame: advance the clock used for eviction.
     pub fn begin_frame(&mut self) {
         self.frame += 1;

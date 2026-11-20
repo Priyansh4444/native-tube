@@ -23,6 +23,7 @@ serde_json = "1"
 gpui_platform = { package = "gpui-pre-platform", version = "=0.3.12", features = ["wayland"] }
 # Keeps the screen from blanking while a video plays (xdg-desktop-portal Inhibit). Already in
 # the tree through GPUI's Linux backend.
+raw-window-handle = "0.6"
 ashpd = { version = "0.13", default-features = false, features = ["async-io", "inhibit"] }
 
 [profile.release]
@@ -36,3 +37,13 @@ exclude = ["vendor"]
 # Chromium fling model needs. This is the crates.io source with a 30-line patch; see NOTES.md.
 [patch.crates-io]
 gpui-pre-linux = { path = "vendor/gpui-pre-linux" }
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+string_slice = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+unchecked_time_subtraction = "deny"
