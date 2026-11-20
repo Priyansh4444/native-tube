@@ -8,16 +8,23 @@ import json
 import os
 from pathlib import Path
 import platform
+import plistlib
 import re
 import shutil
 import subprocess
 import tarfile
 import tempfile
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
 FRONTENDS = ("iced", "gpui", "rune")
 TARGETS = {
     "macos-arm64": ("Darwin", "arm64", "aarch64-apple-darwin"),
+}
+APP_TITLES = {
+    "iced": "NativeTube Iced",
+    "gpui": "NativeTube GPUI",
+    "rune": "NativeTube Rune",
 }
 LICENSE_NAME = re.compile(r"^(licen[sc]es?|copying|copyright|notice|ofl|unlicense)($|[._-])", re.I)
 
@@ -86,7 +93,8 @@ def write_attribution(stage, manifest, triple, candidate):
         "Cargo license expressions and source locations are listed below. Available notice files",
         "are under licenses/. Cargo.lock records pinned versions and source revisions.",
         "The executable also uses the Rust standard library. See",
-        "https://github.com/rust-lang/rust#license. Host graphics libraries and libmpv are installed separately.",
+        "https://github.com/rust-lang/rust#license. macOS provides the system graphics",
+        "libraries. libmpv and the libraries it links are copied into the app bundle.",
     ]
     if candidate:
         lines.append("Local candidate: this inventory describes the packaging checkout only.")
@@ -153,6 +161,165 @@ def inspect_binary(binary, target):
     return {"linked_libraries": libs, "mach_o_minimum_os": minimum.group(1)}
 
 
+def app_title(frontend):
+    return APP_TITLES[frontend]
+
+
+def is_system_lib(dep):
+    return dep.startswith("/usr/lib/") or dep.startswith("/System/")
+
+
+def macho_deps(path):
+    text = subprocess.check_output(["otool", "-L", str(path)], text=True)
+    deps = []
+    for line in text.splitlines()[1:]:
+        line = line.strip()
+        if not line:
+            continue
+        deps.append(line.split(" (", 1)[0].strip())
+    if not deps:
+        raise ValueError(f"No Mach-O install name: {path}")
+    return deps
+
+
+def macho_rpaths(path):
+    text = subprocess.check_output(["otool", "-l", str(path)], text=True)
+    found = []
+    pending = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("cmd ") and "LC_RPATH" in stripped:
+            pending = True
+        elif pending and stripped.startswith("path "):
+            found.append(stripped.split("path ", 1)[1].rsplit(" (", 1)[0])
+            pending = False
+    return found
+
+
+def resolve_install_name(origin, dep):
+    if is_system_lib(dep):
+        return None
+    if dep.startswith("@rpath/"):
+        name = dep.removeprefix("@rpath/")
+        for rpath in macho_rpaths(origin):
+            expanded = rpath.replace("@loader_path", str(origin.parent)).replace(
+                "@executable_path", str(origin.parent))
+            candidate = Path(expanded) / name
+            if candidate.exists():
+                return candidate.resolve()
+        return None
+    if dep.startswith("@loader_path/"):
+        candidate = origin.parent / dep.removeprefix("@loader_path/")
+        return candidate.resolve() if candidate.exists() else None
+    if dep.startswith("@executable_path/"):
+        candidate = origin.parent / dep.removeprefix("@executable_path/")
+        return candidate.resolve() if candidate.exists() else None
+    candidate = Path(dep)
+    return candidate.resolve() if candidate.exists() else None
+
+
+def find_libmpv():
+    for candidate in (
+        Path("/opt/homebrew/lib/libmpv.2.dylib"),
+        Path("/opt/homebrew/lib/libmpv.dylib"),
+        Path("/usr/local/lib/libmpv.2.dylib"),
+        Path("/usr/local/lib/libmpv.dylib"),
+    ):
+        if candidate.exists():
+            return candidate.resolve()
+    raise ValueError("libmpv was not found. On the build machine run: brew install mpv")
+
+
+def bundle_libmpv(frameworks):
+    """Copy libmpv and every non-system library it needs into `frameworks`.
+
+    Each copy is rewritten to load its siblings from `@loader_path` and signed
+    ad hoc, so the app can open on a Mac that does not have Homebrew.
+    """
+    frameworks.mkdir(parents=True, exist_ok=True)
+    pending = [find_libmpv()]
+    copied = {}
+    original = {}
+    while pending:
+        src = pending.pop()
+        if src in copied:
+            continue
+        deps = macho_deps(src)
+        dest_name = Path(deps[0]).name
+        if not dest_name.endswith(".dylib"):
+            dest_name = src.name
+        dest = frameworks / dest_name
+        previous = next((kept for kept, path in copied.items() if path == dest), None)
+        if previous is not None and previous != src:
+            raise ValueError(f"Framework name collision for {dest_name}: {src} and {previous}")
+        shutil.copyfile(src, dest)
+        dest.chmod(0o755)
+        copied[src] = dest
+        original[dest] = (src, deps)
+        for dep in deps[1:]:
+            resolved = resolve_install_name(src, dep)
+            if resolved is None:
+                if is_system_lib(dep):
+                    continue
+                raise ValueError(f"Could not bundle {dep}, needed by {src}")
+            pending.append(resolved)
+
+    for dest, (src, deps) in original.items():
+        subprocess.run(["install_name_tool", "-id", f"@rpath/{dest.name}", str(dest)], check=True)
+        for dep in deps[1:]:
+            resolved = resolve_install_name(src, dep)
+            if resolved is None or resolved not in copied:
+                continue
+            new = f"@rpath/{copied[resolved].name}"
+            if dep != new:
+                subprocess.run(["install_name_tool", "-change", dep, new, str(dest)], check=True)
+        if "@loader_path" not in macho_rpaths(dest):
+            subprocess.run(["install_name_tool", "-add_rpath", "@loader_path", str(dest)], check=True)
+        subprocess.run(["codesign", "--force", "--sign", "-", str(dest)], check=True)
+    if not any(path.name.startswith("libmpv") for path in frameworks.glob("*.dylib")):
+        raise ValueError(f"libmpv was not copied into {frameworks}")
+
+
+def write_info_plist(path, frontend, version):
+    plistlib.dump({
+        "CFBundleDevelopmentRegion": "en",
+        "CFBundleExecutable": f"nt-{frontend}",
+        "CFBundleIconFile": "",
+        "CFBundleIdentifier": f"app.nativetube.{frontend}",
+        "CFBundleInfoDictionaryVersion": "6.0",
+        "CFBundleName": app_title(frontend),
+        "CFBundleDisplayName": app_title(frontend),
+        "CFBundlePackageType": "APPL",
+        "CFBundleShortVersionString": version,
+        "CFBundleVersion": version,
+        "LSMinimumSystemVersion": "15.0",
+        "NSHighResolutionCapable": True,
+        "LSApplicationCategoryType": "public.app-category.entertainment",
+    }, path, fmt=plistlib.FMT_XML)
+
+
+def bundle_version():
+    match = re.search(r"v(\d+\.\d+\.\d+)", os.environ.get("GITHUB_REF", ""))
+    return match.group(1) if match else "0.0.1"
+
+
+def write_zip(app_dir, archive):
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=3) as zipped:
+        for path in sorted(app_dir.rglob("*")):
+            relative = Path(app_dir.name) / path.relative_to(app_dir)
+            info = zipfile.ZipInfo(str(relative).replace(os.sep, "/"))
+            info.external_attr = (path.lstat().st_mode & 0xFFFF) << 16
+            info.create_system = 3
+            info.compress_type = zipfile.ZIP_DEFLATED
+            if path.is_symlink() or path.is_file():
+                info.file_size = path.stat().st_size
+                with path.open("rb") as file:
+                    zipped.writestr(info, file.read())
+            elif path.is_dir():
+                info.filename = f"{info.filename}/"
+                zipped.writestr(info, b"")
+
+
 def package(frontend, target, output, candidate):
     os_name, machine, triple = TARGETS[target]
     if (platform.system(), platform.machine()) != (os_name, machine):
@@ -188,22 +355,30 @@ def package(frontend, target, output, candidate):
             binary = build_dir / triple / "release" / binary_name
         runtime = inspect_binary(binary, target)
 
-        stage = work / name
-        stage.mkdir()
-        shutil.copyfile(binary, stage / binary_name)
-        (stage / binary_name).chmod(0o755)
-        shutil.copyfile(manifest.with_name("Cargo.lock"), stage / "Cargo.lock")
-        write_attribution(stage, manifest, triple, candidate)
+        title = app_title(frontend)
+        app = work / f"{title}.app"
+        macos_dir = app / "Contents" / "MacOS"
+        resources = app / "Contents" / "Resources"
+        macos_dir.mkdir(parents=True)
+        resources.mkdir()
+        executable = macos_dir / binary_name
+        shutil.copyfile(binary, executable)
+        executable.chmod(0o755)
+        write_info_plist(app / "Contents" / "Info.plist", frontend, bundle_version())
+        bundle_libmpv(app / "Contents" / "Frameworks")
+        subprocess.run(["codesign", "--force", "--sign", "-", str(executable)], check=True)
+        shutil.copyfile(manifest.with_name("Cargo.lock"), resources / "Cargo.lock")
+        write_attribution(resources, manifest, triple, candidate)
 
         instructions = (ROOT / "tools" / "release" / f"{os_name.lower()}.txt").read_text()
-        heading = f"NativeTube {frontend} | {target}\n\n"
+        heading = f"{title} | {target}\n\n"
         if candidate:
             heading += ("LOCAL PACKAGING CANDIDATE\nThe supplied executable may predate the checkout. "
                         "Its original build revision and toolchain are unknown.\n\n")
-        instructions = instructions.replace("@BINARY@", binary_name)
-        (stage / "RUN.txt").write_text(heading + instructions, encoding="utf-8")
+        instructions = instructions.replace("@BINARY@", title)
+        (resources / "RUN.txt").write_text(heading + instructions, encoding="utf-8")
 
-        with (stage / binary_name).open("rb") as file:
+        with executable.open("rb") as file:
             binary_digest = sha256(file)
         provenance = {
             "frontend": frontend,
@@ -227,16 +402,20 @@ def package(frontend, target, output, candidate):
             "build_command": None if candidate else command + ["--target-dir", "<temporary>"],
             **runtime,
         }
-        (stage / "BUILD.json").write_text(json.dumps(provenance, indent=2) + "\n", encoding="utf-8")
+        (resources / "BUILD.json").write_text(json.dumps(provenance, indent=2) + "\n", encoding="utf-8")
 
-        archive = work / f"{name}.tar.gz"
-        with tarfile.open(archive, "w:gz", compresslevel=3) as tar:
-            tar.add(stage, arcname=name)
+        archive = work / f"{name}.zip"
+        write_zip(app, archive)
         digest = work / f"{archive.name}.sha256"
         digest.write_text(checksum(archive), encoding="ascii")
         archive.replace(output / archive.name)
         digest.replace(output / digest.name)
         print(output / archive.name)
+
+
+def zip_members(archive):
+    with zipfile.ZipFile(archive) as zipped:
+        return {info.filename: info for info in zipped.infolist()}
 
 
 def verify(directory, commit, ref, run_id):
@@ -247,23 +426,38 @@ def verify(directory, commit, ref, run_id):
 
     for name, (frontend, target) in sorted(expected.items()):
         folder = directory / name
-        archive = folder / f"{name}.tar.gz"
+        archive = folder / f"{name}.zip"
         digest = folder / f"{archive.name}.sha256"
         if set(folder.iterdir()) != {archive, digest}:
             raise ValueError(f"Expected archive and checksum only in {folder}")
         if digest.read_text(encoding="ascii") != checksum(archive):
             raise ValueError(f"SHA256 mismatch: {archive}")
 
-        with tarfile.open(archive, "r:gz") as tar:
-            binary = tar.getmember(f"{name}/nt-{frontend}")
-            if not binary.isfile() or not binary.mode & 0o111:
-                raise ValueError(f"Missing executable permission: {archive}")
-            for required in ("RUN.txt", "Cargo.lock", "DEPENDENCIES.md", "licenses"):
-                tar.getmember(f"{name}/{required}")
-            with tar.extractfile(f"{name}/BUILD.json") as file:
-                provenance = json.load(file)
-            with tar.extractfile(binary) as file:
-                binary_digest = sha256(file)
+        title = app_title(frontend)
+        root = f"{title}.app/Contents"
+        binary_name = f"{root}/MacOS/nt-{frontend}"
+        infos = zip_members(archive)
+        binary = infos.get(binary_name)
+        mode = (binary.external_attr >> 16) if binary is not None else 0
+        if binary is None or binary.is_dir() or not mode & 0o111:
+            raise ValueError(f"Missing executable permission: {archive}")
+        required = [
+            f"{root}/Info.plist",
+            f"{root}/Resources/RUN.txt",
+            f"{root}/Resources/Cargo.lock",
+            f"{root}/Resources/DEPENDENCIES.md",
+            f"{root}/Resources/BUILD.json",
+        ]
+        if any(path not in infos for path in required):
+            raise ValueError(f"App bundle is missing required files: {archive}")
+        if not any(path.startswith(f"{root}/Resources/licenses/") for path in infos):
+            raise ValueError(f"App bundle is missing license notices: {archive}")
+        if not any(Path(path).name.startswith("libmpv") and path.startswith(f"{root}/Frameworks/")
+                   for path in infos):
+            raise ValueError(f"App bundle is missing libmpv: {archive}")
+        with zipfile.ZipFile(archive) as zipped:
+            provenance = json.loads(zipped.read(f"{root}/Resources/BUILD.json"))
+            binary_digest = sha256_bytes(zipped.read(binary_name))
         expected_provenance = {
             "frontend": frontend, "target": target, "binary_sha256": binary_digest,
             "package_kind": "fresh-build", "source_revision": commit, "source_ref": ref,
@@ -272,6 +466,10 @@ def verify(directory, commit, ref, run_id):
         if any(provenance.get(key) != value for key, value in expected_provenance.items()):
             raise ValueError(f"Build provenance mismatch: {archive}")
         print(f"Verified {archive.name}")
+
+
+def sha256_bytes(data):
+    return hashlib.sha256(data).hexdigest()
 
 
 def main():

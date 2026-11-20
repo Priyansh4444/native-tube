@@ -132,25 +132,41 @@ mod ffi {
     }
 
     fn open_library() -> Result<*mut c_void, String> {
-        let names: &[&str] = if cfg!(target_os = "macos") {
-            &[
+        let mut names: Vec<std::path::PathBuf> = Vec::new();
+        if cfg!(target_os = "macos") {
+            // A double-clickable app keeps libmpv in Contents/Frameworks, next to Contents/MacOS.
+            if let Ok(exe) = std::env::current_exe()
+                && let Some(macos_dir) = exe.parent()
+            {
+                let frameworks = macos_dir.join("../Frameworks");
+                names.push(frameworks.join("libmpv.2.dylib"));
+                names.push(frameworks.join("libmpv.dylib"));
+            }
+            for name in [
                 "libmpv.2.dylib",
                 "libmpv.dylib",
                 "/opt/homebrew/lib/libmpv.dylib",
                 "/usr/local/lib/libmpv.dylib",
-            ]
+            ] {
+                names.push(name.into());
+            }
         } else {
-            &["libmpv.so.2", "libmpv.so"]
-        };
-        for name in names {
-            let c = std::ffi::CString::new(*name).map_err(|e| e.to_string())?;
-            // SAFETY: a NUL-terminated name; the handle is never closed (libmpv stays loaded).
-            let h = unsafe { libc::dlopen(c.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL) };
+            names.extend(["libmpv.so.2".into(), "libmpv.so".into()]);
+        }
+        for name in &names {
+            let mut bytes = std::os::unix::ffi::OsStrExt::as_bytes(name.as_os_str()).to_vec();
+            bytes.push(0);
+            // SAFETY: a NUL-terminated path; the handle is never closed (libmpv stays loaded).
+            let h =
+                unsafe { libc::dlopen(bytes.as_ptr().cast(), libc::RTLD_NOW | libc::RTLD_LOCAL) };
             if !h.is_null() {
                 return Ok(h);
             }
         }
-        Err("libmpv is not installed (looked for libmpv.so.2 / libmpv.dylib)".to_string())
+        Err(
+            "libmpv is not installed (looked beside the app and for libmpv.so.2 / libmpv.dylib)"
+                .to_string(),
+        )
     }
 
     fn symbol(lib: *mut c_void, name: &str) -> Result<*mut c_void, String> {

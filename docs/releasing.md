@@ -1,28 +1,26 @@
 # NativeTube releases
 
-Each prerelease has three `.tar.gz` downloads, one for each of iced, GPUI, and
-Rune on Apple silicon macOS. Every archive comes with a `.tar.gz.sha256` file.
-Grab the pair from the same GitHub Release and run the checksum command in your
+Each prerelease has three `.zip` downloads, one app each for iced, GPUI, and
+Rune on Apple silicon macOS. Every zip comes with a `.zip.sha256` file. Grab
+the pair from the same GitHub Release and run the checksum command in your
 downloads directory.
 
 ```sh
-shasum -a 256 -c native-tube-iced-macos-arm64.tar.gz.sha256
-tar -xzf native-tube-iced-macos-arm64.tar.gz
-cd native-tube-iced-macos-arm64
-./nt-iced
+shasum -a 256 -c native-tube-iced-macos-arm64.zip.sha256
+unzip native-tube-iced-macos-arm64.zip
+open "NativeTube Iced.app"
 ```
 
 ## Runtime requirements
 
-Use an Apple silicon Mac with macOS 15 or newer. Run `brew install mpv` with
-native Apple silicon Homebrew for playback. Run the command-line executable
-from Terminal. The binaries ship without Developer ID signing or notarization,
-so macOS may ask you to approve the launch in Privacy & Security.
+Use an Apple silicon Mac with macOS 15 or newer. Unzip the download and open
+the app. libmpv and the libraries it needs are inside the bundle, so Homebrew
+is not required. The apps are ad hoc signed and are not notarized. If
+Gatekeeper blocks a downloaded copy, verify its SHA256, then Control-click
+the app and choose Open.
 
-The archives rely on system libraries. `BUILD.json` records the libraries
-linked at build time and the Mach-O deployment target. `RUN.txt` covers
-libraries loaded at runtime that may not be in the linker report, including
-libmpv.
+`BUILD.json`, inside the app's Resources, records the system libraries linked
+at build time and the Mach-O deployment target.
 
 ## Build and stage
 
@@ -64,6 +62,7 @@ local candidate and leave the executable's source revision unknown.
 ```sh
 python3 tools/release/package.py package iced macos-arm64 \
     /tmp/native-tube-release-candidate --candidate apps/iced/target/release/nt-iced
+# writes NativeTube Iced.app inside a zip; requires brew install mpv on that Mac
 python3 -B -m unittest discover -s tools/release
 ```
 

@@ -1,11 +1,11 @@
 import hashlib
 import json
 from pathlib import Path
-import tarfile
 import tempfile
 import unittest
+import zipfile
 
-from package import FRONTENDS, TARGETS, checksum, inspect_binary, verify
+from package import FRONTENDS, TARGETS, app_title, checksum, inspect_binary, verify
 
 
 class PackageVerificationTests(unittest.TestCase):
@@ -23,28 +23,36 @@ class PackageVerificationTests(unittest.TestCase):
 
     def write_archive(self, frontend, target, executable=True):
         name = f"native-tube-{frontend}-{target}"
-        stage = self.root / name
-        stage.mkdir(exist_ok=True)
-        binary = stage / f"nt-{frontend}"
-        binary.write_bytes(b"test binary")
-        binary.chmod(0o755 if executable else 0o644)
-        for required in ("RUN.txt", "Cargo.lock", "DEPENDENCIES.md"):
-            (stage / required).write_text("test\n")
-        (stage / "licenses").mkdir(exist_ok=True)
-        (stage / "BUILD.json").write_text(json.dumps({
-            "frontend": frontend,
-            "target": target,
-            "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
-            "package_kind": "fresh-build",
-            "source_revision": self.commit,
-            "source_ref": self.ref,
-            "github_run_id": "123",
-        }))
+        title = app_title(frontend)
+        binary_rel = f"{title}.app/Contents/MacOS/nt-{frontend}"
+        binary = b"test binary"
+        files = {
+            binary_rel: (binary, 0o755 if executable else 0o644),
+            f"{title}.app/Contents/Info.plist": (b"<plist/>", 0o644),
+            f"{title}.app/Contents/Frameworks/libmpv.2.dylib": (b"mpv", 0o755),
+            f"{title}.app/Contents/Resources/RUN.txt": (b"test\n", 0o644),
+            f"{title}.app/Contents/Resources/Cargo.lock": (b"test\n", 0o644),
+            f"{title}.app/Contents/Resources/DEPENDENCIES.md": (b"test\n", 0o644),
+            f"{title}.app/Contents/Resources/licenses/project/NOTICE": (b"test\n", 0o644),
+            f"{title}.app/Contents/Resources/BUILD.json": (json.dumps({
+                "frontend": frontend,
+                "target": target,
+                "binary_sha256": hashlib.sha256(binary).hexdigest(),
+                "package_kind": "fresh-build",
+                "source_revision": self.commit,
+                "source_ref": self.ref,
+                "github_run_id": "123",
+            }).encode(), 0o644),
+        }
         folder = self.artifacts / name
         folder.mkdir(exist_ok=True)
-        archive = folder / f"{name}.tar.gz"
-        with tarfile.open(archive, "w:gz") as tar:
-            tar.add(stage, arcname=name)
+        archive = folder / f"{name}.zip"
+        with zipfile.ZipFile(archive, "w") as zipped:
+            for path, (payload, mode) in files.items():
+                info = zipfile.ZipInfo(path)
+                info.external_attr = mode << 16
+                info.create_system = 3
+                zipped.writestr(info, payload)
         digest = folder / f"{archive.name}.sha256"
         digest.write_text(checksum(archive))
         return archive, digest

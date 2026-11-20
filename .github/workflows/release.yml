@@ -45,6 +45,9 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
 
+      - name: Install mpv for the app bundle
+        run: brew install mpv
+
       - name: Check Metal compiler for GPUI
         if: runner.os == 'macOS' && matrix.frontend == 'gpui'
         run: |
@@ -71,8 +74,8 @@ jobs:
         with:
           name: native-tube-${{ matrix.frontend }}-${{ matrix.platform.target }}
           path: |
-            dist/*.tar.gz
-            dist/*.tar.gz.sha256
+            dist/*.zip
+            dist/*.zip.sha256
           if-no-files-found: error
           compression-level: 0
           overwrite: true
@@ -131,7 +134,7 @@ jobs:
             exit 1
           fi
 
-          assets=(artifacts/*/*.tar.gz artifacts/*/*.tar.gz.sha256)
+          assets=(artifacts/*/*.zip artifacts/*/*.zip.sha256)
           gh release create "$tag" "${assets[@]}" --repo "$GITHUB_REPOSITORY" \
             --verify-tag --draft --prerelease --title "NativeTube $tag" \
-            --notes "Test builds for Linux x86_64 and Apple silicon macOS. Check each archive's SHA256 and read its RUN.txt for runtime dependencies. Source commit: $commit."
+            --notes "Apple silicon apps for iced, GPUI, and Rune. Unzip a download and open the app. The first launch may need a Control-click, then Open, because the app is not notarized. Playback libraries are inside the app. Check the SHA256 before opening. Source commit: $commit."
