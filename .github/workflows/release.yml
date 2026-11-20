@@ -37,8 +37,6 @@ jobs:
       matrix:
         frontend: [iced, gpui, rune]
         platform:
-          - runner: ubuntu-24.04
-            target: linux-x86_64
           - runner: macos-15
             target: macos-arm64
     steps:
@@ -46,13 +44,6 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-
-      - name: Install Linux build dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends build-essential binutils cmake pkg-config \
-            libfontconfig-dev libfreetype-dev libwayland-dev libxkbcommon-dev
 
       - name: Check Metal compiler for GPUI
         if: runner.os == 'macOS' && matrix.frontend == 'gpui'

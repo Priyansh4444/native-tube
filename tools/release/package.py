@@ -17,7 +17,6 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[2]
 FRONTENDS = ("iced", "gpui", "rune")
 TARGETS = {
-    "linux-x86_64": ("Linux", "x86_64", "x86_64-unknown-linux-gnu"),
     "macos-arm64": ("Darwin", "arm64", "aarch64-apple-darwin"),
 }
 LICENSE_NAME = re.compile(r"^(licen[sc]es?|copying|copyright|notice|ofl|unlicense)($|[._-])", re.I)
@@ -244,7 +243,7 @@ def verify(directory, commit, ref, run_id):
     expected = {f"native-tube-{frontend}-{target}": (frontend, target)
                 for frontend in FRONTENDS for target in TARGETS}
     if {path.name for path in directory.iterdir()} != set(expected):
-        raise ValueError(f"Expected six artifact folders: {', '.join(sorted(expected))}")
+        raise ValueError(f"Expected artifact folders: {', '.join(sorted(expected))}")
 
     for name, (frontend, target) in sorted(expected.items()):
         folder = directory / name
@@ -283,7 +282,7 @@ def main():
     build.add_argument("target", choices=TARGETS)
     build.add_argument("output", type=Path)
     build.add_argument("--candidate", type=Path, help="Package an existing executable for local review")
-    check = commands.add_parser("verify", help="Verify all six downloaded CI asset pairs")
+    check = commands.add_parser("verify", help="Verify the downloaded CI asset pairs")
     check.add_argument("directory", type=Path)
     check.add_argument("commit")
     check.add_argument("ref")

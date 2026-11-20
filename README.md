@@ -10,10 +10,10 @@ to compare them: **iced**, **GPUI** and **Rune**.
 ## Release downloads
 
 Check [GitHub Releases](https://github.com/Priyansh4444/native-tube/releases) for published test builds.
-Choose iced, GPUI, or Rune, and download the archive and its SHA256 file for Linux x86_64 or
-Apple silicon macOS. Verify the checksum, extract the archive, and follow `RUN.txt`. You need
-system graphics libraries and libmpv for playback. macOS builds ship without Developer ID
-signing or notarization. See [release instructions](docs/releasing.md) for setup and checksum commands.
+Choose iced, GPUI, or Rune, and download the archive and its SHA256 file for Apple silicon
+macOS. Verify the checksum, extract the archive, and follow `RUN.txt`. You need system graphics
+libraries and libmpv for playback. macOS builds ship without Developer ID signing or
+notarization. See [release instructions](docs/releasing.md) for setup and checksum commands.
 
 ## Layout
 

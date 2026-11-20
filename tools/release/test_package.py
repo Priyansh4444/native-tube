@@ -59,12 +59,12 @@ class PackageVerificationTests(unittest.TestCase):
             verify(self.artifacts, self.commit, self.ref, "123")
 
     def test_archive_without_execute_permission(self):
-        self.write_archive("gpui", "linux-x86_64", executable=False)
+        self.write_archive("gpui", "macos-arm64", executable=False)
         with self.assertRaisesRegex(ValueError, "Missing executable permission"):
             verify(self.artifacts, self.commit, self.ref, "123")
 
     def test_tampered_archive(self):
-        archive, _ = self.write_archive("iced", "linux-x86_64")
+        archive, _ = self.write_archive("iced", "macos-arm64")
         with archive.open("ab") as file:
             file.write(b"tampered")
         with self.assertRaisesRegex(ValueError, "SHA256 mismatch"):
@@ -76,7 +76,7 @@ class PackageVerificationTests(unittest.TestCase):
 
     def test_missing_binary_input(self):
         with self.assertRaisesRegex(ValueError, "Missing executable"):
-            inspect_binary(self.root / "missing", "linux-x86_64")
+            inspect_binary(self.root / "missing", "macos-arm64")
 
 
 if __name__ == "__main__":
