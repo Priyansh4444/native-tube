@@ -1,0 +1,12 @@
+[
+  {"wait_mark": "home_loaded", "timeout": 8},
+  {"sleep": 4},
+  {"cmd": "open_video", "index": 1},
+  {"wait_mark": "playback_started", "timeout": 8},
+  {"phase": "playback"},
+  {"sleep": 6},
+  {"phase": ""},
+  {"cmd": "open_video", "index": 0},
+  {"wait_mark": "playback_started", "timeout": 8},
+  {"sleep": 1}
+]

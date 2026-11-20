@@ -1,0 +1,21 @@
+[
+  {"wait_mark": "home_loaded", "timeout": 8},
+  {"sleep": 3.5},
+  {"repeat": 10, "every": 0.10, "do": {"cmd": "scroll", "ticks": 1}},
+  {"sleep": 1.3},
+  {"cmd": "search", "query": "rust"},
+  {"wait_mark": "search_loaded", "timeout": 8},
+  {"sleep": 2.5},
+  {"cmd": "open_video", "index": 3},
+  {"wait_mark": "watch_loaded", "timeout": 8},
+  {"wait_mark": "playback_started", "timeout": 8},
+  {"sleep": 6},
+  {"cmd": "open_video", "index": 0},
+  {"wait_mark": "watch_loaded", "timeout": 8},
+  {"wait_mark": "playback_started", "timeout": 8},
+  {"sleep": 3.5},
+  {"cmd": "back"},
+  {"sleep": 2.5},
+  {"cmd": "back"},
+  {"sleep": 3}
+]
