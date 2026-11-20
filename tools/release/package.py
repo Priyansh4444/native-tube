@@ -281,21 +281,26 @@ def bundle_libmpv(frameworks):
 
 
 def write_info_plist(path, frontend, version):
-    plistlib.dump({
-        "CFBundleDevelopmentRegion": "en",
-        "CFBundleExecutable": f"nt-{frontend}",
-        "CFBundleIconFile": "",
-        "CFBundleIdentifier": f"app.nativetube.{frontend}",
-        "CFBundleInfoDictionaryVersion": "6.0",
-        "CFBundleName": app_title(frontend),
-        "CFBundleDisplayName": app_title(frontend),
-        "CFBundlePackageType": "APPL",
-        "CFBundleShortVersionString": version,
-        "CFBundleVersion": version,
-        "LSMinimumSystemVersion": "15.0",
-        "NSHighResolutionCapable": True,
-        "LSApplicationCategoryType": "public.app-category.entertainment",
-    }, path, fmt=plistlib.FMT_XML)
+    with path.open("wb") as file:
+        plistlib.dump(
+            {
+                "CFBundleDevelopmentRegion": "en",
+                "CFBundleExecutable": f"nt-{frontend}",
+                "CFBundleIconFile": "",
+                "CFBundleIdentifier": f"app.nativetube.{frontend}",
+                "CFBundleInfoDictionaryVersion": "6.0",
+                "CFBundleName": app_title(frontend),
+                "CFBundleDisplayName": app_title(frontend),
+                "CFBundlePackageType": "APPL",
+                "CFBundleShortVersionString": version,
+                "CFBundleVersion": version,
+                "LSMinimumSystemVersion": "15.0",
+                "NSHighResolutionCapable": True,
+                "LSApplicationCategoryType": "public.app-category.entertainment",
+            },
+            file,
+            fmt=plistlib.FMT_XML,
+        )
 
 
 def bundle_version():

@@ -5,7 +5,7 @@ import tempfile
 import unittest
 import zipfile
 
-from package import FRONTENDS, TARGETS, app_title, checksum, inspect_binary, verify
+from package import FRONTENDS, TARGETS, app_title, checksum, inspect_binary, verify, write_info_plist
 
 
 class PackageVerificationTests(unittest.TestCase):
@@ -81,6 +81,14 @@ class PackageVerificationTests(unittest.TestCase):
     def test_mismatched_source_revision(self):
         with self.assertRaisesRegex(ValueError, "Build provenance mismatch"):
             verify(self.artifacts, "0" * 40, self.ref, "123")
+
+    def test_info_plist_is_written_to_a_path(self):
+        path = self.root / "Info.plist"
+        write_info_plist(path, "iced", "0.0.1")
+        text = path.read_text()
+        self.assertIn("NativeTube Iced", text)
+        self.assertIn("nt-iced", text)
+        self.assertIn("0.0.1", text)
 
     def test_missing_binary_input(self):
         with self.assertRaisesRegex(ValueError, "Missing executable"):
