@@ -1,0 +1,12 @@
+[package]
+name = "iced-unfocus-repro"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+iced = { version = "=0.14.0", default-features = false, features = [
+    "advanced", "wgpu", "image-without-codecs", "crisp", "svg", "tokio", "wayland", "x11",
+] }
+
+[workspace]

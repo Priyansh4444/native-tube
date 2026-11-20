@@ -1,0 +1,12 @@
+[package]
+name = "iced-focus-sibling-width-repro"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+iced = { version = "=0.14.0", default-features = false, features = [
+    "advanced", "wgpu", "crisp", "tokio", "wayland",
+] }
+
+[workspace]

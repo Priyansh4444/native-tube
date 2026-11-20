@@ -1,0 +1,18 @@
+[package]
+name = "rune-wrapped-livetext-repro"
+version = "0.1.0"
+edition = "2024"
+description = "Reproduce the wrapped LiveText assertion."
+
+[dependencies]
+rune = { git = "https://github.com/anomalyco/rune", rev = "4fbd2d6ac4dd12595dd8ed0b7849b28a309c7c00" }
+
+[patch.crates-io]
+wgpu-hal = { git = "https://github.com/anomalyco/rune", rev = "4fbd2d6ac4dd12595dd8ed0b7849b28a309c7c00" }
+winit = { git = "https://github.com/anomalyco/rune", rev = "4fbd2d6ac4dd12595dd8ed0b7849b28a309c7c00" }
+
+[profile.release]
+debug = false
+codegen-units = 16
+
+[workspace]
