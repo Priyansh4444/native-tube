@@ -1,0 +1,14 @@
+Use an Apple silicon Mac running macOS 15 or newer. Install mpv with native
+Apple silicon Homebrew so NativeTube can load libmpv for playback:
+
+    brew install mpv
+
+Extract the archive, open Terminal in the extracted directory and run:
+
+    ./@BINARY@
+
+The executable uses system frameworks and the separately installed libmpv. It
+ships without Developer ID signing or notarization. If Gatekeeper blocks a copy
+you downloaded from the project, verify its SHA256 and use Privacy & Security
+in System Settings to review the launch. BUILD.json records the linked libraries
+and the executable's Mach-O deployment target.

@@ -1,0 +1,16 @@
+Use an x86_64 Linux desktop with a Wayland session and a working GPU driver.
+For GitHub builds, start with Ubuntu 24.04 or a compatible newer distribution.
+On Ubuntu 24.04, install the runtime libraries with:
+
+    sudo apt install libmpv2 libwayland-client0 libwayland-cursor0 libwayland-egl1 \
+        libxkbcommon0 libegl1 libgl1 libvulkan1 libfontconfig1 libfreetype6
+
+Use the equivalent packages on other distributions. For Mesa graphics, make sure
+your distribution's Vulkan driver is installed (mesa-vulkan-drivers on Ubuntu).
+NativeTube loads libmpv.so.2 at runtime for playback. The archive requires the
+system libraries and GPU driver. BUILD.json records its linked libraries and
+the highest glibc symbol version required by the executable.
+
+Extract the archive, open a terminal in the extracted directory and run:
+
+    ./@BINARY@

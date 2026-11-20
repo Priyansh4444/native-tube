@@ -1,0 +1,146 @@
+name: Release packages
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-packages-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_BUILD_JOBS: '4'
+  LC_ALL: C
+
+jobs:
+  test-packager:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - run: python3 -B -m unittest discover -s tools/release
+
+  build:
+    needs: test-packager
+    name: ${{ matrix.frontend }} / ${{ matrix.platform.target }}
+    runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        frontend: [iced, gpui, rune]
+        platform:
+          - runner: ubuntu-24.04
+            target: linux-x86_64
+          - runner: macos-15
+            target: macos-arm64
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential binutils cmake pkg-config \
+            libfontconfig-dev libfreetype-dev libwayland-dev libxkbcommon-dev
+
+      - name: Check Metal compiler for GPUI
+        if: runner.os == 'macOS' && matrix.frontend == 'gpui'
+        run: |
+          xcodebuild -version
+          if ! xcrun -sdk macosx metal --version; then
+            xcodebuild -downloadComponent MetalToolchain
+            xcrun -sdk macosx metal --version
+          fi
+
+      - name: Build and archive
+        env:
+          FRONTEND: ${{ matrix.frontend }}
+          TARGET: ${{ matrix.platform.target }}
+          MACOSX_DEPLOYMENT_TARGET: '15.0'
+        run: |
+          if [[ "$TARGET" == linux-* ]]; then
+            nice -n 19 ionice -c3 python3 tools/release/package.py package "$FRONTEND" "$TARGET" dist
+          else
+            nice -n 19 python3 tools/release/package.py package "$FRONTEND" "$TARGET" dist
+          fi
+
+      - name: Upload archive and SHA256
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: native-tube-${{ matrix.frontend }}-${{ matrix.platform.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.tar.gz.sha256
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: true
+
+  draft-release:
+    if: github.event_name == 'push' && github.ref_type == 'tag' && !github.event.deleted
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          pattern: native-tube-*
+          path: artifacts
+
+      - name: Verify complete asset set and provenance
+        run: |
+          commit=$(git rev-parse 'HEAD^{commit}')
+          event_commit=$(git rev-parse "${GITHUB_SHA}^{commit}")
+          [[ "$commit" == "$event_commit" ]]
+          python3 tools/release/package.py verify artifacts "$commit" "$GITHUB_REF" "$GITHUB_RUN_ID"
+
+      - name: Create draft prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_PROMPT_DISABLED: '1'
+        run: |
+          tag=${GITHUB_REF#refs/tags/}
+          if [[ "$GITHUB_REF" != "refs/tags/$tag" || ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
+            echo "Expected a version tag such as v0.1.0 or v0.1.0-rc.1" >&2
+            exit 1
+          fi
+          existing=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" --jq '.[].tag_name')
+          if grep -Fxq -- "$tag" <<< "$existing"; then
+            echo "A release or draft already exists for $tag" >&2
+            exit 1
+          fi
+
+          # A lightweight tag has only a direct ref. An annotated one also has a peeled ref.
+          refs=$(git -c credential.helper= -c 'credential.helper=!gh auth git-credential' \
+            ls-remote --exit-code origin "$GITHUB_REF" "$GITHUB_REF^{}")
+          remote_commit=$(awk -v ref="$GITHUB_REF" '
+            $2 == ref       { direct = $1 }
+            $2 == ref "^{}" { peeled = $1 }
+            END { print (peeled ? peeled : direct) }
+          ' <<< "$refs")
+          commit=$(git rev-parse 'HEAD^{commit}')
+          if [[ "$remote_commit" != "$commit" ]]; then
+            echo "Remote tag does not resolve to built commit $commit" >&2
+            exit 1
+          fi
+
+          assets=(artifacts/*/*.tar.gz artifacts/*/*.tar.gz.sha256)
+          gh release create "$tag" "${assets[@]}" --repo "$GITHUB_REPOSITORY" \
+            --verify-tag --draft --prerelease --title "NativeTube $tag" \
+            --notes "Test builds for Linux x86_64 and Apple silicon macOS. Check each archive's SHA256 and read its RUN.txt for runtime dependencies. Source commit: $commit."
