@@ -19,20 +19,22 @@ mod widgets;
 use iced::{Size, window};
 
 /// Runs iced's tasks and subscriptions on the core's tokio runtime instead of a second pool.
-struct CoreExecutor;
+struct CoreExecutor(&'static tokio::runtime::Runtime);
 
 impl iced::Executor for CoreExecutor {
     fn new() -> Result<Self, iced::futures::io::Error> {
-        Ok(CoreExecutor)
+        nt_core::try_runtime()
+            .map(Self)
+            .map_err(iced::futures::io::Error::other)
     }
     fn spawn(&self, future: impl Future<Output = ()> + Send + 'static) {
-        nt_core::runtime().spawn(future);
+        self.0.spawn(future);
     }
     fn block_on<T>(&self, future: impl Future<Output = T>) -> T {
-        nt_core::runtime().block_on(future)
+        self.0.block_on(future)
     }
     fn enter<R>(&self, f: impl FnOnce() -> R) -> R {
-        let _guard = nt_core::runtime().enter();
+        let _guard = self.0.enter();
         f()
     }
 }
@@ -95,6 +97,9 @@ fn prewarm_fonts() {
 }
 
 fn main() -> iced::Result {
+    // SAFETY: the process is still single-threaded and the toolkit and EGL are uninitialized.
+    unsafe { nt_core::gpu::select_egl_vendor() };
+
     nt_core::metrics::init("iced");
     install_panic_hook();
     #[cfg(target_os = "linux")]

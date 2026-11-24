@@ -38,17 +38,12 @@
 /// offset (120 per notch) is used directly as the pixel delta, with
 /// `delta_units = kScrollByPixel` (`ui/events/blink/web_input_event.cc`
 /// `MakeWebMouseWheelEventFromUiEvent(const MouseWheelEvent&)`).
-pub const WHEEL_DELTA_PX: f64 = 120.0;
-
-/// Wayland `wl_pointer.axis_value120` units per notch (protocol definition).
-/// `ui/ozone/platform/wayland/host/wayland_pointer.cc` `OnAxisValue120` uses
-/// `-value120` directly as the wheel offset, so 120 value120 = 120 px.
-pub const WAYLAND_VALUE120_PER_TICK: f64 = 120.0;
+const WHEEL_DELTA_PX: f64 = 120.0;
 
 /// Wayland compositors send `wl_pointer.axis` value 10 per wheel notch.
 /// `ui/ozone/platform/wayland/host/wayland_pointer.cc` `OnAxis`
 /// `kAxisValueScale` = 10.
-pub const WAYLAND_AXIS_VALUE_SCALE: f64 = 10.0;
+const WAYLAND_AXIS_VALUE_SCALE: f64 = 10.0;
 
 /// Pixels per unit of `wl_pointer.axis` value, for both legacy wheel axis
 /// events and touchpad (finger/continuous source) axis events:
@@ -56,22 +51,16 @@ pub const WAYLAND_AXIS_VALUE_SCALE: f64 = 10.0;
 /// `wayland_pointer.cc` `OnAxis`, applied while the feature
 /// `kWaylandUnscaledTouchpadScrolling` (`ui/ozone/common/features.cc`) is
 /// disabled, which is its default.
-pub const WAYLAND_AXIS_TO_PX: f64 = WHEEL_DELTA_PX / WAYLAND_AXIS_VALUE_SCALE;
-
-/// Touchpad factor Chrome uses instead of [`WAYLAND_AXIS_TO_PX`] when the
-/// (default-off) feature `kWaylandUnscaledTouchpadScrolling` is enabled.
-/// `ui/ozone/common/features.cc` `kWaylandUnscaledTouchpadScrollingNewFactor`
-/// = 2.5. Provided for frontends that find the default 12x too fast.
-pub const WAYLAND_UNSCALED_TOUCHPAD_FACTOR: f64 = 2.5;
+const WAYLAND_AXIS_TO_PX: f64 = WHEEL_DELTA_PX / WAYLAND_AXIS_VALUE_SCALE;
 
 /// Arrow-key / scrollbar-button step.
 /// `cc/input/scroll_utils.h` `kPixelsPerLineStep` = 40 (used by
 /// `blink::ScrollableArea::PixelsPerLineStep` and `cc::InputHandler::LineStep`).
-pub const PIXELS_PER_LINE_STEP: f64 = 40.0;
+const PIXELS_PER_LINE_STEP: f64 = 40.0;
 
 /// Page Up/Down and Space step as a fraction of the visible height.
 /// `cc/input/scroll_utils.h` `kMinFractionToStepWhenPaging` = 0.875.
-pub const MIN_FRACTION_TO_STEP_WHEN_PAGING: f64 = 0.875;
+const MIN_FRACTION_TO_STEP_WHEN_PAGING: f64 = 0.875;
 
 // ---------------------------------------------------------------------------
 // Smooth-scroll curve constants (cc/animation/scroll_offset_animation_curve.cc)
@@ -182,12 +171,6 @@ const FLING_BOOST_TIMEOUT_S: f64 = 0.05;
 // ---------------------------------------------------------------------------
 // Unit helpers
 // ---------------------------------------------------------------------------
-
-/// Converts a Wayland `axis_value120` value into notches for
-/// [`ScrollAnimator::wheel_ticks`]. High-resolution wheels send fractions.
-pub fn wayland_value120_to_ticks(value120: f64) -> f64 {
-    value120 / WAYLAND_VALUE120_PER_TICK
-}
 
 /// Converts a Wayland `wl_pointer.axis` value into pixels the way Chrome does
 /// by default (x12). Use it for legacy wheel axis events (pass the result /
@@ -808,7 +791,6 @@ pub struct ScrollAnimator {
     offset: f64,
     max_offset: f64,
     viewport: f64,
-    smooth_scroll: bool,
     motion: Motion,
     /// Offset changed outside `tick`; one frame must be presented.
     dirty: bool,
@@ -835,7 +817,6 @@ impl ScrollAnimator {
             offset: 0.0,
             max_offset: 0.0,
             viewport: f64::INFINITY,
-            smooth_scroll: true,
             motion: Motion::Idle,
             dirty: false,
             last_tick: f64::NEG_INFINITY,
@@ -878,20 +859,6 @@ impl ScrollAnimator {
         } else {
             f64::INFINITY
         };
-    }
-
-    /// Turns wheel and keyboard animation on or off (default on). Chrome on
-    /// Linux animates them only when the desktop has animations enabled:
-    /// `content/browser/web_contents/web_contents_impl.cc` sets
-    /// `prefs.enable_scroll_animator` from
-    /// `gfx::Animation::ScrollAnimationsEnabledBySystem()`, which on Linux is
-    /// `ui::LinuxUi::AnimationsEnabled()` (`ui/gfx/animation/animation_linux.cc`);
-    /// `cc::InputHandler::ShouldAnimateScroll` then returns false. Frontends
-    /// should mirror the desktop setting (e.g. GNOME `enable-animations`).
-    /// Off: wheel ticks and `scroll_by` jump instantly. Flings, touchpad and
-    /// `scroll_to` are unaffected.
-    pub fn set_smooth_scroll(&mut self, enabled: bool) {
-        self.smooth_scroll = enabled;
     }
 
     /// The scroll range set with [`set_max_offset`](Self::set_max_offset).
@@ -990,11 +957,6 @@ impl ScrollAnimator {
             return;
         }
         self.settle_finished_curve(now);
-        if !self.smooth_scroll {
-            self.freeze_motion(now);
-            self.apply_instant(delta.clamp(-self.viewport, self.viewport));
-            return;
-        }
         match self.motion {
             Motion::Curve(ref mut c) if c.kind == CurveKind::MouseWheel => {
                 // `ScrollOffsetAnimationImpl::ScrollAnimationUpdateTarget`.
@@ -1097,12 +1059,6 @@ impl ScrollAnimator {
         let target = self.clamp(desired + delta_px);
         if target == desired {
             return; // zero delta to consume: nothing, not even a cancel.
-        }
-        if !self.smooth_scroll {
-            // `ScrollAnimator::UserScroll` with the animator disabled.
-            self.freeze_motion(now);
-            self.apply_instant(target - self.offset);
-            return;
         }
         match self.motion {
             Motion::Curve(ref mut c) if running_keyboard => {
@@ -1248,14 +1204,6 @@ impl ScrollAnimator {
         {
             self.offset = self.clamp(c.target_value);
             self.motion = Motion::Idle;
-            self.dirty = true;
-        }
-    }
-
-    fn apply_instant(&mut self, delta: f64) {
-        let o = self.clamp(self.offset + delta);
-        if o != self.offset {
-            self.offset = o;
             self.dirty = true;
         }
     }
@@ -1440,7 +1388,8 @@ mod tests {
         let mut a = animator(10_000.0);
         a.jump_to(5000.0);
         a.tick(0.5);
-        a.wheel_ticks(wayland_value120_to_ticks(-120.0), 1.0);
+        // value120 = -120 is one notch up.
+        a.wheel_ticks(-1.0, 1.0);
         assert_eq!(a.target(), 4880.0);
         assert_eq!(wayland_axis_to_px(10.0), 120.0);
     }
@@ -1797,20 +1746,6 @@ mod tests {
             );
             t += 0.037;
         }
-    }
-
-    #[test]
-    fn smooth_scroll_off_jumps_instantly() {
-        let mut a = animator(10_000.0);
-        a.set_smooth_scroll(false);
-        a.wheel_ticks(1.0, 0.1);
-        assert!(!a.is_animating());
-        assert_eq!(a.offset(), 120.0);
-        a.scroll_by(40.0, 0.2);
-        assert_eq!(a.offset(), 160.0);
-        assert!(a.needs_frame());
-        a.tick(0.21);
-        assert!(!a.needs_frame());
     }
 
     #[test]

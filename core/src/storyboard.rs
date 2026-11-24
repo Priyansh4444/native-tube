@@ -21,11 +21,10 @@ pub struct Storyboard {
     levels: Vec<StoryboardLevel>,
     /// A copy of the largest level, so lookups need no fallible indexing.
     largest: StoryboardLevel,
-    duration: f64,
 }
 
 /// One preview size. Read it through the methods; the parser guarantees non-zero sizes whose
-/// sheet fits in [`MAX_SHEET_PX`] a side.
+/// sheet fits in 16 384 px a side.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StoryboardLevel {
     width: u32,
@@ -51,7 +50,7 @@ pub struct StoryboardFrame {
 }
 
 /// The largest sprite sheet side accepted, in pixels. YouTube's are at most a few thousand.
-pub const MAX_SHEET_PX: u32 = 16_384;
+const MAX_SHEET_PX: u32 = 16_384;
 
 pub(crate) fn parse_storyboard(player: &Value) -> Option<Storyboard> {
     let spec = player
@@ -105,11 +104,7 @@ pub(crate) fn parse_storyboard(player: &Value) -> Option<Storyboard> {
         .collect();
     levels.sort_by_key(|l| l.width);
     let largest = levels.last()?.clone();
-    Some(Storyboard {
-        levels,
-        largest,
-        duration,
-    })
+    Some(Storyboard { levels, largest })
 }
 
 impl StoryboardLevel {
@@ -173,11 +168,6 @@ impl Storyboard {
     /// The levels, smallest first; never empty.
     pub fn levels(&self) -> &[StoryboardLevel] {
         &self.levels
-    }
-
-    /// Video length in seconds, which spreads frames over a level without an interval.
-    pub fn duration(&self) -> f64 {
-        self.duration
     }
 
     /// The smallest level at least `width_px` wide, or the largest one.

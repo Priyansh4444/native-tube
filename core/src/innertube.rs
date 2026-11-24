@@ -664,7 +664,7 @@ fn search_shelf(v: &Value) -> Option<SearchShelf> {
     })
 }
 
-pub(crate) fn search_notices(v: &Value, query: &str, empty: bool) -> Vec<SearchNotice> {
+fn search_notices(v: &Value, query: &str, empty: bool) -> Vec<SearchNotice> {
     let root = &v["contents"]["twoColumnSearchResultsRenderer"]["primaryContents"];
     let mut notices = Vec::new();
     if let Some(promo) = find(root, "backgroundPromoRenderer")
@@ -809,7 +809,7 @@ pub(crate) fn parse_watch(v: &Value, video_id: &str) -> Result<WatchInfo> {
 
 /// Filter chips under `v`, in either shape: `chipCloudChipRenderer` or `chipViewModel`. A chip
 /// loads through a continuation on `endpoint`; the selected one has none.
-pub(crate) fn chips(v: &Value, endpoint: &str) -> Vec<Chip> {
+fn chips(v: &Value, endpoint: &str) -> Vec<Chip> {
     let mut found = Vec::new();
     find_all(v, "chipCloudChipRenderer", &mut found);
     let mut models = Vec::new();
@@ -1347,7 +1347,7 @@ pub(crate) fn channel_about(v: &Value) -> Result<ChannelAbout> {
 }
 
 /// Rewrite a `yt3` avatar URL's size parameter (`=s900-…` to `=s176-…`).
-pub(crate) fn resize_avatar(url: &str, size: u32) -> String {
+fn resize_avatar(url: &str, size: u32) -> String {
     let Some((base, rest)) = url.rsplit_once("=s") else {
         return url.to_string();
     };

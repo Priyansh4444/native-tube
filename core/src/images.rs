@@ -114,8 +114,12 @@ pub fn image(url: &str, max_width: u32) -> Job<Arc<RgbaImage>> {
     if let Some(done) = slot.get() {
         return Job::ready(done.clone());
     }
+    let rt = match crate::client::try_runtime() {
+        Ok(rt) => rt,
+        Err(e) => return Job::ready(Err(e)),
+    };
     let (tx, rx_job) = job_pair();
-    crate::client::runtime().spawn(async move {
+    rt.spawn(async move {
         let (url, max_width) = key.clone();
         let result = slot
             .get_or_init(|| async {
@@ -182,6 +186,9 @@ enum Poster {
     Medium,
 }
 
+/// The widest drawn poster (physical px) that hqdefault's 480 px serves without upscaling.
+const SMALL_POSTER_MAX: u32 = 480;
+
 fn poster_candidates(url: &str, max_width: u32) -> Option<(String, Vec<(Poster, String)>)> {
     let parsed = reqwest::Url::parse(url).ok()?;
     if parsed.host_str()? != "i.ytimg.com" {
@@ -209,10 +216,19 @@ fn poster_candidates(url: &str, max_width: u32) -> Option<(String, Vec<(Poster, 
     }
     let canonical = |name: &str| format!("https://i.ytimg.com/vi/{id}/{name}.jpg");
     let mut candidates = Vec::with_capacity(5);
-    if max_width == 0 || max_width > 320 {
-        if matches!(name, "hq720" | "maxresdefault") && url != canonical("hq720") {
-            candidates.push((Poster::Renderer, url.to_owned()));
-        }
+    let renderer = (matches!(name, "hq720" | "maxresdefault") && url != canonical("hq720"))
+        .then(|| (Poster::Renderer, url.to_owned()));
+    if max_width > 320 && max_width <= SMALL_POSTER_MAX {
+        // A card this size needs no more than hqdefault's 480 px (16:9 inside 480x360): a
+        // fifth of hq720's pixels to decode, and only a slight shrink to the drawn width.
+        candidates.extend([
+            (Poster::Hq, canonical("hqdefault")),
+            (Poster::Sd, canonical("sddefault")),
+        ]);
+        candidates.extend(renderer);
+        candidates.push((Poster::Hd, canonical("hq720")));
+    } else if max_width == 0 || max_width > 320 {
+        candidates.extend(renderer);
         candidates.extend([
             (Poster::Hd, canonical("hq720")),
             (Poster::Sd, canonical("sddefault")),
@@ -291,14 +307,17 @@ async fn decode_worker(
     poster: Option<Poster>,
 ) -> Result<RgbaImage> {
     tokio::task::spawn_blocking(move || {
+        let trace = std::env::var_os("NT_IMAGE_TRACE").is_some();
         let started = Instant::now();
+        let cpu = trace.then(decode_thread_cpu_ms);
         let decoded = decode_image(&bytes, max_width, poster);
-        if std::env::var_os("NT_IMAGE_TRACE").is_some() {
+        if let Some(cpu) = cpu {
             eprintln!(
-                "image decode: {:?} bytes={} width={max_width} ms={:.2}",
+                "image decode: {:?} bytes={} width={max_width} ms={:.2} thread_cpu_ms={:.2}",
                 poster,
                 bytes.len(),
-                started.elapsed().as_secs_f64() * 1000.0
+                started.elapsed().as_secs_f64() * 1000.0,
+                decode_thread_cpu_ms() - cpu
             );
         }
         decoded
@@ -307,13 +326,29 @@ async fn decode_worker(
     .map_err(|_| Error::Cancelled)?
 }
 
+#[cfg(target_os = "linux")]
+fn decode_thread_cpu_ms() -> f64 {
+    let mut time = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: time is writable and the clock belongs to the calling decoder thread.
+    let status = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &raw mut time) };
+    if status == 0 {
+        time.tv_sec as f64 * 1000.0 + time.tv_nsec as f64 / 1e6
+    } else {
+        f64::NAN
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn decode_thread_cpu_ms() -> f64 {
+    f64::NAN
+}
+
 /// Decoded bytes currently held by the cache.
 pub fn cached_bytes() -> usize {
     cache().lock().map(|c| c.bytes).unwrap_or(0)
-}
-
-pub fn decode(bytes: &[u8], max_width: u32) -> Result<RgbaImage> {
-    decode_image(bytes, max_width, None)
 }
 
 fn decode_image(bytes: &[u8], max_width: u32, poster: Option<Poster>) -> Result<RgbaImage> {

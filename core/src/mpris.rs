@@ -205,7 +205,11 @@ pub(crate) fn start(remote: Remote) {
     if std::env::var_os("NT_NO_MPRIS").is_some() {
         return;
     }
-    crate::client::runtime().spawn(async move {
+    let rt = match crate::client::try_runtime() {
+        Ok(rt) => rt,
+        Err(e) => return eprintln!("nt-core: MPRIS unavailable ({e})"),
+    };
+    rt.spawn(async move {
         if let Err(e) = run(remote).await {
             eprintln!("nt-core: MPRIS unavailable ({e})");
         }

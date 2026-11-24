@@ -17,6 +17,7 @@ METRICS = {
     "open_ms": ("Open to first frame", "ms"),
     "warm_ms": ("Warm switch to first frame", "ms"),
     "idle_pss_mib": ("Idle PSS", "MiB"),
+    "peak_pss_mib": ("Peak PSS", "MiB"),
     "playback_cpu_percent": ("Playback CPU", "% of one core"),
     "window_ms": ("Time to window map", "ms"),
     "stripped_bytes": ("Stripped binary size", "bytes"),
@@ -28,6 +29,21 @@ NOTES = ["docs/blog/coordinator-notes.md", *(f"apps/{app}/NOTES.md" for app in A
 def git(*args):
     return subprocess.run(["git", *args], cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                           text=True).stdout
+
+
+def power_state():
+    """AC/battery and platform profile; timings are only comparable within one state."""
+    def read(pattern):
+        for path in (sorted(Path("/sys").glob(pattern)) if "*" in pattern else [Path("/sys", pattern)]):
+            try:
+                return path.read_text().strip()
+            except OSError:
+                continue
+        return None
+    online = read("class/power_supply/A*/online")
+    return {"ac": None if online is None else online == "1",
+            "profile": read("devices/system/cpu/cpu0/cpufreq/energy_performance_preference"),
+            "loadavg": [float(x) for x in Path("/proc/loadavg").read_text().split()[:3]]}
 
 
 def write_json(path, data):
@@ -49,6 +65,23 @@ def report_metrics(report):
         "warm_ms": latencies[1] if len(latencies) > 1 else None,
         "playback_cpu_percent": cpu.get("cpu_percent") if cpu.get("video_frames_rendered", 0) else None,
     }
+
+
+def derived_open(report, sleep_ms):
+    """Open time for reports without command timestamps (96df4ec, cb25193).
+
+    measure.json sends open_video right after `sleep` following the home_loaded wait, so the
+    command time is home_loaded + sleep. On builds that do log commands this reconstruction
+    agrees with the logged timestamp within 0.2 ms. Warm switches cannot be reconstructed: those
+    builds keep only the first mark of each name.
+    """
+    if "commands" in report:
+        return None
+    marks = report.get("marks_ms", {})
+    home, frame = marks.get("home_loaded"), marks.get("playback_started")
+    if home is None or frame is None or frame < home + sleep_ms:
+        return None
+    return frame - home - sleep_ms
 
 
 def git_history(path):
@@ -105,7 +138,7 @@ def summarize(samples, offline):
     for rev in MILESTONES:
         output[rev] = {}
         for app in APPS:
-            runs = samples.get(rev, {}).get(app, [])
+            runs = [run for run in samples.get(rev, {}).get(app, []) if run is not None]
             build = offline.get(rev, {}).get(app, {})
             values = dict.fromkeys(METRICS)
             counts = dict.fromkeys(METRICS, 0)

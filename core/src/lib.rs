@@ -14,6 +14,7 @@ mod client;
 mod error;
 mod fixtures;
 pub mod format;
+pub mod gpu;
 pub mod images;
 mod innertube;
 mod library;
@@ -29,7 +30,7 @@ mod storyboard;
 mod transcripts;
 
 pub use captions::{CaptionLanguage, CaptionTrack};
-pub use client::{Client, Job, client, runtime};
+pub use client::{Client, Job, client, try_runtime};
 pub use error::{Error, Result};
 pub use library::{LastPlayed, Library, LibraryData, data_dir, library};
 pub use model::*;

@@ -191,7 +191,7 @@ impl<T> Default for Page<T> {
 /// Everything the watch page shows besides the player and the comments.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct WatchInfo {
-    pub id: String,
+    pub(crate) id: String,
     pub title: String,
     /// "1,836,226,895 views".
     pub views: Option<String>,
@@ -288,7 +288,7 @@ pub struct Comment {
     pub id: String,
     /// "@handle".
     pub author: String,
-    pub author_channel_id: Option<String>,
+    pub(crate) author_channel_id: Option<String>,
     pub author_avatar: Option<String>,
     pub text: String,
     /// "7 years ago".

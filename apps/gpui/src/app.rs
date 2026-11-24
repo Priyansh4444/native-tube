@@ -222,6 +222,20 @@ impl NtApp {
         }
         app.spawn_autopilot(window, cx);
         probe::spawn(window, cx);
+        // Shortly after start, while the user looks at Home, set up the player so the first
+        // click doesn't pay for libmpv and the GPU surface. `NT_NO_PREWARM` turns it off (as in
+        // iced and Rune), so the first open creates and attaches them instead.
+        if std::env::var_os("NT_NO_PREWARM").is_none() {
+            cx.spawn_in(window, async move |this, cx| {
+                cx.background_executor()
+                    .timer(Duration::from_millis(600))
+                    .await;
+                let _ = this.update_in(cx, |app, window, cx| {
+                    app.player.update(cx, |p, cx| p.prewarm(window, cx));
+                });
+            })
+            .detach();
+        }
         // Test-only (`NT_TEST_THEATRE=1`): start in theatre mode, for input-free layout checks.
         if std::env::var("NT_TEST_THEATRE").as_deref() == Ok("1") {
             app.theatre = true;
@@ -310,6 +324,16 @@ impl NtApp {
     }
 
     fn mark_if_top(&mut self, id: PageId, mark: &'static str) {
+        // Test-only (`NT_TEST_HOVER=<card index>`): mark that Home card as hovered once the
+        // feed shows, so its hover look can be checked without pointer input.
+        if mark == marks::HOME_LOADED
+            && self.is_top(id)
+            && let Some(index) = std::env::var("NT_TEST_HOVER")
+                .ok()
+                .and_then(|v| v.parse::<usize>().ok())
+        {
+            self.hover_video = Some((id, index));
+        }
         if self.is_top(id) {
             self.pending_marks.push(mark);
         }

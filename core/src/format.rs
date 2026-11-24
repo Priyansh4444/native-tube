@@ -17,7 +17,7 @@ pub fn clock(seconds: f64) -> String {
 
 /// 1_311_805 as "1.3M". A value that would round to 1000 of a unit moves up a unit:
 /// 999_500 is "1M", not "1000K".
-pub fn short_count(n: u64) -> String {
+pub(crate) fn short_count(n: u64) -> String {
     if n < 1_000 {
         return n.to_string();
     }
@@ -44,7 +44,7 @@ pub fn short_count(n: u64) -> String {
 }
 
 /// An age in seconds as "3 days ago".
-pub fn relative_time(age_secs: i64) -> String {
+pub(crate) fn relative_time(age_secs: i64) -> String {
     let age = age_secs.max(0);
     let (n, unit) = match age {
         0..=59 => return "just now".to_string(),
@@ -59,11 +59,11 @@ pub fn relative_time(age_secs: i64) -> String {
 }
 
 /// A publish date as YouTube words it. An ISO 8601 date-time ("2013-11-20T00:00:00Z", offsets
-/// honoured) reads like [`relative_time`]; a date alone ("2013-11-20") reads the same way in
+/// honoured) reads like `relative_time`; a date alone ("2013-11-20") reads the same way in
 /// whole days, with "today" for the current UTC day. Anything else, such as YouTube's own
 /// "3 days ago" or "Streamed 2 years ago", is returned unchanged. A future date reads as
 /// "just now" (or "today").
-pub fn published_label(text: &str, now_unix: i64) -> String {
+pub(crate) fn published_label(text: &str, now_unix: i64) -> String {
     match iso_to_unix(text.trim()) {
         Some((at, true)) => relative_time(now_unix.saturating_sub(at)),
         Some((at, false)) => {

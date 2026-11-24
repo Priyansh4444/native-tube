@@ -870,7 +870,7 @@ impl Widget<crate::app::Message, Theme, Renderer> for FrameHook<'_> {
             for name in p.borrow_mut().drain(..) {
                 nt_core::metrics::mark(name);
                 trace_event(name);
-                if name == nt_core::metrics::marks::FIRST_FRAME {
+                if name == nt_core::metrics::marks::HOME_LOADED {
                     crate::ext::prewarm_player();
                 }
             }

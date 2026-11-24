@@ -127,29 +127,10 @@ impl VideoSurface {
             player: shared,
             control,
         };
+        // The render worker loads EGL and the GL driver (about 80 ms the first time, mostly the
+        // driver's own libraries) while the caller goes on; software frames continue until the
+        // first picture reaches the surface. Failures show up in `error()`.
         surface.player.signal_render();
-        let status = surface
-            .control
-            .status
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let status = surface
-            .control
-            .status_changed
-            .wait_while(status, |s| *s == SurfaceStatus::Starting)
-            .unwrap_or_else(|e| e.into_inner());
-        let ready = match &*status {
-            SurfaceStatus::Ready { .. } => Ok(()),
-            SurfaceStatus::Detached(message) => Err(surface_error(
-                message.as_deref().unwrap_or("player stopped"),
-            )),
-            SurfaceStatus::Starting => Err(surface_error("renderer did not start")),
-        };
-        drop(status);
-        ready?;
-        // Ordinary libmpv calls live outside the render worker. The GL context can provide a
-        // GPU decode device, unlike the software renderer.
-        super::reconfigure_video(&player.mpv, &player.shared, true);
         Ok(surface)
     }
 
@@ -178,6 +159,18 @@ impl VideoSurface {
 
     pub fn set_visible(&self, visible: bool) {
         self.update_view(|v| v.visible = visible);
+    }
+
+    /// Whether the worker has initialized the GPU renderer.
+    pub fn is_ready(&self) -> bool {
+        matches!(
+            *self
+                .control
+                .status
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()),
+            SurfaceStatus::Ready { .. }
+        )
     }
 
     /// True once a video frame has reached the child. Paint a transparent hole only then.
@@ -251,15 +244,15 @@ impl Drop for VideoSurface {
 }
 
 impl Control {
-    pub(super) fn detaching(&self) -> bool {
+    fn detaching(&self) -> bool {
         self.view.lock().unwrap_or_else(|e| e.into_inner()).detach
     }
 
-    pub(super) fn started(&self) {
+    fn started(&self) {
         self.set_status(SurfaceStatus::Ready { presenting: false });
     }
 
-    pub(super) fn finished(&self, error: Option<String>) {
+    fn finished(&self, error: Option<String>) {
         self.set_status(SurfaceStatus::Detached(error));
     }
 
@@ -372,7 +365,7 @@ pub(super) struct EglWindow {
 }
 
 impl EglWindow {
-    pub(super) fn create(target: &Target) -> Result<Self> {
+    fn create(target: &Target) -> Result<Self> {
         let window = WlEglSurface::new(target.surface.id(), 1, 1).map_err(surface_error)?;
         // SAFETY: EGL's dynamic loader validates the driver symbols for this interface.
         let api = Box::new(unsafe { Egl::load_required() }.map_err(surface_error)?);
@@ -439,7 +432,7 @@ impl EglWindow {
         Ok(egl_window)
     }
 
-    pub(super) fn create_renderer(
+    fn create_renderer(
         self,
         mpv: &Handle,
         target: Target,
@@ -466,23 +459,23 @@ impl EglWindow {
         };
         let mut advanced = 1 as c_int;
         let mut params = [
-            ffi::mpv_render_param {
+            ffi::MpvRenderParam {
                 kind: ffi::RENDER_PARAM_API_TYPE,
                 data: api_name.as_ptr().cast_mut().cast(),
             },
-            ffi::mpv_render_param {
+            ffi::MpvRenderParam {
                 kind: 2,
                 data: (&raw mut gl).cast(),
             }, // OPENGL_INIT_PARAMS
-            ffi::mpv_render_param {
+            ffi::MpvRenderParam {
                 kind: 9,
                 data: target.connection.backend().display_ptr().cast(),
             }, // WL_DISPLAY
-            ffi::mpv_render_param {
+            ffi::MpvRenderParam {
                 kind: 10,
                 data: (&raw mut advanced).cast(),
             }, // ADVANCED_CONTROL
-            ffi::mpv_render_param {
+            ffi::MpvRenderParam {
                 kind: ffi::RENDER_PARAM_INVALID,
                 data: std::ptr::null_mut(),
             },
@@ -529,7 +522,31 @@ pub(super) struct GpuRenderer {
 }
 
 impl GpuRenderer {
+    /// Whether the frame mpv will render next is a newly decoded picture, rather than a redraw
+    /// of the last one or the black fill shown while no picture exists yet.
+    fn next_is_new_picture(&self) -> bool {
+        #[repr(C)]
+        struct FrameInfo {
+            flags: u64,
+            target_time: i64,
+        }
+        const PRESENT: u64 = 1;
+        const REDRAW: u64 = 1 << 1;
+        let mut info = FrameInfo {
+            flags: 0,
+            target_time: 0,
+        };
+        let param = ffi::MpvRenderParam {
+            kind: 11, // NEXT_FRAME_INFO
+            data: (&raw mut info).cast(),
+        };
+        // SAFETY: this worker owns the context; mpv fills the struct NEXT_FRAME_INFO names.
+        let rc = unsafe { ffi::mpv_render_context_get_info(self.ctx.0, param) };
+        rc >= 0 && info.flags & PRESENT != 0 && info.flags & REDRAW == 0
+    }
+
     pub(super) fn render(&mut self, shared: &Shared) -> Result<()> {
+        let epoch = shared.file_epoch.load(std::sync::atomic::Ordering::Acquire);
         // SAFETY: EGL is current and this worker owns the render context.
         let flags = unsafe { ffi::mpv_render_context_update(self.ctx.0) };
         let view = *self.control.view.lock().unwrap_or_else(|e| e.into_inner());
@@ -558,11 +575,11 @@ impl GpuRenderer {
             if flags & ffi::RENDER_UPDATE_FRAME != 0 {
                 let mut skip = 1 as c_int;
                 let mut params = [
-                    ffi::mpv_render_param {
+                    ffi::MpvRenderParam {
                         kind: 13,
                         data: (&raw mut skip).cast(),
                     }, // SKIP_RENDERING
-                    ffi::mpv_render_param {
+                    ffi::MpvRenderParam {
                         kind: ffi::RENDER_PARAM_INVALID,
                         data: std::ptr::null_mut(),
                     },
@@ -620,19 +637,20 @@ impl GpuRenderer {
         };
         let mut flip = 1 as c_int;
         let mut params = [
-            ffi::mpv_render_param {
+            ffi::MpvRenderParam {
                 kind: 3,
                 data: (&raw mut fbo).cast(),
             }, // OPENGL_FBO
-            ffi::mpv_render_param {
+            ffi::MpvRenderParam {
                 kind: 4,
                 data: (&raw mut flip).cast(),
             }, // FLIP_Y
-            ffi::mpv_render_param {
+            ffi::MpvRenderParam {
                 kind: ffi::RENDER_PARAM_INVALID,
                 data: std::ptr::null_mut(),
             },
         ];
+        let new_picture = flags & ffi::RENDER_UPDATE_FRAME != 0 && self.next_is_new_picture();
         // SAFETY: the current default FBO belongs to this EGL window.
         let started = std::time::Instant::now();
         let result = unsafe { ffi::mpv_render_context_render(self.ctx.0, params.as_mut_ptr()) };
@@ -662,16 +680,24 @@ impl GpuRenderer {
             stats.max_render_ms = stats.max_render_ms.max(ms);
         }
         crate::metrics::video_frame();
-        if flags & ffi::RENDER_UPDATE_FRAME != 0
-            && shared.restarted.load(std::sync::atomic::Ordering::Acquire)
-        {
-            let before = shared
-                .presented
-                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-            if before == 0 {
-                // The first real picture of this file: the frontend may now cut its hole.
-                shared.wake();
-            }
+        // A decoded picture of the current file (frames are accepted from its file-loaded on).
+        // mpv shows the first one just before it reports playback-restart, so waiting for that
+        // event here cost a whole frame interval (33 ms at 30 fps) on every switch.
+        let counted = {
+            use std::sync::atomic::Ordering;
+            // Under the frame lock `clear_frame` takes, so a load or stop that happened while
+            // this picture rendered (it belongs to the previous file) is never counted.
+            let _slot = shared.frame.lock().unwrap_or_else(|e| e.into_inner());
+            let current = shared.accept_frames.load(Ordering::Acquire)
+                && shared.file_epoch.load(Ordering::Acquire) == epoch;
+            let real = new_picture
+                || (flags & ffi::RENDER_UPDATE_FRAME != 0
+                    && shared.restarted.load(Ordering::Acquire));
+            (current && real).then(|| shared.presented.fetch_add(1, Ordering::AcqRel))
+        };
+        if counted == Some(0) {
+            // The first real picture of this file: the frontend may now cut its hole.
+            shared.wake();
         }
         self.mapped = true;
         if self
@@ -718,6 +744,15 @@ pub(super) fn update_renderer(
     let Some((target, control)) = pending else {
         return;
     };
+    if control.detaching() {
+        // Detached before the worker got to it.
+        drop(target);
+        finish(shared, None);
+        return;
+    }
+    let trace = std::env::var_os("NT_GPU_TRACE")
+        .is_some()
+        .then(std::time::Instant::now);
     let egl = match EglWindow::create(&target) {
         Ok(egl) => egl,
         Err(e) => {
@@ -729,11 +764,22 @@ pub(super) fn update_renderer(
     if let Some(ctx) = software.take() {
         super::free_context(&ctx);
     }
-    let r = egl.create_renderer(mpv, target, shared, control.clone());
-    match r {
+    match egl.create_renderer(mpv, target, shared, control.clone()) {
         Ok(renderer) => {
             *gpu = Some(renderer);
+            if let Some(start) = trace {
+                eprintln!(
+                    "nt-core: GPU renderer initialized in {:.1} ms",
+                    start.elapsed().as_secs_f64() * 1000.0
+                );
+            }
             control.started();
+            // Ordinary libmpv calls stay off the render worker. The GL context can give the
+            // decoder a GPU device, unlike the software renderer.
+            if let Ok(rt) = crate::try_runtime() {
+                let (mpv, shared) = (mpv.clone(), shared.clone());
+                drop(rt.spawn_blocking(move || super::reconfigure_video(&mpv, &shared, true)));
+            }
         }
         Err(e) => use_software(mpv, shared, software, gpu, Some(e.to_string())),
     }
@@ -752,8 +798,14 @@ pub(super) fn use_software(
         Err(e) => shared.lock_state().status = super::Status::Failed(e.to_string()),
     }
     finish(shared, message);
-    let (mpv, shared) = (mpv.clone(), shared.clone());
-    crate::runtime().spawn_blocking(move || super::reconfigure_video(&mpv, &shared, false));
+    match crate::client::try_runtime() {
+        Ok(rt) => {
+            let (mpv, shared) = (mpv.clone(), shared.clone());
+            rt.spawn_blocking(move || super::reconfigure_video(&mpv, &shared, false));
+        }
+        // No runtime to hand it to: reconfigure here instead (slower, but never lost).
+        Err(_) => super::reconfigure_video(mpv, shared, false),
+    }
 }
 
 pub(super) fn close_renderer(shared: &Shared, gpu: Option<GpuRenderer>) {

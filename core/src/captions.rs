@@ -12,7 +12,7 @@ pub struct CaptionTrack {
 
 impl CaptionTrack {
     /// The signed timed-text URL for this track, in WebVTT format.
-    pub fn timedtext_url(&self, translate_to: Option<&str>) -> Result<String> {
+    pub(crate) fn timedtext_url(&self, translate_to: Option<&str>) -> Result<String> {
         let mut url = reqwest::Url::parse(&self.base_url)
             .map_err(|_| Error::Parse("Invalid timed-text URL".into()))?;
         if url.scheme() != "https"

@@ -8,24 +8,23 @@ use std::time::{Duration, Instant};
 const CHILD: &str = "NT_PROPTEST_LIBRARY";
 const FIXTURE: &str = "library.json";
 
-#[expect(
-    clippy::unwrap_used,
-    reason = "a missing child snapshot is a failure of this test harness"
-)]
-fn child(dir: &Path, mode: &str) -> LibraryData {
-    let result = Command::new(std::env::current_exe().unwrap())
+/// Runs `library_child` in a fresh process and returns the library snapshot it printed.
+fn child(dir: &Path, mode: &str) -> Result<LibraryData, TestCaseError> {
+    let fail = |what: &str, e: &dyn std::fmt::Display| TestCaseError::fail(format!("{what}: {e}"));
+    let exe = std::env::current_exe().map_err(|e| fail("current_exe", &e))?;
+    let result = Command::new(exe)
         .args(["--exact", "library_child", "--nocapture"])
         .env("NT_DATA_DIR", dir)
         .env(CHILD, mode)
         .output()
-        .unwrap();
-    assert!(result.status.success(), "{result:?}");
-    let stdout = String::from_utf8(result.stdout).unwrap();
+        .map_err(|e| fail("spawn child", &e))?;
+    prop_assert!(result.status.success(), "{result:?}");
+    let stdout = String::from_utf8(result.stdout).map_err(|e| fail("child stdout", &e))?;
     let snapshot = stdout
         .lines()
         .find_map(|line| line.strip_prefix("SNAPSHOT "))
-        .unwrap();
-    serde_json::from_str(snapshot).unwrap()
+        .ok_or_else(|| TestCaseError::fail("child printed no SNAPSHOT line"))?;
+    serde_json::from_str(snapshot).map_err(|e| fail("parse snapshot", &e))
 }
 
 #[test]
@@ -99,8 +98,8 @@ proptest! {
         };
         let expected = serde_json::to_value(&data).unwrap();
         fs::write(dir.path().join(FIXTURE), serde_json::to_vec(&data).unwrap()).unwrap();
-        prop_assert_eq!(serde_json::to_value(child(dir.path(), "save")).unwrap(), expected.clone());
-        prop_assert_eq!(serde_json::to_value(child(dir.path(), "load")).unwrap(), expected);
+        prop_assert_eq!(serde_json::to_value(child(dir.path(), "save")?).unwrap(), expected.clone());
+        prop_assert_eq!(serde_json::to_value(child(dir.path(), "load")?).unwrap(), expected);
     }
 
     #[test]
@@ -110,7 +109,7 @@ proptest! {
         corrupt.extend(tail);
         let path = dir.path().join(FIXTURE);
         fs::write(&path, &corrupt).unwrap();
-        let fresh = child(dir.path(), "load");
+        let fresh = child(dir.path(), "load")?;
         prop_assert!(fresh.history.is_empty() && fresh.watch_later.is_empty() && fresh.subscriptions.is_empty());
         prop_assert_eq!(fresh.volume, 80.0);
         prop_assert!(!path.exists());

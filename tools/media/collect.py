@@ -16,11 +16,13 @@ import sys
 import tempfile
 import time
 
-from metrics import APPS, MILESTONES, OUT, ROOT, report_metrics, summarize, write_json
+from metrics import APPS, MILESTONES, OUT, ROOT, derived_open, power_state, report_metrics, summarize, write_json
 from recorder import HEIGHT, WIDTH, grim, record
 
 sys.path.insert(0, str(ROOT / "bench"))
 from shells import hypr_socket, proc_tree, pss_mb
+sys.path.insert(0, str(ROOT / "tools"))
+from performance.procfs import Sampler
 
 TARGET = OUT.parent / "target"
 HEADLESS = ROOT / "tools/headless.sh"
@@ -48,7 +50,7 @@ def alive(pid):
     try:
         stat = Path(f"/proc/{pid}/stat").read_text()
         return stat.rsplit(") ", 1)[1][0] not in "ZX"
-    except FileNotFoundError:
+    except (FileNotFoundError, ProcessLookupError):
         return False
 
 
@@ -62,27 +64,35 @@ def live_pidfiles():
     return False
 
 
+def slice_expired(_signal, _frame):
+    raise TimeoutError("media slice reached its 110-second runtime limit")
+
+
 @contextmanager
 def headless_slot():
     RUNTIME.mkdir(exist_ok=True)
     with (RUNTIME / "bench.explore.lock").open("a") as lock:
-        deadline = time.monotonic() + 90
         announced = False
-        while time.monotonic() < deadline:
+        while True:
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
                 pass
             else:
                 if not live_pidfiles() and not test_windows():
-                    yield
+                    previous = signal.signal(signal.SIGALRM, slice_expired)
+                    signal.setitimer(signal.ITIMER_REAL, 110)
+                    try:
+                        yield
+                    finally:
+                        signal.setitimer(signal.ITIMER_REAL, 0)
+                        signal.signal(signal.SIGALRM, previous)
                     return
                 fcntl.flock(lock, fcntl.LOCK_UN)
             if not announced:
                 print("Waiting for the active headless test to finish.", flush=True)
                 announced = True
             time.sleep(2)
-        raise RuntimeError("headless outputs remained occupied for 90 seconds")
 
 
 def window_geometry(pid, output, full_output):
@@ -110,27 +120,28 @@ def watch_window(events, output):
 
 
 @contextmanager
-def session(binary, output, run, scenario, fixtures, *, full_output=False, fixture_mode="replay"):
+def session(binary, output, run, scenario, fixtures, *, full_output=False, fixture_mode="replay", hooks=None):
     for required in (binary, GUARD, CLIP, fixtures / "index.txt"):
         if not required.is_file():
             raise RuntimeError(f"missing headless input: {required}")
     log = RUNTIME / f"{output}.log"
     pid_file = RUNTIME / f"{output}.pid"
-    profile = run / "profile"
-    profile.mkdir()
-    for app in ("iced", "gpui"):
-        (profile / f"{app}-prefs.json").write_text('{"autoplay":false}')
-    (profile / "rune-prefs.txt").write_text("autoplay=0\ntheatre=0\nguide=0\n")
-    activation = {"XDG_ACTIVATION_TOKEN", "DESKTOP_STARTUP_ID"}
-    env = {key: value for key, value in os.environ.items()
-           if not key.startswith("NT_") and key not in activation}
-    env.update(
-        NT_MUTE="1", NT_NO_MPRIS="1", NT_LIVE="0", NT_TRACE="1",
-        NT_FIXTURE_MODE=fixture_mode, NT_FIXTURES=str(fixtures), NT_DATA_DIR=str(profile),
-        NT_VIDEO_OVERRIDE=str(CLIP), NT_AUTOPILOT=str(scenario), NT_REPORT=str(run / "report.json"),
-    )
     with headless_slot(), tempfile.TemporaryDirectory(prefix="nt-media-") as directory, \
             socket.socket(socket.AF_UNIX) as listener, socket.socket(socket.AF_UNIX) as events:
+        profile = Path(directory) / "profile"
+        profile.mkdir()
+        for app in ("iced", "gpui"):
+            (profile / f"{app}-prefs.json").write_text('{"autoplay":false}')
+        (profile / "rune-prefs.txt").write_text("autoplay=0\ntheatre=0\nguide=0\n")
+        activation = {"XDG_ACTIVATION_TOKEN", "DESKTOP_STARTUP_ID"}
+        env = {key: value for key, value in os.environ.items()
+               if not key.startswith("NT_") and key not in activation}
+        env.update(
+            NT_MUTE="1", NT_NO_MPRIS="1", NT_LIVE="0", NT_TRACE="1",
+            NT_FIXTURE_MODE=fixture_mode, NT_FIXTURES=str(fixtures), NT_DATA_DIR=str(profile),
+            NT_VIDEO_OVERRIDE=str(CLIP), NT_AUTOPILOT=str(scenario), NT_REPORT=str(run / "report.json"),
+        )
+        env.update(hooks or {})
         path = Path(directory) / "lease"
         listener.bind(str(path))
         listener.listen(1)
@@ -141,7 +152,10 @@ def session(binary, output, run, scenario, fixtures, *, full_output=False, fixtu
         window = executor.submit(watch_window, events, output)
         guardian = None
         try:
-            guardian = int(command(HEADLESS, "run", output, GUARD, path, pid_file, binary, env=env))
+            # Same guard mode as tools/check-performance.py: without the flag nt-explore
+            # would treat the lease path as an app and start an exploration session.
+            guardian = int(command(HEADLESS, "run", output, GUARD, "--guarded-app",
+                                   path, pid_file, binary, env=env))
             lease, _ = listener.accept()
             with closing(lease), lease.makefile() as ready:
                 lease.settimeout(4)
@@ -160,11 +174,16 @@ def session(binary, output, run, scenario, fixtures, *, full_output=False, fixtu
             while guardian is not None and alive(guardian) and time.monotonic() < until:
                 time.sleep(0.02)
             if guardian is not None and alive(guardian):
-                os.kill(guardian, signal.SIGKILL)
-                raise RuntimeError("terminated an unresponsive media guardian")
+                raise RuntimeError("media guardian remained alive after its lease closed")
             if guardian is not None:
                 shutil.copyfile(log, run / "app.log")
-            shutil.rmtree(profile)
+
+
+def maps_mpv(pid):
+    try:
+        return "libmpv.so" in Path(f"/proc/{pid}/maps").read_text()
+    except OSError:
+        return None
 
 
 def wait_for(check, timeout):
@@ -179,7 +198,7 @@ def wait_for(check, timeout):
 
 def measure_one(binary, run, fixtures):
     with session(binary, "bench", run, Path(__file__).with_name("measure.json"), fixtures) as (
-            pid, started, mapped_ms, log):
+            pid, started, mapped_ms, log), Sampler(pid, started) as sampler:
         values = {"window_ms": mapped_ms}
 
         def home():
@@ -196,13 +215,30 @@ def measure_one(binary, run, fixtures):
             pss = pss_mb(proc_tree(pid))
             if pss > 0:
                 values["idle_pss_mib"] = pss
+                # Whether the player library was already loaded (prewarm) when idle PSS was taken.
+                values["idle_libmpv_mapped"] = maps_mpv(pid)
         report = wait_for(lambda: read_report(run), 35)
         if report is None:
             values["error"] = "app did not write an autopilot report"
         else:
             values.update(report_metrics(report))
             values["failed_waits"] = report.get("failed_waits", [])
+            add_derived_open(values, report)
+            # Peak over the whole scripted run: Home, six seconds of playback and the warm switch.
+            pss = [sum(proc["pss_mib"] for proc in row["processes"]) for row in sampler.samples
+                   if row["processes"] and all(proc["pss_mib"] is not None for proc in row["processes"])]
+            if pss and not values["failed_waits"]:
+                values["peak_pss_mib"] = max(pss)
+                values["pss_samples"] = len(pss)
         return values
+
+
+def add_derived_open(values, report):
+    sleep_ms = 1000 * json.loads(Path(__file__).with_name("measure.json").read_text())[1]["sleep"]
+    if values.get("open_ms") is None and not values.get("failed_waits"):
+        if (derived := derived_open(report, sleep_ms)) is not None:
+            values["open_ms"] = derived
+            values["open_basis"] = "home_loaded + scenario sleep (no command timestamps)"
 
 
 def read_report(run):
@@ -216,7 +252,10 @@ def record_one(app, binary, run, fixtures):
     destination = run / f"{app}.mp4"
     report_path = run / "report.json"
     with session(binary, app, run, Path(__file__).with_name("tour.json"),
-                 fixtures, full_output=True) as (pid, *_):
+                 fixtures, full_output=True) as (pid, _, _, log):
+        if not wait_for(lambda: True if "NT_MARK home_loaded " in log.read_text(errors="replace") else None, 8):
+            raise RuntimeError(f"{app}: Home did not load before capture")
+        time.sleep(0.2)
         capture = record(destination, lambda: grim(f"NT-{app.upper()}"),
                          lambda: alive(pid) and not report_path.exists())
     report = read_report(run)
@@ -245,7 +284,7 @@ def inspect_binary(binary):
 
 
 def collect(args):
-    samples, offline = {}, {}
+    samples, offline, binaries = {}, {}, {}
     for rev in args.milestones:
         samples[rev], offline[rev] = {}, {}
         for app in args.apps:
@@ -264,17 +303,28 @@ def collect(args):
                 offline[rev][app]["runtime_routing_patch"] = "66f442f (app ID only)"
                 with binary.open("rb") as stream:
                     offline[rev][app]["runtime_sha256"] = hashlib.file_digest(stream, "sha256").hexdigest()
-            runs = samples[rev][app] = []
-            for i in range(1, 4):
-                run = args.out / rev / app / f"run-{i}"
-                run.mkdir(mode=0o700, parents=True)
+            binaries[rev, app] = binary
+            samples[rev][app] = [None, None, None]
+    # Round-robin: run 1 of every build, then run 2, then run 3, so a change in background
+    # load during the pass spreads over all builds instead of biasing one milestone.
+    for i in range(1, args.runs + 1):
+        for (rev, app), binary in binaries.items():
+            run = args.out / rev / app / f"run-{i}"
+            receipt = run / "sample.json"
+            if receipt.is_file():
+                values = json.loads(receipt.read_text())
+            else:
+                run.mkdir(mode=0o700, parents=True, exist_ok=True)
+                power = power_state()
                 try:
                     values = measure_one(binary, run, args.fixtures)
                 except (RuntimeError, OSError, ValueError, StopIteration, subprocess.SubprocessError) as e:
                     values = {"error": str(e)}
-                write_json(run / "sample.json", values)
-                runs.append(values)
-                print(rev, app, i, values, flush=True)
+                values["power"] = power
+                write_json(receipt, values)
+            samples[rev][app][i - 1] = values
+            print(rev, app, i, values, flush=True)
+            write_json(args.out / "metrics.json", summarize(samples, offline))
     write_json(args.out / "metrics.json", summarize(samples, offline))
 
 
@@ -287,6 +337,8 @@ def main():
     measure.add_argument("--apps", nargs="+", choices=APPS, default=APPS)
     measure.add_argument("--out", type=Path, default=OUT / "measurements")
     measure.add_argument("--offline", action="store_true", help="measure release sizes only")
+    measure.add_argument("--runs", type=int, default=3, choices=(1, 2, 3),
+                         help="fewer than three only for probes; medians need three")
     capture = modes.add_parser("record")
     capture.add_argument("app", choices=APPS)
     capture.add_argument("--out", type=Path, default=OUT / "tours")
@@ -304,12 +356,12 @@ def main():
     run = args.out / args.app
     binary = TARGET / "NOW" / args.app / "release" / f"nt-{args.app}"
     if args.mode == "prime":
-        if args.fixtures != MEDIA_FIXTURES:
-            parser.error(f"prime requires --fixtures {MEDIA_FIXTURES}")
+        if args.fixtures.parent != MEDIA_FIXTURES.parent or args.fixtures == OUT:
+            parser.error(f"prime requires a private fixture directory under {MEDIA_FIXTURES.parent}")
         if not binary.is_file():
             parser.error(f"missing build: {binary}")
-        if not MEDIA_FIXTURES.exists():
-            shutil.copytree(FIXTURES, MEDIA_FIXTURES)
+        if not args.fixtures.exists():
+            shutil.copytree(FIXTURES, args.fixtures)
         run.mkdir(mode=0o700, parents=True)
         prime(args.app, binary, run, args.fixtures)
         return

@@ -5,7 +5,8 @@
 //! `images::image` must pick the first usable variant in the documented order:
 //!
 //! - at 320 px and below (and not 0), `mqdefault` only;
-//! - wider: the renderer's own signed HD URL (when it is not the canonical `hq720`), then the
+//! - 321–480 px: `hqdefault`, `sddefault`, signed and canonical HD, then `mqdefault`;
+//! - wider or original size: the renderer's own signed HD URL (when it is not the canonical `hq720`), then the
 //!   canonical `hq720`, `sddefault` and `hqdefault`, then `mqdefault`;
 //! - a variant narrower than 320 px is YouTube's "no such poster" placeholder and is skipped,
 //!   except `mqdefault`, the last resort;
@@ -131,6 +132,14 @@ fn expected(
     let order: &[Source] = match request {
         Request::Animated | Request::Avatar => &[Source::Direct],
         _ if width != 0 && width <= 320 => &[Source::Medium],
+        Request::SignedHq720 | Request::Maxres if (321..=480).contains(&width) => &[
+            Source::Hq,
+            Source::Sd,
+            Source::Renderer,
+            Source::Hd,
+            Source::Medium,
+        ],
+        _ if (321..=480).contains(&width) => &[Source::Hq, Source::Sd, Source::Hd, Source::Medium],
         Request::SignedHq720 | Request::Maxres => &SOURCES[..5],
         _ => &SOURCES[1..5],
     };
@@ -150,11 +159,7 @@ fn expected(
     Some((source, w, h))
 }
 
-#[expect(
-    clippy::unwrap_used,
-    reason = "encoding known RGBA test pixels into memory must succeed"
-)]
-fn png(width: u32, height: u32, colour: [u8; 4]) -> Vec<u8> {
+fn png(width: u32, height: u32, colour: [u8; 4]) -> Result<Vec<u8>, TestCaseError> {
     let pixels: Vec<u8> = colour
         .iter()
         .copied()
@@ -164,8 +169,8 @@ fn png(width: u32, height: u32, colour: [u8; 4]) -> Vec<u8> {
     let mut out = Vec::new();
     PngEncoder::new(&mut out)
         .write_image(&pixels, width, height, image::ExtendedColorType::Rgba8)
-        .unwrap();
-    out
+        .map_err(|e| TestCaseError::fail(format!("encode {width}x{height} PNG: {e}")))?;
+    Ok(out)
 }
 
 fn sizes() -> impl Strategy<Value = Option<(u32, u32)>> {
@@ -202,7 +207,7 @@ fn widths() -> impl Strategy<Value = u32> {
         Just(0u32),
         1u32..=320,
         321u32..2000,
-        prop::sample::select(vec![320u32, 321, 640, 1280])
+        prop::sample::select(vec![320u32, 321, 480, 481, 640, 1280])
     ]
 }
 
@@ -256,7 +261,7 @@ fn posters_come_from_the_first_usable_variant() {
             .collect();
         for &(source, size) in &files {
             if let (Some(url), Some((w, h))) = (source_url(source, request, &id), size) {
-                fs::write(fixture_path(&dir, &url), png(w, h, source.colour())).unwrap();
+                fs::write(fixture_path(&dir, &url), png(w, h, source.colour())?).unwrap();
             }
         }
         let url = request_url(request, &id);

@@ -62,7 +62,7 @@ def alive(pid):
     try:
         kind = Path(f"/proc/{pid}/stat").read_text().rsplit(") ", 1)[1][0]
         return kind not in ("Z", "X")
-    except FileNotFoundError:
+    except (FileNotFoundError, ProcessLookupError):
         return False
 
 

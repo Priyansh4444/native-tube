@@ -36,18 +36,17 @@ fn fixture_path(dir: &Path, key: u8) -> PathBuf {
 }
 
 /// Makes `key` recorded or not by moving its file in and out of place.
-#[expect(
-    clippy::unwrap_used,
-    reason = "test data lives in an exclusively owned fixture directory"
-)]
-fn set_available(dir: &Path, key: u8, available: bool) {
+fn set_available(dir: &Path, key: u8, available: bool) -> Result<(), TestCaseError> {
     let on = fixture_path(dir, key);
     let off = on.with_extension("off");
-    if available && off.exists() {
-        fs::rename(off, on).unwrap();
+    let moved = if available && off.exists() {
+        fs::rename(&off, &on)
     } else if !available && on.exists() {
-        fs::rename(on, off).unwrap();
-    }
+        fs::rename(&on, &off)
+    } else {
+        Ok(())
+    };
+    moved.map_err(|e| TestCaseError::fail(format!("toggle fixture {key}: {e}")))
 }
 
 #[derive(Clone, Debug)]
@@ -118,7 +117,7 @@ fn fixture_cache_matches_reference_lru() {
         // cache holding exactly 0, 1, 2 (three fresh loads push anything else out).
         let mut available = [true, true, true, true, true, false, false];
         for key in 3..KEYS {
-            set_available(&dir, key, available[usize::from(key)]);
+            set_available(&dir, key, available[usize::from(key)])?;
         }
         for key in 0..3 {
             image(&url(key), 0).wait().unwrap();
@@ -130,7 +129,7 @@ fn fixture_cache_matches_reference_lru() {
                 Op::Publish(key) | Op::Withdraw(key) => {
                     let on = matches!(op, Op::Publish(_));
                     available[usize::from(key)] = on;
-                    set_available(&dir, key, on);
+                    set_available(&dir, key, on)?;
                 }
                 Op::Overlap(first, second) => {
                     if !model.contains(&first) && !model.contains(&second) {

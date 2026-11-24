@@ -16,9 +16,6 @@ pub struct CaptionTrack {
     // Private signed URL.
 }
 pub struct CaptionLanguage { pub code: String, pub label: String }
-impl CaptionTrack {
-    pub fn timedtext_url(&self, translate_to: Option<&str>) -> Result<String>;
-}
 impl Player {
     pub fn set_captions(&self, selection: Option<(usize, Option<String>)>) -> Job<()>;
 }
@@ -32,8 +29,7 @@ pub selected_captions: Option<(usize, Option<String>)>,
 When playback is ready, show a CC button if tracks are available. Use the zero-based track
 index from the current state. Offer translation languages only for a translatable track.
 The next video starts with captions off. Draw the regular video frame and report errors
-from the job. The rendered frame already includes the subtitle overlay. `timedtext_url`
-does no I/O and is for diagnostics. Its signature expires along with the player response.
+from the job. The rendered frame already includes the subtitle overlay.
 
 ```rust
 let state = player.state();
@@ -75,10 +71,13 @@ let samples = &watch.heatmap;
 
 The existing `images::image(url: &str, max_width: u32) -> Job<Arc<RgbaImage>>`
 takes the drawn width in physical pixels. At 320 px and below, video posters use
-`mqdefault`. Larger sizes try the renderer's signed HD variant and the canonical
-HD poster, then try the SD and HQ posters with a 16:9 center crop. The result can be smaller
+`mqdefault`. From 321 through 480 px, try the 480 px HQ poster and then the 640 px SD
+poster before HD. Crop the 4:3 sources to 16:9 and use Triangle for the small resize.
+Wider requests try the renderer’s signed HD variant and the canonical HD poster first. The result can be smaller
 than the request when YouTube only offers a smaller poster. Existing image decoding and caching
-run on core workers.
+run on core workers. On the 125-poster, 384 px fixture replay, mean decode and resize fell
+from 20.48 ms to 5.32 ms and the decoder threads used 0.66 CPU seconds, down from 2.32.
+`NT_IMAGE_TRACE=1` reports per-image wall time and, on Linux, decoder-thread CPU time.
 Image CDN requests keep their own concurrency but obey the shared cooldown: during one they
 fail at once without a request, a CDN 429 or 403 starts it like any YouTube answer, and any
 error other than a missing variant (404) ends the poster chain. Show the placeholder.
@@ -134,15 +133,11 @@ Opening a moment uses `load_at` from the event handler. A normal row has no mome
 
 Transcript rows arrive like YouTube rows: `Video::published` is already relative ("13 years
 ago", "3 days ago", "today") and `Video::views` is short ("139K views"), so draw
-`meta_line()` as for any card and drop any local ISO-date parsing. The rule is public as
-
-```rust
-pub fn nt_core::format::published_label(text: &str, now_unix: i64) -> String;
-```
-
-An ISO date-time reads like `format::relative_time`; a date alone reads the same way in
-whole days, with "today" for the current UTC day; any other text, such as YouTube's own
-"3 days ago" or "Streamed 2 years ago", is returned unchanged. Pure, any thread.
+`meta_line()` as for any card and drop any local ISO-date parsing. Core applies the rule
+when parsing (no app called it directly, so it is not public): an ISO date-time reads like
+`format::relative_time`; a date alone reads the same way in whole days, with "today" for
+the current UTC day; any other text, such as YouTube's own "3 days ago" or "Streamed 2 years
+ago", is kept unchanged.
 
 ```rust
 let search = client().search_page(query).await?;
@@ -157,10 +152,8 @@ if let Some(video) = search.transcripts.items.first() {
 ```rust
 pub struct Storyboard { /* private */ }
 pub struct StoryboardLevel { /* private */ }
-pub const storyboard::MAX_SHEET_PX: u32 = 16_384;
 impl Storyboard {
     pub fn levels(&self) -> &[StoryboardLevel];   // smallest first, never empty
-    pub fn duration(&self) -> f64;
 }
 impl StoryboardLevel {
     pub fn width(&self) -> u32; pub fn height(&self) -> u32;   // one frame, px
@@ -179,7 +172,7 @@ PlaybackState::storyboard: Option<Storyboard>,
 ```
 
 The fields became private getters (no app read them): the parser rejects any level with a zero
-size, a grid whose products overflow, or a sheet wider or taller than `MAX_SHEET_PX`, so
+size, a grid whose products overflow, or a sheet wider or taller than 16 384 px, so
 `frame_at`, `level_for_width` and `preview` never panic, for any `seconds` (NaN and negative
 read as 0).
 
@@ -287,16 +280,12 @@ if let Some(upcoming) = &video.upcoming { draw_schedule(upcoming); }
 
 ```rust
 pub struct AudioTrack { pub id: String, pub label: String, pub original: bool, pub auto_dubbed: bool }
-// New fields on resolve::Streams and PlaybackState
+// New fields on PlaybackState
 pub audio_tracks: Vec<AudioTrack>,  // original first; empty for a single language
 pub audio_track: Option<String>,    // the id playing
 impl Player {
     pub fn set_audio_track(&self, id: &str) -> Job<()>;
 }
-// In nt_core::resolve
-pub async fn resolve_with_audio(
-    video_id: &str, max_height: u32, audio_track: Option<&str>,
-) -> Result<resolve::Streams>;
 ```
 
 When `audio_tracks` is not empty, add "Audio track" to the settings menu with each `label`
@@ -409,7 +398,7 @@ if let Some(next) = &page.results.next {
 ## C1. YouTube loudness gain
 
 ```rust
-// New field on resolve::Streams and PlaybackState
+// New field on PlaybackState
 pub normalization_gain_db: f64,
 // PlaybackState only
 pub normalization_supported: bool,
@@ -513,6 +502,7 @@ impl VideoSurface {
     pub fn set_clip(&self, clip: Option<(u32, u32, u32, u32)>);
     pub fn set_scale(&self, scale: f64);
     pub fn set_visible(&self, visible: bool);
+    pub fn is_ready(&self) -> bool;
     pub fn is_presenting(&self) -> bool;
     pub fn error(&self) -> Option<String>;
     pub fn detach(self);
@@ -524,8 +514,25 @@ impl Player {
 
 On the window-owning thread, request a transparent Wayland window with an alpha-capable swap
 chain. Obtain the toolkit’s live Wayland display and window handles for that same window.
-Use `attach` once the window exists, preferably before loading playback. Registry and EGL
-initialization complete before it returns. Retain the resulting lease and detach it before
+Use `attach` once the window exists, preferably before loading playback. It returns after
+Wayland setup. The render worker initializes EGL and libmpv OpenGL. `is_ready()` reports
+successful initialization independently of the first presentation. An EGL or GL failure
+appears later in `error()` and falls back to software.
+
+On Linux, each app calls `nt_core::gpu::select_egl_vendor()` before starting its runtime
+or window toolkit. The startup function reads the Wayland compositor’s main DRM device
+from linux-dmabuf feedback and selects the matching Mesa or NVIDIA GLVND manifest.
+Explicit EGL or GLX vendor settings take precedence. Missing feedback, an unknown device,
+an inherited Wayland socket, a process with multiple threads, or previously loaded EGL
+leaves the loader configuration alone. No vendor selection is performed on other platforms.
+
+```rust
+// Call first in main, before starting any threads or initializing the window toolkit.
+// SAFETY: no concurrent environment access is possible yet.
+unsafe { nt_core::gpu::select_egl_vendor() };
+```
+
+Retain the resulting lease and detach it before
 destroying the native window or display. X11 handles return an error. On macOS, continue
 using the software player.
 
@@ -539,8 +546,16 @@ surface is hidden, call `set_visible(false)` and stop cutting the hole.
 
 Paint opaque UI around the visible rectangle. Cut the hole when the lease is presenting
 and the current load has `player.presented_frames() > 0`. The GPU count resets on load
-and stop and starts counting after mpv's playback restart, so the initial black render
-used to map the child doesn't open the hole. Leave the hole transparent through compositing
+and stop and counts only swaps that carry a newly decoded picture of the current file (mpv's
+next-frame info: present and not a redraw), so the initial black render used to map the
+child never opens the hole, and a picture of the previous file that was mid-render during
+a load is never counted. The first picture counts as soon as it is swapped, without waiting
+for mpv's playback-restart event (that wait cost one frame interval, 33 ms at 30 fps), and the 0 → 1 step wakes the app through the player's
+waker, so a frontend that cuts the hole from its wake handler needs no polling. Keeping the
+child visible (`set_visible(true)`) while the next video loads lets the worker present the
+first decoded frame without waiting for the UI to see `Ready`; the parent's poster still
+covers it until the count rises. A clip with no area unmaps the child (same as hidden) and a
+later non-empty clip maps it again. Leave the hole transparent through compositing
 and omit it from any parent opaque region. Draw controls over it. The child has an empty
 input region.
 
@@ -562,11 +577,21 @@ if let Some(surface) = hardware.as_ref() {
 }
 ```
 
-The `wayland_video` example ran the same muted 720p clip in a 720×900 destination on
-`NT-BENCH`. GPU attached in 60.3 ms and used 0.85 CPU seconds over 10.08 s with 292 frames.
-Software used 2.63 CPU seconds over 10.09 s with 300 frames. End-of-run RSS was 191 MiB GPU
-and 127 MiB software. Detaching near 5 s yielded software frames and reached 9.87 s after
-10.11 s of elapsed time.
+With `NT_GPU_TRACE=1`, core logs the elapsed worker initialization time. A paired
+release-app run on Intel Arrow Lake used the same local clip and replayed feed, then paused
+with the surface attached. Default GLVND discovery and normal startup respectively took
+171.2 and 105.8 ms for iced, 27.1 and 25.4 ms for GPUI, and 505.3 and 99.0 ms for Rune.
+The normal startup processes all mapped Mesa EGL and omitted NVIDIA EGL. These are
+single-run samples and include any driver work still outstanding when the worker starts.
+
+The `wayland_video` example measured renderer initialization independently of the
+attach call and the first playback frame on Intel Arrow Lake with a second NVIDIA GPU.
+Standard GLVND discovery took 153.3 ms and added 39.3 MiB PSS at renderer initialization.
+Selecting Mesa reduced this to 63.9 ms and 20.1 MiB. The lease returned in under 1 ms
+in both cases. Six local warm switches reached Ready in 8.7–11.6 ms and first presentation
+in 26.8–34.8 ms with Mesa selected. The render context is reused across loads. Network
+loads consume the same matching `prepare_next` result in either render mode. The local
+switch fixture measures decode and presentation, with no network or prefetch involved.
 
 ## B11. Channel tabs and About
 

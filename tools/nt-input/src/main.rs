@@ -330,11 +330,16 @@ fn main() {
     }
     // The owner's pause switch: while this file exists, nobody's test drives the real cursor.
     // `touch $XDG_RUNTIME_DIR/nt-input.paused` pauses; removing it resumes.
-    let paused = std::env::var_os("XDG_RUNTIME_DIR")
+    // Checked in two places: the runtime dir (fast to toggle) and ~/.local/state, which survives
+    // reboots. A reboot once wiped the runtime-dir file while the owner still wanted input paused.
+    let runtime = std::env::var_os("XDG_RUNTIME_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(std::env::temp_dir)
         .join("nt-input.paused");
-    if paused.exists() {
+    let state = std::env::var_os("HOME")
+        .map(|h| std::path::PathBuf::from(h).join(".local/state/nt-input.paused"));
+    let paused = std::iter::once(runtime).chain(state).find(|p| p.exists());
+    if let Some(paused) = paused {
         eprintln!(
             "nt-input: PAUSED by the owner ({}): they are using the machine. Don't drive the GUI \
              any other way either; report the step as needing input verification.",

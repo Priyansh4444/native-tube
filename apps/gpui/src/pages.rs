@@ -633,20 +633,23 @@ fn title_lines(page: &mut Page, text_w: f32, m: &mut dyn Measure) {
     }
 }
 
-#[allow(clippy::too_many_arguments)] // a private layout helper; the arguments are the section's geometry
+struct GridGeometry {
+    x: f32,
+    w: f32,
+    y: f32,
+}
+
 fn grid_section(
     page: &mut Page,
     geo: &Geo,
-    x: f32,
-    inner: f32,
-    mut y: f32,
+    geometry: GridGeometry,
     avatar: bool,
-    empty: Empty,
     col: &mut Vec<Block>,
     m: &mut dyn Measure,
 ) -> f32 {
+    let GridGeometry { x, w, mut y } = geometry;
     let cols = grid_cols(geo.win_w);
-    let cw = card_w(inner, cols);
+    let cw = card_w(w, cols);
     let thumb_h = cw * 9.0 / 16.0;
     match &page.status {
         Load::Loading => {
@@ -655,7 +658,7 @@ fn grid_section(
                 col.push(Block {
                     x,
                     y,
-                    w: inner,
+                    w,
                     h,
                     kind: BlockKind::SkeletonRow { cols, card_w: cw },
                 });
@@ -666,7 +669,7 @@ fn grid_section(
             col.push(Block {
                 x,
                 y,
-                w: inner,
+                w,
                 h: ERROR_H,
                 kind: BlockKind::LoadError,
             });
@@ -676,9 +679,9 @@ fn grid_section(
             col.push(Block {
                 x,
                 y,
-                w: inner,
+                w,
                 h: EMPTY_H,
-                kind: BlockKind::Empty(empty),
+                kind: BlockKind::Empty(Empty::NoVideos),
             });
             y += EMPTY_H;
         }
@@ -700,7 +703,7 @@ fn grid_section(
                 col.push(Block {
                     x,
                     y,
-                    w: inner,
+                    w,
                     h,
                     kind: BlockKind::GridRow {
                         first,
@@ -714,7 +717,7 @@ fn grid_section(
             }
         }
     }
-    feed_tail(&page.feed, x, inner, y, col)
+    feed_tail(&page.feed, x, w, y, col)
 }
 
 fn feed_tail(feed: &Feed, x: f32, w: f32, mut y: f32, col: &mut Vec<Block>) -> f32 {
@@ -767,11 +770,12 @@ pub fn build_layout(page: &mut Page, geo: &Geo, theatre: bool, m: &mut dyn Measu
             y = grid_section(
                 page,
                 geo,
-                pad,
-                inner,
-                y + 8.0,
+                GridGeometry {
+                    x: pad,
+                    w: inner,
+                    y: y + 8.0,
+                },
                 true,
-                Empty::NoVideos,
                 &mut col,
                 m,
             );
@@ -840,7 +844,7 @@ pub fn build_layout(page: &mut Page, geo: &Geo, theatre: bool, m: &mut dyn Measu
                     return lay;
                 }
             }
-            y = grid_section(page, geo, x, w, y, false, Empty::NoVideos, &mut col, m);
+            y = grid_section(page, geo, GridGeometry { x, w, y }, false, &mut col, m);
         }
         Kind::Subscriptions { channels } => {
             let inner = content_w - 2.0 * pad;
@@ -864,7 +868,18 @@ pub fn build_layout(page: &mut Page, geo: &Geo, theatre: bool, m: &mut dyn Measu
                     });
                     y += 120.0 + 16.0;
                 }
-                y = grid_section(page, geo, pad, inner, y, true, Empty::NoVideos, &mut col, m);
+                y = grid_section(
+                    page,
+                    geo,
+                    GridGeometry {
+                        x: pad,
+                        w: inner,
+                        y,
+                    },
+                    true,
+                    &mut col,
+                    m,
+                );
             }
         }
         Kind::Search { .. } | Kind::History | Kind::WatchLater => {

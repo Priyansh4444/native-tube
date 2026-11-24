@@ -43,7 +43,6 @@ enum ScrollOp {
     Tick,
     SetMaxOffset(f64),
     SetViewport(f64),
-    SetSmooth(bool),
 }
 
 /// Any finite f64, biased toward ordinary pixel values but reaching the extremes.
@@ -74,7 +73,6 @@ fn scroll_ops(value: BoxedStrategy<f64>) -> impl Strategy<Value = Vec<(ScrollOp,
         Just(ScrollOp::Tick),
         value.clone().prop_map(ScrollOp::SetMaxOffset),
         value.prop_map(ScrollOp::SetViewport),
-        any::<bool>().prop_map(ScrollOp::SetSmooth),
     ];
     // Each op happens 0-99 ms after the previous one.
     prop::collection::vec((op, 0u32..100), 1..50)
@@ -95,7 +93,6 @@ fn apply(scroll: &mut ScrollAnimator, op: &ScrollOp, now: f64) {
         }
         ScrollOp::SetMaxOffset(v) => scroll.set_max_offset(v),
         ScrollOp::SetViewport(v) => scroll.set_viewport(v),
-        ScrollOp::SetSmooth(v) => scroll.set_smooth_scroll(v),
     }
 }
 
@@ -184,14 +181,12 @@ proptest! {
         kind in 0u8..4,
         magnitude in 100.0..5_000.0,
         positive in any::<bool>(),
-        smooth in any::<bool>(),
     ) {
         let sign = if positive { 1.0 } else { -1.0 };
         let delta = sign * magnitude;
         let mut scroll = ScrollAnimator::new();
         scroll.set_max_offset(20_000.0);
         scroll.set_viewport(800.0);
-        scroll.set_smooth_scroll(smooth);
         let initial = 10_000.0;
         scroll.jump_to(initial);
         match kind {

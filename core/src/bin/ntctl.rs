@@ -3,6 +3,7 @@
 //! ntctl home [topic] | search <query> | more <search query> | watch <id> | comments <id>
 //!      | channel <id> | suggest <prefix> | subs | image <url> <out.png> [width]
 //!      | resolve <id> | play <id> <out.png> [seconds] [seek-to-seconds]
+//!      | thumbs <topic> <physical-width> [output-dir]
 
 use nt_core::*;
 use std::time::{Duration, Instant};
@@ -485,7 +486,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             });
         }
         "captions" => {
-            let s = runtime().block_on(resolve::resolve(&arg(1), 360))?;
+            let s = try_runtime()?.block_on(resolve::resolve(&arg(1), 360))?;
             for (i, track) in s.captions.iter().enumerate() {
                 println!(
                     "{i}: {} [{}], ASR={}, translatable={}",
@@ -499,7 +500,8 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             );
         }
         "resolve" => {
-            let s = runtime().block_on(resolve::resolve(&arg(1), resolve::default_max_height()))?;
+            let s = try_runtime()?
+                .block_on(resolve::resolve(&arg(1), resolve::default_max_height()))?;
             println!(
                 "video: {}  audio: {}  live: {}",
                 s.video_desc, s.audio_desc, s.is_live
@@ -585,7 +587,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         }
         "storyboard" => {
             // ntctl storyboard <id> <seconds> <out.png> [drawn width px]
-            let s = runtime().block_on(resolve::resolve(&arg(1), 360))?;
+            let s = try_runtime()?.block_on(resolve::resolve(&arg(1), 360))?;
             let sb = s.storyboard.ok_or("this video has no storyboard")?;
             for l in sb.levels() {
                 println!(
@@ -739,6 +741,47 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                     v.meta_line()
                 );
             }
+        }
+        "thumbs" => {
+            // ntctl thumbs <topic> <drawn width px> [out dir]: every poster of a home feed at
+            // one card width, all requested at once as a fast scroll does, with the CPU used.
+            let page = c.home(&arg(1)).wait()?;
+            let width: u32 = arg(2).parse().unwrap_or(384);
+            let cpu = metrics::cpu_seconds();
+            let at = Instant::now();
+            let jobs: Vec<_> = page
+                .items
+                .iter()
+                .map(|v| (v.id.clone(), images::image(&v.thumbnail, width)))
+                .collect();
+            let (mut ok, mut failed) = (0, 0);
+            let mut sizes = std::collections::BTreeMap::new();
+            for (id, job) in jobs {
+                match job.wait() {
+                    Ok(img) => {
+                        ok += 1;
+                        *sizes.entry((img.width, img.height)).or_insert(0) += 1;
+                        if !arg(3).is_empty() {
+                            image::save_buffer(
+                                format!("{}/{id}.png", arg(3)),
+                                &img.pixels,
+                                img.width,
+                                img.height,
+                                image::ColorType::Rgba8,
+                            )?;
+                        }
+                    }
+                    Err(e) => {
+                        failed += 1;
+                        eprintln!("{id}: {e}");
+                    }
+                }
+            }
+            println!(
+                "{ok} posters ({failed} failed) at {width} px in {:.0} ms wall, {:.2} s CPU; sizes {sizes:?}",
+                at.elapsed().as_secs_f64() * 1000.0,
+                metrics::cpu_seconds() - cpu
+            );
         }
         "image" => {
             let width = arg(3).parse().unwrap_or(0);

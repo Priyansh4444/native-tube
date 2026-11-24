@@ -76,13 +76,14 @@ pub fn player<'a>(app: &'a App, w: &'a Watch, pw: f32, ph: f32, radius: f32) -> 
         } else {
             0.0
         };
+        let decoded = app.has_decoded_frame();
         layers.push(
             container(
                 shader(VideoProgram::<false> {
                     frame: Some(f.clone()),
                     radius: r * app.scale,
-                    first_frame: Some(&w.first_frame),
-                    playback_mark: Some(&app.want_playback_mark),
+                    first_frame: decoded.then_some(&w.first_frame),
+                    playback_mark: decoded.then_some(&app.want_playback_mark),
                 })
                 .width(fw)
                 .height(fh),

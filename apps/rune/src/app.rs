@@ -950,7 +950,7 @@ impl App {
                             }
                             p.feed.set(videos, info.videos.next.clone());
                             if let Kind::Channel { info: slot, .. } = &mut p.kind {
-                                *slot = Some(info);
+                                *slot = Some(Box::new(info));
                             }
                             if top {
                                 mark_next(marks::CHANNEL_LOADED);

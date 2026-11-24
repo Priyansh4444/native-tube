@@ -5,6 +5,8 @@ fn main() {}
 
 #[cfg(target_os = "linux")]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // SAFETY: this is the first operation in main, before threads and EGL.
+    unsafe { nt_core::gpu::select_egl_vendor() };
     linux::run()
 }
 
@@ -102,6 +104,33 @@ mod linux {
         }
     }
 
+    /// PSS in KiB, and the GPU driver libraries mapped into this process.
+    fn memory() -> (u64, Vec<String>) {
+        let pss = std::fs::read_to_string("/proc/self/smaps_rollup")
+            .ok()
+            .and_then(|s| {
+                s.lines()
+                    .find(|l| l.starts_with("Pss:"))
+                    .and_then(|l| l.split_whitespace().nth(1)?.parse().ok())
+            })
+            .unwrap_or(0);
+        let mut libs: Vec<String> = std::fs::read_to_string("/proc/self/maps")
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|l| l.split_whitespace().nth(5))
+            .filter_map(|p| p.rsplit('/').next())
+            .filter(|n| {
+                ["nvidia", "gallium", "LLVM", "EGL", "GLX", "iris", "dri"]
+                    .iter()
+                    .any(|k| n.contains(k))
+            })
+            .map(str::to_string)
+            .collect();
+        libs.sort();
+        libs.dedup();
+        (pss, libs)
+    }
+
     pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         let args: Vec<_> = std::env::args().skip(1).collect();
         let seconds = args
@@ -111,6 +140,13 @@ mod linux {
             .clamp(3, 60);
         let software = args.iter().any(|a| a == "--software");
         let detach = args.iter().any(|a| a == "--detach");
+        // --switch N: after the first second, load the clip again N times and report how long
+        // each takes to Ready and to its first presented frame (a warm switch).
+        let switches = args
+            .windows(2)
+            .find(|w| w[0] == "--switch")
+            .and_then(|w| w[1].parse::<u32>().ok())
+            .unwrap_or(0);
         let app_id = std::env::var("NT_APP_ID")?;
         if std::env::var("NT_MUTE").as_deref() != Ok("1")
             || std::env::var("NT_NO_MPRIS").as_deref() != Ok("1")
@@ -161,6 +197,7 @@ mod linux {
         let mut child = if software {
             None
         } else {
+            let before = memory();
             let attaching = Instant::now();
             // SAFETY: the connection and parent outlive the explicitly detached child.
             let child = unsafe {
@@ -171,9 +208,25 @@ mod linux {
                     1.0,
                 )?
             };
+            let returned_ms = attaching.elapsed().as_secs_f64() * 1000.0;
+            while !child.is_ready() {
+                if let Some(error) = child.error() {
+                    return Err(error.into());
+                }
+                if attaching.elapsed() > Duration::from_secs(5) {
+                    return Err("GPU renderer initialization timed out".into());
+                }
+                queue.dispatch_pending(&mut state)?;
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            let initialized_ms = attaching.elapsed().as_secs_f64() * 1000.0;
+            let after = memory();
             println!(
-                "attach took {:.1} ms",
-                attaching.elapsed().as_secs_f64() * 1000.0
+                "attach returned in {returned_ms:.1} ms, GPU ready in {initialized_ms:.1} ms; PSS {} -> {} KiB ({:+} KiB); mapped: {}",
+                before.0,
+                after.0,
+                after.0 as i64 - before.0 as i64,
+                after.1.join(" ")
             );
             child.set_rect(0, 0, w as u32, h as u32);
             Some(child)
@@ -188,12 +241,20 @@ mod linux {
         let cpu = nt_core::metrics::cpu_seconds();
         player.load("headless-smoke")?;
         let mut first = false;
+        let mut gpu_at: Option<f64> = None;
         for _ in 0..seconds * 20 {
             if let Status::Failed(error) = player.state().status {
                 return Err(error.into());
             }
             if let Some(error) = child.as_ref().and_then(VideoSurface::error) {
                 return Err(error.into());
+            }
+            if gpu_at.is_none() && player.presented_frames() > 0 {
+                gpu_at = Some(started.elapsed().as_secs_f64() * 1000.0);
+                println!(
+                    "first GPU-presented frame after {:.0} ms",
+                    gpu_at.unwrap_or(0.0)
+                );
             }
             if !first
                 && (child.as_ref().is_some_and(VideoSurface::is_presenting)
@@ -213,17 +274,47 @@ mod linux {
             }
             queue.roundtrip(&mut state)?;
             std::thread::sleep(Duration::from_millis(50));
+            if first && switches > 0 && started.elapsed() >= Duration::from_secs(1) {
+                break;
+            }
+        }
+        for n in 0..switches {
+            let at = Instant::now();
+            player.load("headless-smoke")?;
+            let (mut ready, mut shown) = (None, None);
+            while at.elapsed() < Duration::from_secs(5) && shown.is_none() {
+                let ms = at.elapsed().as_secs_f64() * 1000.0;
+                if ready.is_none() && player.state().status == Status::Ready {
+                    ready = Some(ms);
+                }
+                if player.presented_frames() > 0 || (child.is_none() && player.frame().is_some()) {
+                    shown = Some(ms);
+                }
+                queue.dispatch_pending(&mut state)?;
+                conn.flush()?;
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            if shown.is_none() {
+                return Err(format!("switch {n}: no presented frame").into());
+            }
+            println!(
+                "switch {n}: Ready after {:.1} ms, first presented frame after {:.1} ms",
+                ready.unwrap_or(f64::NAN),
+                shown.unwrap_or(f64::NAN)
+            );
+            std::thread::sleep(Duration::from_millis(700));
         }
         let stats = player.render_stats();
         println!(
-            "mode={} frames={} software_frame={} position={:.2} elapsed={:.2}s cpu={:.2}s rss={} KiB",
+            "mode={} frames={} software_frame={} position={:.2} elapsed={:.2}s cpu={:.2}s rss={} KiB pss={} KiB",
             if software { "software" } else { "wayland" },
             stats.frames,
             player.frame().is_some(),
             player.state().position,
             started.elapsed().as_secs_f64(),
             nt_core::metrics::cpu_seconds() - cpu,
-            nt_core::metrics::rss_bytes() / 1024
+            nt_core::metrics::rss_bytes() / 1024,
+            memory().0
         );
         if !first || (detach && player.frame().is_none()) {
             return Err("missing rendered frame".into());

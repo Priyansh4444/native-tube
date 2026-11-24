@@ -2249,7 +2249,10 @@ fn channel_head(s: &App, page: &Page, scale: f32) -> El {
         };
         text_col = text_col.child(desc);
     }
-    text_col = text_col.child(el().mt(8.0).child(subscribe_button(info.as_ref())));
+    text_col = text_col.child(
+        el().mt(8.0)
+            .child(subscribe_button(nt_core::ChannelInfo::as_ref(info))),
+    );
     if *desc_open {
         for link in &info.links {
             let url = link.url.clone();

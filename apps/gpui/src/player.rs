@@ -296,6 +296,13 @@ impl PlayerView {
         }
     }
 
+    /// Create libmpv and attach the GPU surface ahead of the first click (about 75 + 40 ms on
+    /// the test laptop), so opening a video only resolves and loads.
+    pub fn prewarm(&mut self, window: &Window, cx: &mut Context<Self>) {
+        self.attach_hardware(window, cx);
+        let _ = self.ensure(cx);
+    }
+
     /// The player, created on first use. A failed start is retried on the next call.
     fn ensure(&mut self, cx: &mut Context<Self>) -> Option<&Player> {
         if self.player.is_none() {

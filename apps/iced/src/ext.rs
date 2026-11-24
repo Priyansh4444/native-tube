@@ -67,19 +67,28 @@ pub fn player() -> Result<&'static Player, String> {
     Ok(PLAYER.get_or_init(|| p))
 }
 
-/// Start libmpv outside the UI thread after the first frame. Resolution is left to
+/// Start libmpv outside the UI thread after Home has been drawn. Resolution is left to
 /// the actual preload or click, so warming up never spends an extra YouTube request.
 pub fn prewarm_player() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     if std::env::var_os("NT_NO_PREWARM").is_none() {
         ONCE.call_once(|| {
-            nt_core::runtime().spawn_blocking(|| match player() {
+            let warm = || match player() {
                 Ok(_) => {
                     crate::scroller::trace_event("player_ready");
                     send(Ext::PlayerReady);
                 }
                 Err(e) => eprintln!("nt-iced: player warm-up: {e}"),
-            });
+            };
+            match nt_core::try_runtime() {
+                Ok(runtime) => {
+                    runtime.spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                        runtime.spawn_blocking(warm);
+                    });
+                }
+                Err(_) => warm(),
+            }
         });
     }
 }

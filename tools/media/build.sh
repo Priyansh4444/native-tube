@@ -9,6 +9,11 @@ exec 9>"$media/build.lock"
 flock -n 9
 export CARGO_BUILD_JOBS=4
 failed=0
+apps=(iced gpui rune)
+case "${1:-}" in
+    --core) apps=(core); shift ;;
+    --with-core) apps+=(core); shift ;;
+esac
 if (( $# == 0 )); then
     set -- 96df4ec cb25193 bf276b1 2caf0fa NOW 96df4ec-routed
 fi
@@ -46,28 +51,35 @@ for rev in "$@"; do
             done |
             sort -zu | xargs -0 -r sha256sum) > "$media/out/build/NOW-source.sha256"
     fi
-    for app in iced gpui rune; do
+    for app in "${apps[@]}"; do
         printf '%s %s\n' "$rev" "$app"
         target="$media/target/$rev/$app"
+        manifest="$tree/apps/$app/Cargo.toml"
+        binary="nt-$app"
+        if [[ "$app" == core ]]; then
+            manifest="$tree/core/Cargo.toml"
+            binary=ntctl
+        fi
         if [[ ! -d "$target" ]]; then
             seed="$root/.cache/perf/target/$(git rev-parse 2caf0fa)/$app"
             [[ "$rev" == 96df4ec-routed ]] && seed="$media/target/96df4ec/$app"
             [[ "$rev" == NOW ]] && seed="$root/apps/$app/target"
+            [[ "$app" == core ]] && seed="$root/core/target"
             if [[ -d "$seed/release" ]]; then
                 mkdir -p "$target"
                 nice -n 19 ionice -c3 cp -a --reflink=auto "$seed/release" "$target/"
                 # A seeded executable is never evidence of a completed build.
-                rm -f "$target/release/nt-$app"
+                rm -f "$target/release/$binary"
             fi
         fi
         nice -n 19 ionice -c3 cargo build --locked --release \
-            --manifest-path "$tree/apps/$app/Cargo.toml" --bin "nt-$app" --target-dir "$target" \
+            --manifest-path "$manifest" --bin "$binary" --target-dir "$target" \
             > "$media/out/build/$rev-$app.log" 2>&1 || {
                 tail -n 20 "$media/out/build/$rev-$app.log" >&2
                 failed=1
                 continue
             }
-        sha256sum "$target/release/nt-$app"
+        sha256sum "$target/release/$binary"
     done
     git worktree remove --force "$tree"
     trap - EXIT

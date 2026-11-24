@@ -107,7 +107,7 @@ impl Prefs {
         let seq = self.save_seq.get().wrapping_add(1);
         self.save_seq.set(seq);
         let saved_seq = self.saved_seq.clone();
-        nt_core::runtime().spawn_blocking(move || {
+        let write = move || {
             let Ok(mut saved) = saved_seq.lock() else {
                 return;
             };
@@ -124,6 +124,10 @@ impl Prefs {
             if std::fs::write(&tmp, bytes).is_ok() && std::fs::rename(&tmp, &path).is_ok() {
                 *saved = seq;
             }
-        });
+        };
+        match nt_core::try_runtime() {
+            Ok(runtime) => drop(runtime.spawn_blocking(write)),
+            Err(_) => write(),
+        }
     }
 }

@@ -43,6 +43,9 @@ fn install_panic_hook() {
 }
 
 fn main() {
+    // SAFETY: the process is still single-threaded and the toolkit and EGL are uninitialized.
+    unsafe { nt_core::gpu::select_egl_vendor() };
+
     probe::init();
     nt_core::metrics::init("rune");
     nt_core::autopilot::start();

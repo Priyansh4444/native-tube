@@ -38,6 +38,8 @@ returns true unless the granularity is `kScrollByPrecisePixel`, provided
 (`content/browser/web_contents/web_contents_impl.cc`). On Linux that function
 returns `ui::LinuxUi::AnimationsEnabled()` (`ui/gfx/animation/animation_linux.cc`),
 which is the desktop's "enable animations" setting.
+NativeTube always animates wheel scrolls; it has no switch for that setting (the
+unused `set_smooth_scroll` mode was removed in the 2026-11-20 lint round).
 
 **Creating an animation** (`InputHandler::ScrollLatchedScroller`, "CreateNewAnimation" branch):
 - `ComputeScrollDelta` clamps `current + delta` to `[0, max]`.
@@ -299,10 +301,10 @@ twice: the framework's delta plus ours. Position content yourself at `-offset`.
 
 | Raw event (Wayland via winit/smithay/etc.) | Call |
 |---|---|
-| `axis_value120` (wheel source) | `wheel_ticks(wayland_value120_to_ticks(v120), t_event)` |
-| legacy `axis` with wheel source, no value120 | `wheel_ticks(wayland_axis_to_px(v) / WHEEL_DELTA_PX, t_event)` |
+| `axis_value120` (wheel source) | `wheel_ticks(v120 / 120.0, t_event)` (120 units per notch) |
+| legacy `axis` with wheel source, no value120 | `wheel_ticks(wayland_axis_to_px(v) / 120.0, t_event)` (one notch = 120 px) |
 | winit `MouseScrollDelta::LineDelta(_, y)` | `wheel_ticks(-y, t_event)` (winit documents +y as "away from the user", i.e. up) |
-| `axis` with finger or continuous source (touchpad) | `wheel_pixels(wayland_axis_to_px(v), t_event)` (Chrome default ×12; use `WAYLAND_UNSCALED_TOUCHPAD_FACTOR` if that feels too fast) |
+| `axis` with finger or continuous source (touchpad) | `wheel_pixels(wayland_axis_to_px(v), t_event)` (Chrome default ×12) |
 | winit `MouseScrollDelta::PixelDelta(p)` | `wheel_pixels(-p.y * k, t_event)`. Pick `k` so the result equals `wayland_axis_to_px(raw wl axis value)`. If your winit version passes the raw axis value through, `k = 12`. **Unverified**: check your winit version's Wayland backend before you rely on this. |
 | `axis_stop` (finger lift) / winit `TouchPhase::Ended` on a touchpad scroll | `fling_start(t_event)` |
 | touchscreen flick with a known velocity | `fling(v_px_per_s, t_event)` |
@@ -313,7 +315,6 @@ twice: the framework's delta plus ours. Position content yourself at `-offset`.
 | "scroll to top", jump to an item | `scroll_to(y, t)` |
 | scrollbar thumb drag, restoring a saved position | `jump_to(y)` |
 | content or viewport size change | `set_max_offset(content_h − viewport_h)`, `set_viewport(viewport_h)` |
-| desktop "enable animations" setting | `set_smooth_scroll(enabled)` |
 
 Sign: positive values move toward the end of the content. Wayland axis values
 are already positive for "down". Most toolkits (winit included) flip that, so

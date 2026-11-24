@@ -249,8 +249,6 @@ impl Search {
     }
 }
 
-// A handful of pages exist at a time; boxing the big variants would only add indirection.
-#[allow(clippy::large_enum_variant)]
 pub enum Kind {
     Home {
         topic: usize,
@@ -259,7 +257,7 @@ pub enum Kind {
     Watch(Box<Watch>),
     Channel {
         id: String,
-        info: Option<ChannelInfo>,
+        info: Option<Box<ChannelInfo>>,
         desc_open: bool,
     },
     Subs {

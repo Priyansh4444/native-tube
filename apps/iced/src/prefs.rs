@@ -75,7 +75,7 @@ impl Prefs {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         static WRITTEN: Mutex<u64> = Mutex::new(0);
         let revision = NEXT.fetch_add(1, Ordering::Relaxed) + 1;
-        nt_core::runtime().spawn_blocking(move || {
+        let write = move || {
             let mut written = WRITTEN.lock().unwrap_or_else(|e| e.into_inner());
             if revision <= *written {
                 return;
@@ -85,7 +85,13 @@ impl Prefs {
             if std::fs::write(&tmp, json).is_ok() && std::fs::rename(&tmp, dir.join(FILE)).is_ok() {
                 *written = revision;
             }
-        });
+        };
+        match nt_core::try_runtime() {
+            Ok(runtime) => {
+                runtime.spawn_blocking(write);
+            }
+            Err(_) => write(),
+        }
     }
 
     /// Fraction watched, for the bar under a thumbnail.

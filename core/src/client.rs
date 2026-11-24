@@ -30,8 +30,12 @@ impl<T: Send + 'static> Job<T> {
     where
         F: Future<Output = Result<T>> + Send + 'static,
     {
+        let rt = match try_runtime() {
+            Ok(rt) => rt,
+            Err(e) => return Job::ready(Err(e)),
+        };
         let (tx, rx) = oneshot::channel();
-        runtime().spawn(async move {
+        rt.spawn(async move {
             let _ = tx.send(fut.await);
         });
         Job { rx }
@@ -42,7 +46,7 @@ impl<T: Send + 'static> Job<T> {
     }
 
     /// A job that has already finished.
-    pub fn ready(value: Result<T>) -> Job<T> {
+    pub(crate) fn ready(value: Result<T>) -> Job<T> {
         let (tx, rx) = oneshot::channel();
         let _ = tx.send(value);
         Job { rx }
@@ -64,7 +68,10 @@ impl<T: Send + 'static> Job<T> {
 
     /// Run `f` with the result on a core worker thread once it arrives.
     pub fn on_done(self, f: impl FnOnce(Result<T>) + Send + 'static) {
-        runtime().spawn(async move { f(self.await) });
+        match try_runtime() {
+            Ok(rt) => drop(rt.spawn(async move { f(self.await) })),
+            Err(e) => f(Err(e)),
+        }
     }
 }
 
@@ -77,13 +84,10 @@ impl<T> Future for Job<T> {
     }
 }
 
-/// The core's runtime: two worker threads plus a blocking pool for decoding.
-#[expect(
-    clippy::expect_used,
-    reason = "The public runtime and Job APIs require an executor; thread creation failure cannot be recovered here"
-)]
-pub fn runtime() -> &'static tokio::runtime::Runtime {
-    static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+/// The core's runtime: two worker threads plus a blocking pool for decoding. Starting it can
+/// fail (no threads or no epoll left); then every core job resolves to that error.
+pub fn try_runtime() -> Result<&'static tokio::runtime::Runtime> {
+    static RT: OnceLock<std::result::Result<tokio::runtime::Runtime, String>> = OnceLock::new();
     RT.get_or_init(|| {
         tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
@@ -91,8 +95,10 @@ pub fn runtime() -> &'static tokio::runtime::Runtime {
             .thread_name("nt-core")
             .enable_all()
             .build()
-            .expect("failed to start the nt-core runtime")
+            .map_err(|e| e.to_string())
     })
+    .as_ref()
+    .map_err(|e| Error::Io(format!("could not start the nt-core runtime: {e}")))
 }
 
 struct RequestFailure {
@@ -797,7 +803,7 @@ fn interleave(pages: Vec<Page<Video>>) -> Page<Video> {
     Page { items, next }
 }
 
-pub(crate) fn urlencode(s: &str) -> String {
+fn urlencode(s: &str) -> String {
     let mut out = String::with_capacity(s.len() * 3);
     for b in s.bytes() {
         match b {
@@ -855,7 +861,8 @@ mod tests {
                 fixtures: None,
             };
             let url = "https://i.ytimg.com/vi/abcdefghijk/hq720.jpg";
-            let err = runtime()
+            let err = try_runtime()
+                .unwrap()
                 .block_on(client.get_bytes_if_present(url))
                 .unwrap_err();
             assert!(err.to_string().contains("pausing"), "{err}");

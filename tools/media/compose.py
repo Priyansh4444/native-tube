@@ -33,12 +33,22 @@ def checked_duration(path):
     return float(probe["format"]["duration"])
 
 
+def earliest(data, app):
+    candidates = [(rev, data[rev][app]["metrics"]) for rev in MILESTONES[:-1]]
+    for rev, values in candidates:
+        if all(values[key] is not None for _, key, _ in VISIBLE_METRICS):
+            return rev
+    return max(candidates, key=lambda item: sum(item[1][key] is not None
+                                              for _, key, _ in VISIBLE_METRICS))[0]
+
+
 def tile_columns(data, app):
+    baseline = earliest(data, app)
     labels = [APP_NAMES[app]]
-    start, now = ["START"], ["NOW"]
+    start, now = [f"START {baseline}"], ["NOW"]
     for title, key, unit in VISIBLE_METRICS:
         labels.append(title)
-        for rev, column in ((MILESTONES[0], start), (MILESTONES[-1], now)):
+        for rev, column in ((baseline, start), (MILESTONES[-1], now)):
             value = data[rev][app]["metrics"][key]
             column.append("n/a" if value is None else f"{value:.1f}{unit}")
     return labels, start, now
@@ -59,7 +69,7 @@ def compose(data, inputs, output):
         filters = []
         for index, app in enumerate(APPS):
             draws = []
-            for x, column in zip((24, 330, 470), tile_columns(data, app)):
+            for x, column in zip((24, 310, 480), tile_columns(data, app)):
                 for row, value in enumerate(column):
                     label = f"{app}-{x}-{row}.txt"
                     (working / label).write_text(value)
@@ -71,18 +81,23 @@ def compose(data, inputs, output):
                 f"{','.join(draws)}[tile{index}]"
             )
         (working / "heading.txt").write_text("NativeTube")
-        (working / "key.txt").write_text(
-            "START   96df4ec · first frontends\n"
-            "NOW      working-tree build\n\n"
-            "Median of three fixture runs\n"
-            "Warm switch uses the related video.\n"
-            "Playback CPU is percent of one core.\n"
-            "n/a marks an unavailable measurement.\n"
-            "Muted playback uses a local test clip."
-        )
+        starts = sorted({earliest(data, app) for app in APPS})
+        key = [draw("heading.txt", 52, 58, 34)]
+        for row, line in enumerate((
+            f"START  {', '.join(starts)}",
+            "Earliest build with all five metrics",
+            "NOW  Working-tree build",
+            "Median of three fixture runs",
+            "Warm switch opens the related video",
+            "Playback CPU is percent of one core",
+            "Muted local test clip",
+        )):
+            label = f"key-{row}.txt"
+            (working / label).write_text(line)
+            key.append(draw(label, 52, 132 + 33 * row, 23))
         filters.append(
             f"color=c=0x101827:s={W}x{H}:r=30:d={duration},"
-            f"{draw('heading.txt', 52, 58, 34)},{draw('key.txt', 52, 132, 23)}[key]")
+            f"{','.join(key)}[key]")
         filters.append(
             f"[tile0][tile1][tile2][key]xstack=inputs=4:layout=0_0|{W}_0|0_{H}|{W}_{H}[tiles]")
         args = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y"]

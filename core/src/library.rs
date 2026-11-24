@@ -183,7 +183,7 @@ impl Library {
         now
     }
 
-    pub fn volume(&self) -> f64 {
+    pub(crate) fn volume(&self) -> f64 {
         self.lock().data.volume
     }
 
@@ -283,7 +283,11 @@ impl Library {
     /// Write the latest state on a worker, so delayed saves cannot restore old data.
     fn save(&self) {
         let (data, path) = (self.data.clone(), self.path.clone());
-        crate::client::runtime().spawn_blocking(move || write_current(&path, &data));
+        match crate::client::try_runtime() {
+            Ok(rt) => drop(rt.spawn_blocking(move || write_current(&path, &data))),
+            // No worker to hand the save to: write it here rather than lose it.
+            Err(_) => write_current(&path, &data),
+        }
     }
 }
 

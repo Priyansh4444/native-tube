@@ -41,12 +41,12 @@ pub struct Streams {
     pub audio: Option<String>,
     pub is_live: bool,
     /// The video's title and channel, from the same answer (for "now playing").
-    pub title: String,
-    pub author: String,
+    pub(crate) title: String,
+    pub(crate) author: String,
     /// Height of the chosen video stream (0 for HLS, where the manifest decides).
-    pub height: u32,
+    pub(crate) height: u32,
     /// The heights this video offers, ascending, for a quality menu.
-    pub heights: Vec<u32>,
+    pub(crate) heights: Vec<u32>,
     /// e.g. "720p30 avc1 1.2 Mb/s"
     pub video_desc: String,
     /// e.g. "mp4a 129 kb/s"
@@ -59,11 +59,11 @@ pub struct Streams {
     /// Seek-bar preview sheets, when the video has them.
     pub storyboard: Option<Storyboard>,
     /// The audio languages offered (original and dubs); empty when there is only one.
-    pub audio_tracks: Vec<AudioTrack>,
+    pub(crate) audio_tracks: Vec<AudioTrack>,
     /// The id in `audio_tracks` that `audio` plays.
-    pub audio_track: Option<String>,
+    pub(crate) audio_track: Option<String>,
     /// Decibels of attenuation computed from YouTube's loudness metadata.
-    pub normalization_gain_db: f64,
+    pub(crate) normalization_gain_db: f64,
 }
 
 /// One audio language of a video: the original or a (possibly automatic) dub.
@@ -132,7 +132,7 @@ async fn visitor_data() -> Result<(String, f64)> {
 
 /// The quality ladder offered to the viewer. Capped at 1080p: above that YouTube only serves
 /// VP9/AV1, which most laptops decode in software.
-pub const HEIGHTS: [u32; 6] = [144, 240, 360, 480, 720, 1080];
+pub(crate) const HEIGHTS: [u32; 6] = [144, 240, 360, 480, 720, 1080];
 
 /// The default cap when the caller has no opinion (`NT_MAX_HEIGHT` overrides it).
 pub fn default_max_height() -> u32 {
@@ -149,7 +149,7 @@ pub async fn resolve(video_id: &str, max_height: u32) -> Result<Streams> {
 }
 
 /// [`resolve`], playing the audio track with this id when the video has it (else the original).
-pub async fn resolve_with_audio(
+pub(crate) async fn resolve_with_audio(
     video_id: &str,
     max_height: u32,
     audio_track: Option<&str>,

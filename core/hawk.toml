@@ -1,0 +1,127 @@
+# App workspaces consume nt-core as a path dependency, and Hawk scans core on its own, so it
+# cannot see those uses. Each expectation below names a real user, confirmed by making the item
+# pub(crate) and compiling apps/iced, apps/gpui and apps/rune against it (they then fail).
+# Items with no user outside core were narrowed or deleted instead of listed here.
+override = [
+  { crate = "nt_core", lint = "hawk::dead_public", item = "autopilot::enabled", level = "expect", reason = "used by apps/gpui/src/app.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "autopilot::next_command", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/ext.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "autopilot::set_waker", level = "expect", reason = "used by apps/rune/src/main.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "autopilot::start", level = "expect", reason = "used by apps/gpui/src/main.rs, apps/iced/src/main.rs, apps/rune/src/main.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "autopilot::try_next", level = "expect", reason = "used by apps/rune/src/app.rs" },
+
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "captions::CaptionLanguage::code", level = "expect", reason = "used by apps/rune/src/watch.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "captions::CaptionLanguage::label", level = "expect", reason = "used by apps/rune/src/watch.rs" },
+
+  { crate = "nt_core", lint = "hawk::dead_public", item = "client::Client::more_playlist_videos", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/app.rs, apps/rune/src/app.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "client::Client::more_playlists", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/app.rs, apps/rune/src/app.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "client::Client::more_search", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/app.rs, apps/rune/src/app.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "client::Job::<T>::on_done", level = "expect", reason = "used by apps/iced/src/imgcache.rs, apps/rune/src/app.rs" },
+
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "format", level = "expect", reason = "used by apps/gpui/src/content.rs, apps/iced/src/player_view.rs, apps/rune/src/video.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "format::clock", level = "expect", reason = "used by apps/gpui/src/content.rs, apps/iced/src/player_view.rs, apps/rune/src/video.rs" },
+
+  { crate = "nt_core", lint = "hawk::dead_public", item = "images::<impl model::RgbaImage>::to_bgra", level = "expect", reason = "used by apps/gpui/src/images.rs" },
+
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "library::LastPlayed::id", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/app.rs, apps/rune/src/app.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "library::LastPlayed::position", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/app.rs, apps/rune/src/app.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "library::LastPlayed::title", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/app.rs, apps/rune/src/app.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "library::Library::clear_history", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/app.rs, apps/rune/src/view.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "library::Library::history", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/app.rs, apps/rune/src/app.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "library::Library::is_hidden", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/app.rs, apps/rune/src/app.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "library::Library::is_saved", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/player_view.rs, apps/rune/src/view.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "library::Library::is_subscribed", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/app.rs, apps/rune/src/view.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "library::Library::pop_queued", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/app.rs, apps/rune/src/app.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "library::Library::record_watch", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/app.rs, apps/rune/src/app.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "library::Library::toggle_subscription", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/app.rs, apps/rune/src/view.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "library::Library::toggle_watch_later", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/app.rs, apps/rune/src/app.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "library::Library::watch_later", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/app.rs, apps/rune/src/app.rs" },
+
+  { crate = "nt_core", lint = "hawk::dead_public", item = "metrics::frame", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/scroller.rs, apps/rune/src/main.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "metrics::init", level = "expect", reason = "used by apps/gpui/src/main.rs, apps/iced/src/main.rs, apps/rune/src/main.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "metrics::mark", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/scroller.rs, apps/rune/src/app.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "metrics::marks", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/app.rs, apps/rune/src/app.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "metrics::marks::CHANNEL_LOADED", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/app.rs, apps/rune/src/app.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "metrics::marks::COMMENTS_LOADED", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/app.rs, apps/rune/src/app.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "metrics::marks::FIRST_FRAME", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/app.rs, apps/rune/src/app.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "metrics::marks::HOME_LOADED", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/app.rs, apps/rune/src/app.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "metrics::marks::MORE_LOADED", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/app.rs, apps/rune/src/app.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "metrics::marks::PLAYBACK_STARTED", level = "expect", reason = "used by apps/gpui/src/player.rs, apps/iced/src/surface.rs, apps/rune/src/probe.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "metrics::marks::SEARCH_LOADED", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/app.rs, apps/rune/src/app.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "metrics::marks::WATCH_LOADED", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/app.rs, apps/rune/src/app.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "metrics::now", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/scroller.rs" },
+
+  { crate = "nt_core", lint = "hawk::dead_public", item = "model::ChannelInfo::as_ref", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/app.rs, apps/rune/src/view.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "model::ChannelInfo::id", level = "expect", reason = "used by apps/gpui/src/app.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "model::Comment::author_avatar", level = "expect", reason = "used by apps/gpui/src/content.rs, apps/iced/src/view.rs, apps/rune/src/watch.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "model::Comment::id", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/rune/src/app.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "model::HeatPoint::duration", level = "expect", reason = "used by apps/gpui/src/player.rs, apps/iced/src/widgets.rs, apps/rune/src/watch.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "model::HeatPoint::intensity", level = "expect", reason = "used by apps/gpui/src/player.rs, apps/iced/src/widgets.rs, apps/rune/src/watch.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "model::HeatPoint::start", level = "expect", reason = "used by apps/gpui/src/player.rs, apps/iced/src/widgets.rs, apps/rune/src/watch.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "model::Moment::highlights", level = "expect", reason = "used by apps/gpui/src/content.rs, apps/iced/src/view.rs, apps/rune/src/view.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "model::Moment::start_secs", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/app.rs, apps/rune/src/app.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "model::PlaylistRef::thumbnail", level = "expect", reason = "used by apps/gpui/src/content.rs, apps/iced/src/view.rs, apps/rune/src/view.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "model::SearchChannel::verified", level = "expect", reason = "used by apps/gpui/src/content.rs, apps/iced/src/view.rs, apps/rune/src/view.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "model::Topic::id", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/app.rs, apps/rune/src/app.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "model::WatchInfo::as_video", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/app.rs, apps/rune/src/pages.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "model::WatchInfo::chapter_at", level = "expect", reason = "used by apps/iced/src/player_view.rs" },
+
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "player::PlaybackState::caption_languages", level = "expect", reason = "used by apps/gpui/src/player.rs, apps/iced/src/player_view.rs, apps/rune/src/video.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "player::PlaybackState::channel", level = "expect", reason = "used by apps/gpui/src/player.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "player::PlaybackState::heights", level = "expect", reason = "used by apps/gpui/src/player.rs, apps/iced/src/ext.rs, apps/rune/src/video.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "player::PlaybackState::is_live", level = "expect", reason = "used by apps/gpui/src/player.rs, apps/iced/src/app.rs, apps/rune/src/video.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "player::PlaybackState::is_playing", level = "expect", reason = "used by apps/gpui/src/player.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "player::PlaybackState::selected_captions", level = "expect", reason = "used by apps/gpui/src/player.rs, apps/iced/src/app.rs, apps/rune/src/video.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "player::PlaybackState::speed", level = "expect", reason = "used by apps/gpui/src/player.rs, apps/iced/src/app.rs, apps/rune/src/video.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "player::PlaybackState::storyboard", level = "expect", reason = "used by apps/gpui/src/player.rs, apps/iced/src/app.rs, apps/rune/src/video.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "player::PlaybackState::title", level = "expect", reason = "used by apps/gpui/src/player.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "player::PlaybackState::volume", level = "expect", reason = "used by apps/gpui/src/player.rs, apps/iced/src/app.rs, apps/rune/src/video.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "player::Player::pause", level = "expect", reason = "used by apps/gpui/src/player.rs, apps/iced/src/app.rs, apps/rune/src/video.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "player::Player::play", level = "expect", reason = "used by apps/iced/src/app.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "player::Player::quality", level = "expect", reason = "used by apps/gpui/src/player.rs, apps/iced/src/player_view.rs, apps/rune/src/video.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "player::Player::seek_by", level = "expect", reason = "used by apps/gpui/src/player.rs, apps/iced/src/app.rs, apps/rune/src/video.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "player::Player::set_caption_position", level = "expect", reason = "used by apps/gpui/src/player.rs, apps/iced/src/app.rs, apps/rune/src/video.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "player::Player::set_muted", level = "expect", reason = "used by apps/gpui/src/player.rs, apps/iced/src/app.rs, apps/rune/src/video.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "player::Player::set_speed", level = "expect", reason = "used by apps/gpui/src/player.rs, apps/iced/src/app.rs, apps/rune/src/video.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "player::Player::set_volume", level = "expect", reason = "used by apps/gpui/src/player.rs, apps/iced/src/app.rs, apps/rune/src/video.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "player::Player::set_waker", level = "expect", reason = "used by apps/rune/src/main.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "player::Player::shutdown", level = "expect", reason = "used by apps/rune/src/video.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "player::Player::toggle_pause", level = "expect", reason = "used by apps/gpui/src/player.rs, apps/iced/src/app.rs, apps/rune/src/video.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "player::VideoFrame::generation", level = "expect", reason = "used by apps/gpui/src/player.rs, apps/iced/src/video.rs, apps/rune/src/preview.rs" },
+
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "scroll::ScrollAnimator::cancel_fling", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/scroller.rs, apps/rune/src/app.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "scroll::ScrollAnimator::document_step", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/scroller.rs, apps/rune/src/app.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "scroll::ScrollAnimator::fling", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/app.rs, apps/rune/src/app.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "scroll::ScrollAnimator::fling_start", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/scroller.rs, apps/rune/src/app.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "scroll::ScrollAnimator::is_animating", level = "expect", reason = "used by apps/iced/src/scroller.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "scroll::ScrollAnimator::jump_to", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/app.rs, apps/rune/src/app.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "scroll::ScrollAnimator::line_step", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/scroller.rs, apps/rune/src/app.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "scroll::ScrollAnimator::max_offset", kind = "inherent_method", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/scroller.rs, apps/rune/src/probe.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "scroll::ScrollAnimator::needs_frame", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/scroller.rs, apps/rune/src/scroller.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "scroll::ScrollAnimator::new", level = "expect", reason = "used by apps/gpui/src/pages.rs, apps/iced/src/scroller.rs, apps/rune/src/scroller.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "scroll::ScrollAnimator::offset", kind = "inherent_method", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/scroller.rs, apps/rune/src/app.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "scroll::ScrollAnimator::page_step", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/scroller.rs, apps/rune/src/app.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "scroll::ScrollAnimator::scroll_by", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/scroller.rs, apps/rune/src/app.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "scroll::ScrollAnimator::scroll_to", level = "expect", reason = "used by apps/iced/src/app.rs, apps/rune/src/watch.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "scroll::ScrollAnimator::set_max_offset", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/scroller.rs, apps/rune/src/scroller.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "scroll::ScrollAnimator::set_viewport", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/scroller.rs, apps/rune/src/scroller.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "scroll::ScrollAnimator::target", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/scroller.rs, apps/rune/src/app.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "scroll::ScrollAnimator::tick", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/scroller.rs, apps/rune/src/scroller.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "scroll::ScrollAnimator::velocity", level = "expect", reason = "used by apps/rune/src/app.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "scroll::ScrollAnimator::wheel_pixels", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/app.rs, apps/rune/src/app.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "scroll::ScrollAnimator::wheel_ticks", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/app.rs, apps/rune/src/app.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "scroll::wayland_axis_to_px", level = "expect", reason = "used by apps/iced/src/scroller.rs, apps/rune/src/app.rs" },
+
+  { crate = "nt_core", lint = "hawk::dead_public", item = "player::video_surface::VideoSurface::set_clip", level = "expect", target = 'cfg(target_os = "linux")', reason = "used by apps/rune/src/wayland_video.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "player::video_surface::VideoSurface::set_scale", level = "expect", target = 'cfg(target_os = "linux")', reason = "used by apps/iced/src/surface.rs, apps/rune/src/wayland_video.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "player::video_surface::VideoSurface::set_visible", level = "expect", target = 'cfg(target_os = "linux")', reason = "used by apps/iced/src/surface.rs, apps/rune/src/wayland_video.rs" },
+]
+
+[[production]]
+package = "nt-core"
+bin = "ntctl"
+reason = "NativeTube operator CLI"
+
+[[production]]
+package = "nt-core"
+bin = "ntrepl"
+reason = "NativeTube command REPL"

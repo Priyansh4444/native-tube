@@ -264,8 +264,6 @@ pub enum Message {
     /// Test-only (`NT_TEST_CYCLE`): one step of a scripted UI toggle loop.
     TestCycle,
     SurfaceAttached,
-    /// Open a watch page after the GPU surface was attached: (video, start, playlist).
-    OpenWatch(Box<(Video, f64, Option<Arc<nt_core::PlaylistPanel>>)>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -464,13 +462,11 @@ pub struct Watch {
     pub desc_y: Cell<f32>,
 }
 
-// A handful of pages exist at a time; boxing the big variants would only add indirection.
-#[allow(clippy::large_enum_variant)]
 pub enum Body {
     Home(Home),
-    Search(Search),
+    Search(Box<Search>),
     Watch(Box<Watch>),
-    Channel(Channel),
+    Channel(Box<Channel>),
     Subs(Subs),
     History(Vec<Video>),
     Later(Vec<Video>),
@@ -481,6 +477,21 @@ pub struct Page {
     pub scroll: ScrollModel,
     query: String,
     pub body: Body,
+}
+
+#[derive(Default)]
+enum SurfaceState {
+    #[default]
+    Unrequested,
+    Attaching(Option<Box<PendingWatch>>),
+    Finished,
+}
+
+struct PendingWatch {
+    from: u64,
+    video: Video,
+    resume: f64,
+    playlist: Option<Arc<nt_core::PlaylistPanel>>,
 }
 
 /// The countdown card shown when a video ends.
@@ -525,20 +536,19 @@ pub struct App {
     // Playback.
     pub play: PlaybackState,
     pub frame: Option<Arc<VideoFrame>>,
-    frame_gen: u64,
+    frame_gen: Option<u64>,
     pub playing_page: Option<u64>,
     /// Where the current load starts; shown as the position until the player is ready.
     start_at: f64,
     /// A bounded cache of frames for history entries whose decoder was replaced.
     saved_frames: VecDeque<(u64, Arc<VideoFrame>)>,
-    parked: Option<u64>,
     restore_pause: bool,
     /// This page's video has been seen playing since it was (re)started, so a paused state
     /// is the user's (or the media keys') and not the previous video's leftover.
     seen_playing: bool,
     pub want_playback_mark: Cell<bool>,
     pub surface_visible: Cell<bool>,
-    surface_requested: bool,
+    surface: SurfaceState,
     pub player_error: Option<String>,
     pub fullscreen: bool,
     pub fullscreen_scroll: ScrollModel,
@@ -638,16 +648,15 @@ impl App {
             search_open: false,
             play: PlaybackState::default(),
             frame: None,
-            frame_gen: 0,
+            frame_gen: None,
             playing_page: None,
             start_at: 0.0,
             saved_frames: VecDeque::new(),
-            parked: None,
             restore_pause: false,
             seen_playing: false,
             want_playback_mark: Cell::new(false),
             surface_visible: Cell::new(false),
-            surface_requested: false,
+            surface: SurfaceState::default(),
             player_error: None,
             fullscreen: false,
             fullscreen_scroll: ScrollModel::default(),
@@ -748,7 +757,7 @@ impl App {
 
     // ---- navigation ---------------------------------------------------------------------
 
-    fn leave_top(&mut self) {
+    fn leave_top(&mut self, continuing_watch: bool) {
         self.stop_preview();
         self.clear_scrub_preview();
         self.menu = None;
@@ -768,8 +777,8 @@ impl App {
         {
             // Only a settled state of this video says where it is, and only after it was seen
             // playing does `paused` mean someone paused it. Right after a load the state can
-            // still carry the pause set when the previous page was left; rapid Back/Forward
-            // would then park this page as paused at 0:00.
+            // still carry the previous video's state; rapid Back/Forward would then save
+            // this page as paused at 0:00.
             let settled = matches!(self.play.status, Status::Ready | Status::Ended)
                 && self.play.source.as_deref() == Some(w.video.id.as_str());
             w.resume = if settled {
@@ -786,9 +795,10 @@ impl App {
                 self.prefs.record(&w.video.id, w.resume, self.play.duration);
                 self.prefs.save();
             }
-            if let Some(p) = ext::existing_player() {
-                p.pause();
-                self.parked = Some(page.id);
+            // A following Watch load replaces the stream and can still use prepared URLs.
+            // Elsewhere the page only needs its saved position and cover picture.
+            if !continuing_watch && let Some(p) = ext::existing_player() {
+                p.stop();
             }
             self.playing_page = None;
             if let Some(frame) = self.frame.take() {
@@ -803,7 +813,7 @@ impl App {
     }
 
     fn push(&mut self, body: Body) -> u64 {
-        self.leave_top();
+        self.leave_top(matches!(body, Body::Watch(_)));
         self.close_suggestions();
         self.forward.clear();
         let page = self.new_page(body);
@@ -816,7 +826,7 @@ impl App {
     }
 
     fn replace_root(&mut self, root: Root) -> Task<Message> {
-        self.leave_top();
+        self.leave_top(false);
         self.close_suggestions();
         self.forward.clear();
         let body = match root {
@@ -854,7 +864,13 @@ impl App {
         if self.pages.len() < 2 {
             return Task::none();
         }
-        self.leave_top();
+        let continuing_watch = self
+            .pages
+            .iter()
+            .rev()
+            .nth(1)
+            .is_some_and(|p| matches!(p.body, Body::Watch(_)));
+        self.leave_top(continuing_watch);
         self.close_suggestions();
         if let Some(page) = self.pages.pop() {
             self.forward.push(page);
@@ -868,7 +884,7 @@ impl App {
         let Some(page) = self.forward.pop() else {
             return Task::none();
         };
-        self.leave_top();
+        self.leave_top(matches!(page.body, Body::Watch(_)));
         self.close_suggestions();
         self.pages.push(page);
         self.arrive();
@@ -1007,16 +1023,21 @@ impl App {
         resume: f64,
         playlist: Option<Arc<nt_core::PlaylistPanel>>,
     ) -> Task<Message> {
-        // The GPU surface must exist before the first load. Attach it now and open once
-        // that's done (about 60 ms, only when no hover or press got there first).
-        if let Some(attach) = self.surface_needed() {
+        let attach = self.surface_needed();
+        // A click can arrive while the startup or hover prewarm still owns the attach.
+        let from = self.top_id();
+        if let SurfaceState::Attaching(pending) = &mut self.surface {
             // Resolve the streams meanwhile; the load after the attach adopts them.
             if let Some(p) = ext::existing_player() {
                 p.prepare_next(Some(&video.id));
             }
-            return attach.chain(Task::done(Message::OpenWatch(Box::new((
-                video, resume, playlist,
-            )))));
+            *pending = Some(Box::new(PendingWatch {
+                from,
+                video,
+                resume,
+                playlist,
+            }));
+            return attach;
         }
         crate::scroller::trace_event("open_video");
         self.resume_offer = None;
@@ -1078,7 +1099,7 @@ impl App {
             return Task::none();
         }
         let id = stub.id.clone();
-        self.push(Body::Channel(Channel {
+        self.push(Body::Channel(Box::new(Channel {
             id,
             stub,
             load: Load::Loading,
@@ -1092,7 +1113,7 @@ impl App {
             about: None,
             about_load: Load::Ready,
             playlists_more: More::Idle,
-        }));
+        })));
         self.load_top()
     }
 
@@ -1103,7 +1124,7 @@ impl App {
         }
         self.search_focused = false;
         self.search_open = false;
-        self.push(Body::Search(Search {
+        self.push(Body::Search(Box::new(Search {
             query: query.clone(),
             load: Load::Loading,
             feed: Feed::default(),
@@ -1115,7 +1136,7 @@ impl App {
             filter: SearchFilter::All,
             entries: Vec::new(),
             req: 0,
-        }));
+        })));
         self.query = query;
         Task::batch([unfocus(), self.load_top()])
     }
@@ -1162,9 +1183,6 @@ impl App {
                 return;
             }
         };
-        let parked = self.parked.take() == Some(page)
-            && p.state().source.as_deref() == Some(video_id)
-            && !matches!(p.state().status, Status::Idle | Status::Failed(_));
         self.preload = None;
         // The core starts the stream at the saved offset and adopts matching preparation.
         let geo = crate::view::watch_geo(self);
@@ -1172,7 +1190,7 @@ impl App {
             (geo.player_w * self.scale) as u32,
             (geo.player_h * self.scale) as u32,
         );
-        if !parked && let Err(e) = p.load_at(video_id, resume) {
+        if let Err(e) = p.load_at(video_id, resume) {
             self.player_error = Some(friendly(&e));
             return;
         }
@@ -1181,8 +1199,6 @@ impl App {
         self.restore_pause = paused;
         if paused {
             p.pause();
-        } else if parked && p.state().status != Status::Ended {
-            p.play();
         }
         self.play = normalized_playback(p.state());
         if let Status::Failed(error) = &self.play.status {
@@ -1192,18 +1208,17 @@ impl App {
             self.play.position = resume;
         }
         self.want_playback_mark.set(true);
-        self.frame = p.frame().or(self.frame.take());
-        self.frame_gen = u64::MAX;
+        self.frame_gen = None;
         ext::reset_gate();
         ext::refresh_player();
-        if parked {
-            self.prepare_successor();
-        }
+    }
+
+    pub fn has_decoded_frame(&self) -> bool {
+        self.frame_gen.is_some()
     }
 
     pub fn can_preload(&self) -> bool {
         self.playing_page.is_none()
-            && self.parked.is_none()
             && !self.fullscreen
             && self.card_menu.is_none()
             && !self.sugg_open
@@ -1241,7 +1256,7 @@ impl App {
         self.preload_seq += 1;
         let seq = self.preload_seq;
         self.preload = Some(id);
-        let attach = self.surface_needed().unwrap_or_else(Task::none);
+        let attach = self.surface_needed();
         Task::batch([
             attach,
             Task::future(async move {
@@ -1319,22 +1334,26 @@ impl App {
 
     /// The attach task when the GPU surface is wanted and not yet asked for. Creates the player
     /// if the warm-up hasn't, since the surface belongs to it.
-    fn surface_needed(&mut self) -> Option<Task<Message>> {
-        if !crate::surface::enabled() || self.surface_requested || self.window.is_none() {
-            return None;
+    fn surface_needed(&mut self) -> Task<Message> {
+        if !crate::surface::enabled()
+            || !matches!(self.surface, SurfaceState::Unrequested)
+            || self.window.is_none()
+            || ext::player().is_err()
+        {
+            return Task::none();
         }
-        ext::player().ok()?;
-        Some(self.init_surface())
+        self.init_surface()
     }
 
     fn init_surface(&mut self) -> Task<Message> {
-        let Some(id) = self
-            .window
-            .filter(|_| !self.surface_requested && ext::existing_player().is_some())
-        else {
+        let Some(id) = self.window.filter(|_| {
+            crate::surface::enabled()
+                && matches!(self.surface, SurfaceState::Unrequested)
+                && ext::existing_player().is_some()
+        }) else {
             return Task::none();
         };
-        self.surface_requested = true;
+        self.surface = SurfaceState::Attaching(None);
         crate::surface::attach(id, self.scale)
     }
 
@@ -1364,10 +1383,13 @@ impl App {
             self.play.position = self.start_at;
         }
         let generation = p.frame_generation();
-        if generation != self.frame_gen
+        if Some(generation) != self.frame_gen
             && let Some(frame) = p.frame()
         {
-            self.frame_gen = generation;
+            if self.frame_gen.is_none() {
+                crate::scroller::trace_event("frame_arrived");
+            }
+            self.frame_gen = Some(generation);
             self.frame = Some(frame);
         }
         if self.restore_pause && self.play.status == Status::Ready {
@@ -1816,15 +1838,14 @@ impl App {
     }
 
     fn quit(&mut self) -> Task<Message> {
-        self.leave_top();
+        self.leave_top(true);
         if let Some(p) = ext::existing_player() {
-            p.stop();
+            p.shutdown();
+        } else {
+            library().flush();
         }
         self.stop_preview();
         crate::surface::detach();
-        // `stop` records the resume checkpoint through the library's worker; the process may
-        // end before that write runs, so write it now (B13 `Library::flush`).
-        library().flush();
         iced::exit()
     }
 
@@ -1856,13 +1877,15 @@ impl App {
                 Task::none()
             }
             Message::Ext(Ext::Player) => self.on_player(),
-            // The GPU surface (EGL and the GL drivers, ~40 MiB) waits for the first sign that
-            // a video will play: a hover or press on a card, or an open.
-            Message::Ext(Ext::PlayerReady) => Task::none(),
-            Message::SurfaceAttached => Task::none(),
-            Message::OpenWatch(open) => {
-                let (video, resume, playlist) = *open;
-                self.open_watch(video, resume, playlist)
+            Message::Ext(Ext::PlayerReady) => self.init_surface(),
+            Message::SurfaceAttached => {
+                if let SurfaceState::Attaching(Some(open)) =
+                    std::mem::replace(&mut self.surface, SurfaceState::Finished)
+                    && open.from == self.top_id()
+                {
+                    return self.open_watch(open.video, open.resume, open.playlist);
+                }
+                Task::none()
             }
             Message::ScrollMoved => {
                 self.stop_preview();
@@ -2620,16 +2643,15 @@ impl App {
                     return Self::load_channel_playlists(page.id, c);
                 }
                 match &mut page.body {
-                    Body::Search(Search { feed, moments, .. }) => {
-                        for f in [feed, moments] {
+                    Body::Search(s) => {
+                        for f in [&mut s.feed, &mut s.moments] {
                             if matches!(f.more, Some(More::Failed(_))) {
                                 f.more = Some(More::Idle);
                             }
                         }
                     }
-                    Body::Home(Home { feed, .. }) | Body::Channel(Channel { feed, .. }) => {
-                        feed.more = Some(More::Idle);
-                    }
+                    Body::Home(h) => h.feed.more = Some(More::Idle),
+                    Body::Channel(c) => c.feed.more = Some(More::Idle),
                     _ => {}
                 }
                 self.maybe_more()
@@ -3326,7 +3348,6 @@ impl App {
                 if let Body::Watch(w) = &top.body {
                     let (id, vid, at) =
                         (top.id, w.video.id.clone(), self.play.position.max(w.resume));
-                    self.parked = None;
                     self.start_playback(id, &vid, at, false);
                 }
                 Task::none()
@@ -3445,7 +3466,7 @@ impl App {
                 let idx = topic
                     .and_then(|t| TOPICS.iter().position(|x| x.id == t))
                     .unwrap_or(0);
-                self.leave_top();
+                self.leave_top(false);
                 let page = self.new_page(Body::Home(Home {
                     topic: idx,
                     chips: Vec::new(),

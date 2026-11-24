@@ -172,12 +172,12 @@ pub(crate) fn command(json: &str) {
 }
 
 /// The sequence number of the newest mark; [`wait_mark`] waits for marks after a given one.
-pub fn mark_seq() -> u64 {
+pub(crate) fn mark_seq() -> u64 {
     metrics().seq.load(Ordering::Acquire)
 }
 
 /// Block until `name` is marked with a sequence number above `after`. Returns its time, or `None` on timeout.
-pub fn wait_mark(name: &str, after: u64, timeout: Duration) -> Option<f64> {
+pub(crate) fn wait_mark(name: &str, after: u64, timeout: Duration) -> Option<f64> {
     let deadline = Instant::now() + timeout;
     let mut s = lock();
     loop {
@@ -194,7 +194,7 @@ pub fn wait_mark(name: &str, after: u64, timeout: Duration) -> Option<f64> {
 }
 
 /// Start a named phase (ending the previous one).
-pub fn phase(name: &str) {
+pub(crate) fn phase(name: &str) {
     let (t, cpu, rss) = (now(), cpu_seconds(), rss_bytes());
     let video = metrics().video_frames.load(Ordering::Relaxed);
     let mut s = lock();
@@ -234,7 +234,7 @@ fn percentile(sorted: &[f64], p: f64) -> f64 {
 }
 
 /// Everything recorded so far, as JSON.
-pub fn report() -> Value {
+pub(crate) fn report() -> Value {
     phase("");
     let s = lock();
     let frames = &s.frames;

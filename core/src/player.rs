@@ -25,12 +25,15 @@ mod video_surface;
 #[cfg(target_os = "linux")]
 pub use video_surface::VideoSurface;
 
-#[allow(non_camel_case_types)]
+/// libmpv's C types, named the Rust way: MpvHandle = mpv_handle, MpvRenderContext =
+/// mpv_render_context, MpvRenderParam = mpv_render_param, MpvEvent = mpv_event, and
+/// MpvEventProperty / MpvEventStartFile / MpvEventEndFile = mpv_event_property / _start_file /
+/// _end_file. Layouts are unchanged (`#[repr(C)]`); only the Rust names differ.
 mod ffi {
     use std::ffi::{c_char, c_int, c_void};
 
-    pub enum mpv_handle {}
-    pub enum mpv_render_context {}
+    pub enum MpvHandle {}
+    pub enum MpvRenderContext {}
 
     pub const FORMAT_FLAG: c_int = 3;
     pub const FORMAT_DOUBLE: c_int = 5;
@@ -56,7 +59,7 @@ mod ffi {
     pub const RENDER_UPDATE_FRAME: u64 = 1;
 
     #[repr(C)]
-    pub struct mpv_event {
+    pub struct MpvEvent {
         pub event_id: c_int,
         pub error: c_int,
         pub reply_userdata: u64,
@@ -64,25 +67,25 @@ mod ffi {
     }
 
     #[repr(C)]
-    pub struct mpv_event_property {
+    pub struct MpvEventProperty {
         pub name: *const c_char,
         pub format: c_int,
         pub data: *mut c_void,
     }
 
     #[repr(C)]
-    pub struct mpv_event_start_file {
+    pub struct MpvEventStartFile {
         pub playlist_entry_id: i64,
     }
 
     #[repr(C)]
-    pub struct mpv_event_end_file {
+    pub struct MpvEventEndFile {
         pub reason: c_int,
         pub error: c_int,
     }
 
     #[repr(C)]
-    pub struct mpv_render_param {
+    pub struct MpvRenderParam {
         pub kind: c_int,
         pub data: *mut c_void,
     }
@@ -92,7 +95,6 @@ mod ffi {
     /// whether or not a video is ever played.
     macro_rules! mpv_api {
         ($( fn $name:ident($($arg:ident: $ty:ty),*) $(-> $ret:ty)?; )*) => {
-            #[allow(non_snake_case)]
             struct Api {
                 $( $name: unsafe extern "C" fn($($ty),*) $(-> $ret)?, )*
             }
@@ -180,25 +182,26 @@ mod ffi {
     }
 
     mpv_api! {
-        fn mpv_create() -> *mut mpv_handle;
-        fn mpv_initialize(ctx: *mut mpv_handle) -> c_int;
-        fn mpv_terminate_destroy(ctx: *mut mpv_handle);
-        fn mpv_set_option_string(ctx: *mut mpv_handle, name: *const c_char, data: *const c_char) -> c_int;
-        fn mpv_command(ctx: *mut mpv_handle, args: *mut *const c_char) -> c_int;
-        fn mpv_command_async(ctx: *mut mpv_handle, reply_userdata: u64, args: *mut *const c_char) -> c_int;
-        fn mpv_abort_async_command(ctx: *mut mpv_handle, reply_userdata: u64);
-        fn mpv_set_property(ctx: *mut mpv_handle, name: *const c_char, format: c_int, data: *mut c_void) -> c_int;
-        fn mpv_get_property_string(ctx: *mut mpv_handle, name: *const c_char) -> *mut c_char;
+        fn mpv_create() -> *mut MpvHandle;
+        fn mpv_initialize(ctx: *mut MpvHandle) -> c_int;
+        fn mpv_terminate_destroy(ctx: *mut MpvHandle);
+        fn mpv_set_option_string(ctx: *mut MpvHandle, name: *const c_char, data: *const c_char) -> c_int;
+        fn mpv_command(ctx: *mut MpvHandle, args: *mut *const c_char) -> c_int;
+        fn mpv_command_async(ctx: *mut MpvHandle, reply_userdata: u64, args: *mut *const c_char) -> c_int;
+        fn mpv_abort_async_command(ctx: *mut MpvHandle, reply_userdata: u64);
+        fn mpv_set_property(ctx: *mut MpvHandle, name: *const c_char, format: c_int, data: *mut c_void) -> c_int;
+        fn mpv_get_property_string(ctx: *mut MpvHandle, name: *const c_char) -> *mut c_char;
         fn mpv_free(data: *mut c_void);
-        fn mpv_observe_property(ctx: *mut mpv_handle, id: u64, name: *const c_char, format: c_int) -> c_int;
-        fn mpv_wait_event(ctx: *mut mpv_handle, timeout: f64) -> *mut mpv_event;
+        fn mpv_observe_property(ctx: *mut MpvHandle, id: u64, name: *const c_char, format: c_int) -> c_int;
+        fn mpv_wait_event(ctx: *mut MpvHandle, timeout: f64) -> *mut MpvEvent;
         fn mpv_error_string(error: c_int) -> *const c_char;
-        fn mpv_render_context_create(res: *mut *mut mpv_render_context, mpv: *mut mpv_handle, params: *mut mpv_render_param) -> c_int;
-        fn mpv_render_context_set_update_callback(ctx: *mut mpv_render_context, callback: Option<unsafe extern "C" fn(*mut c_void)>, callback_ctx: *mut c_void);
-        fn mpv_render_context_update(ctx: *mut mpv_render_context) -> u64;
-        fn mpv_render_context_render(ctx: *mut mpv_render_context, params: *mut mpv_render_param) -> c_int;
-        fn mpv_render_context_report_swap(ctx: *mut mpv_render_context);
-        fn mpv_render_context_free(ctx: *mut mpv_render_context);
+        fn mpv_render_context_create(res: *mut *mut MpvRenderContext, mpv: *mut MpvHandle, params: *mut MpvRenderParam) -> c_int;
+        fn mpv_render_context_set_update_callback(ctx: *mut MpvRenderContext, callback: Option<unsafe extern "C" fn(*mut c_void)>, callback_ctx: *mut c_void);
+        fn mpv_render_context_update(ctx: *mut MpvRenderContext) -> u64;
+        fn mpv_render_context_get_info(ctx: *mut MpvRenderContext, param: MpvRenderParam) -> c_int;
+        fn mpv_render_context_render(ctx: *mut MpvRenderContext, params: *mut MpvRenderParam) -> c_int;
+        fn mpv_render_context_report_swap(ctx: *mut MpvRenderContext);
+        fn mpv_render_context_free(ctx: *mut MpvRenderContext);
     }
 }
 
@@ -293,7 +296,7 @@ impl PlaybackState {
 pub struct VideoFrame {
     pub width: u32,
     pub height: u32,
-    pub format: PixelFormat,
+    format: PixelFormat,
     /// Increases by one with every frame this player renders.
     pub generation: u64,
     buf: AlignedBuf,
@@ -302,11 +305,6 @@ pub struct VideoFrame {
 impl VideoFrame {
     pub fn pixels(&self) -> &[u8] {
         &self.buf.as_slice()[..(self.width * self.height * 4) as usize]
-    }
-
-    /// The pixels as `Bytes` that keep this frame alive, without copying.
-    pub fn to_bytes(self: &Arc<Self>) -> bytes::Bytes {
-        bytes::Bytes::from_owner(FrameBytes(self.clone()))
     }
 }
 
@@ -317,14 +315,6 @@ impl std::fmt::Debug for VideoFrame {
             "VideoFrame({}x{} {:?} #{})",
             self.width, self.height, self.format, self.generation
         )
-    }
-}
-
-struct FrameBytes(Arc<VideoFrame>);
-
-impl AsRef<[u8]> for FrameBytes {
-    fn as_ref(&self) -> &[u8] {
-        self.0.pixels()
     }
 }
 
@@ -397,9 +387,12 @@ struct Shared {
     accept_frames: AtomicBool,
     /// mpv reported `playback-restart` for the current file (its first frame is decoded).
     /// Cleared with `accept_frames` on every load and stop.
-    pub(crate) restarted: AtomicBool,
+    restarted: AtomicBool,
+    /// Bumped (under the frame lock) by every `clear_frame`, so a render that began for the
+    /// previous file is never counted for the next one.
+    file_epoch: AtomicU64,
     /// GPU-surface swaps that carried a decoded frame of the current file since its restart.
-    pub(crate) presented: AtomicU64,
+    presented: AtomicU64,
     /// The viewer's quality choice: `None` is Auto (from the drawn size), `Some(h)` a fixed height.
     quality: Mutex<Option<u32>>,
     /// Automatic recoveries used for the current video (expired link, dropped connection).
@@ -427,7 +420,7 @@ struct Shared {
     #[cfg(target_os = "linux")]
     surface: Mutex<Option<video_surface::Slot>>,
     /// Pinged on every state change the desktop (MPRIS) may care about.
-    pub(crate) changed: tokio::sync::Notify,
+    changed: tokio::sync::Notify,
 }
 
 /// Counters for the benchmark report.
@@ -443,6 +436,7 @@ impl Shared {
     fn clear_frame(&self) {
         let mut slot = self.frame.lock().unwrap_or_else(|e| e.into_inner());
         self.accept_frames.store(false, Ordering::Release);
+        self.file_epoch.fetch_add(1, Ordering::AcqRel);
         self.restarted.store(false, Ordering::Release);
         self.presented.store(0, Ordering::Release);
         self.lock_state().video_size = None;
@@ -512,13 +506,13 @@ impl Shared {
     }
 }
 
-struct Handle(*mut ffi::mpv_handle);
+struct Handle(*mut ffi::MpvHandle);
 // SAFETY: the libmpv client API is thread-safe; a handle may be used from any thread.
 unsafe impl Send for Handle {}
 // SAFETY: as above.
 unsafe impl Sync for Handle {}
 
-struct RenderCtx(*mut ffi::mpv_render_context);
+struct RenderCtx(*mut ffi::MpvRenderContext);
 // SAFETY: the render context is used from the render thread only after creation.
 unsafe impl Send for RenderCtx {}
 
@@ -585,7 +579,6 @@ fn set_flag_raw(mpv: &Handle, name: &str, on: bool) {
 pub struct Player {
     mpv: Arc<Handle>,
     shared: Arc<Shared>,
-    format: PixelFormat,
     render_thread: Option<JoinHandle<()>>,
     event_thread: Option<JoinHandle<()>>,
 }
@@ -796,6 +789,7 @@ impl Player {
             shutdown: AtomicBool::new(false),
             accept_frames: AtomicBool::new(false),
             restarted: AtomicBool::new(false),
+            file_epoch: AtomicU64::new(0),
             presented: AtomicU64::new(0),
             quality: Mutex::new(None),
             recoveries: AtomicU64::new(0),
@@ -849,7 +843,6 @@ impl Player {
         Ok(Player {
             mpv,
             shared,
-            format,
             render_thread: Some(render_thread),
             event_thread: Some(event_thread),
         })
@@ -858,10 +851,6 @@ impl Player {
     /// Replace the waker (for toolkits that only get a waker after the player exists).
     pub fn set_waker(&self, waker: impl Fn() + Send + Sync + 'static) {
         *self.shared.waker.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(waker));
-    }
-
-    pub fn format(&self) -> PixelFormat {
-        self.format
     }
 
     fn command(&self, args: &[&str]) -> Result<()> {
@@ -921,7 +910,11 @@ impl Player {
             && std::env::var("NT_VIDEO_OVERRIDE").map_or(true, |p| p.is_empty())
         {
             let id = video_id.to_owned();
-            let task = crate::runtime().spawn(async move {
+            // Preparing is an optimisation: without a runtime there is simply nothing prepared.
+            let Ok(rt) = crate::client::try_runtime() else {
+                return;
+            };
+            let task = rt.spawn(async move {
                 let streams = crate::resolve::resolve(&id, height).await?;
                 Ok((streams, Instant::now()))
             });
@@ -969,8 +962,6 @@ impl Player {
         }
         self.set_flag("pause", false);
         let _ = self.command(&["set", "loop-file", "no"]);
-        // Unload the old file before resolving; a switch can reuse the active input.
-        let _ = self.command(&["stop"]);
         let local = std::env::var("NT_VIDEO_OVERRIDE")
             .ok()
             .filter(|path| !path.is_empty())
@@ -982,6 +973,10 @@ impl Player {
                     start,
                 )
             });
+        if local.is_none() {
+            // Stop during a network resolve. A local replacement can go straight to loadfile.
+            let _ = self.command(&["stop"]);
+        }
         drop(guard);
         self.shared.wake();
         if let Some(result) = local {
@@ -1690,7 +1685,15 @@ fn begin_load(
     } else {
         None
     };
-    crate::client::runtime().spawn(async move {
+    let rt = match crate::client::try_runtime() {
+        Ok(rt) => rt,
+        Err(e) => {
+            shared.lock_state().status = Status::Failed(e.to_string());
+            shared.wake();
+            return;
+        }
+    };
+    rt.spawn(async move {
         let prepared = if let Some(task) = candidate
             && let Ok(Ok((streams, at))) = task.await
             && at.elapsed() < std::time::Duration::from_secs(300)
@@ -1768,7 +1771,7 @@ fn event_loop(mpv: Arc<Handle>, shared: Arc<Shared>) {
             }
             ffi::EVENT_START_FILE if !ev.data.is_null() => {
                 // SAFETY: START_FILE carries an mpv_event_start_file on libmpv 2.
-                let start = unsafe { &*ev.data.cast::<ffi::mpv_event_start_file>() };
+                let start = unsafe { &*ev.data.cast::<ffi::MpvEventStartFile>() };
                 started_entry = Some(start.playlist_entry_id);
                 let _guard = shared.worker_cmd.lock().unwrap_or_else(|e| e.into_inner());
                 if started_entry == current_playlist_entry(&mpv) {
@@ -1802,6 +1805,7 @@ fn event_loop(mpv: Arc<Handle>, shared: Arc<Shared>) {
                         shared.lock_state().selected_captions = None;
                     }
                     shared.accept_frames.store(true, Ordering::Release);
+                    shared.signal_render();
                 } else {
                     // Refresh at restart even if neither dimension changed from the last file.
                     let size = video_display_size(&mpv);
@@ -1823,7 +1827,7 @@ fn event_loop(mpv: Arc<Handle>, shared: Arc<Shared>) {
             ffi::EVENT_END_FILE if !ev.data.is_null() => {
                 started_entry = None;
                 // SAFETY: END_FILE carries an mpv_event_end_file.
-                let end = unsafe { &*(ev.data as *const ffi::mpv_event_end_file) };
+                let end = unsafe { &*(ev.data as *const ffi::MpvEventEndFile) };
                 let mut s = shared.lock_state();
                 s.video_size = None;
                 // A stream link that expired or a connection that dropped ends the file with an
@@ -1857,7 +1861,7 @@ fn event_loop(mpv: Arc<Handle>, shared: Arc<Shared>) {
             }
             ffi::EVENT_PROPERTY_CHANGE if !ev.data.is_null() => {
                 // SAFETY: PROPERTY_CHANGE carries an mpv_event_property.
-                let prop = unsafe { &*(ev.data as *const ffi::mpv_event_property) };
+                let prop = unsafe { &*(ev.data as *const ffi::MpvEventProperty) };
                 wake = apply_property(&shared, ev.reply_userdata as usize, prop);
                 if wake
                     && OBSERVED
@@ -1876,7 +1880,7 @@ fn event_loop(mpv: Arc<Handle>, shared: Arc<Shared>) {
 }
 
 /// Fold one observed property into the state. Returns whether the UI should hear about it.
-fn apply_property(shared: &Shared, index: usize, prop: &ffi::mpv_event_property) -> bool {
+fn apply_property(shared: &Shared, index: usize, prop: &ffi::MpvEventProperty) -> bool {
     let Some((name, _)) = OBSERVED.get(index) else {
         return false;
     };
@@ -1949,11 +1953,11 @@ fn render_size(video: (u32, u32), target: (u32, u32)) -> (u32, u32) {
 fn software_context(mpv: &Handle, shared: &Arc<Shared>) -> Result<RenderCtx> {
     let api = cstr("sw");
     let mut params = [
-        ffi::mpv_render_param {
+        ffi::MpvRenderParam {
             kind: ffi::RENDER_PARAM_API_TYPE,
             data: api.as_ptr().cast_mut().cast(),
         },
-        ffi::mpv_render_param {
+        ffi::MpvRenderParam {
             kind: ffi::RENDER_PARAM_INVALID,
             data: std::ptr::null_mut(),
         },
@@ -1964,7 +1968,7 @@ fn software_context(mpv: &Handle, shared: &Arc<Shared>) -> Result<RenderCtx> {
 fn create_context(
     mpv: &Handle,
     shared: &Arc<Shared>,
-    params: &mut [ffi::mpv_render_param],
+    params: &mut [ffi::MpvRenderParam],
 ) -> Result<RenderCtx> {
     let mut ctx = std::ptr::null_mut();
     // SAFETY: mpv is live, and the private callers provide a terminated parameter list.
@@ -2041,8 +2045,11 @@ fn reconfigure_video(mpv: &Handle, shared: &Shared, gpu: bool) {
 fn render_loop(ctx: RenderCtx, _mpv: Arc<Handle>, shared: Arc<Shared>, format: PixelFormat) {
     #[cfg(target_os = "linux")]
     let mut gpu = None;
-    #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
+    // Only the Linux GPU path hands the software context over (takes it), so only it needs `mut`.
+    #[cfg(target_os = "linux")]
     let mut software = Some(ctx);
+    #[cfg(not(target_os = "linux"))]
+    let software = Some(ctx);
     let fmt = cstr(match format {
         PixelFormat::Rgba => "rgb0",
         PixelFormat::Bgra => "bgr0",
@@ -2119,23 +2126,23 @@ fn render_loop(ctx: RenderCtx, _mpv: Arc<Handle>, shared: Arc<Shared>, format: P
         let mut size = [w as c_int, h as c_int];
         let mut stride: usize = (w * 4) as usize;
         let mut params = [
-            ffi::mpv_render_param {
+            ffi::MpvRenderParam {
                 kind: ffi::RENDER_PARAM_SW_SIZE,
                 data: size.as_mut_ptr().cast(),
             },
-            ffi::mpv_render_param {
+            ffi::MpvRenderParam {
                 kind: ffi::RENDER_PARAM_SW_FORMAT,
                 data: fmt.as_ptr() as *mut c_void,
             },
-            ffi::mpv_render_param {
+            ffi::MpvRenderParam {
                 kind: ffi::RENDER_PARAM_SW_STRIDE,
                 data: (&raw mut stride).cast(),
             },
-            ffi::mpv_render_param {
+            ffi::MpvRenderParam {
                 kind: ffi::RENDER_PARAM_SW_POINTER,
                 data: f.buf.as_mut_slice().as_mut_ptr().cast(),
             },
-            ffi::mpv_render_param {
+            ffi::MpvRenderParam {
                 kind: ffi::RENDER_PARAM_INVALID,
                 data: std::ptr::null_mut(),
             },

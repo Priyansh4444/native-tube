@@ -146,7 +146,10 @@ fn update_surface(app: &App, window: Rectangle) -> Option<Rectangle> {
     // Only a real decoded frame of this load counts (`presented_frames`); the surface also
     // reports presenting after the black render it maps with, which would flash black.
     let real_frame = crate::ext::existing_player().is_some_and(|p| p.presented_frames() > 0);
-    if !matches!(app.play.status, Status::Ready | Status::Ended) || !real_frame {
+    if !matches!(app.play.status, Status::Ready | Status::Ended)
+        || !surface.is_presenting()
+        || !real_frame
+    {
         return None;
     }
     watch.first_frame.set(true);

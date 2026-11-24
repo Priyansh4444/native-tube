@@ -36,7 +36,14 @@ cd apps/iced   # or apps/gpui, apps/rune
 cargo run --release
 ```
 
-`./check.sh` runs the lint gate: `cargo fmt --check` and Clippy with warnings as errors.
+## Lint gate
+
+Run `./check.sh` for rustfmt, Clippy, and Hawk. The first run downloads the pinned
+[Hawk 0.1.17 release](https://github.com/astral-sh/hawk/releases/tag/0.1.17) from
+GitHub, checks its SHA-256 digest, and caches it in `.cache/hawk/0.1.17/`.
+Hawk uses Rust 1.99.0, which the gate installs through rustup if needed. Subsequent
+runs reuse the cached copy. For an offline run without the Hawk cache, use
+`NT_SKIP_HAWK=1 ./check.sh` to run rustfmt and Clippy.
 
 ## How it talks to YouTube
 

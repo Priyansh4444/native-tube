@@ -38,6 +38,11 @@ struct Ctx<'a> {
 }
 
 impl Ctx<'_> {
+    /// The pointer is on this row of the page (its hover preview is the active one).
+    fn hovered(&self, index: usize) -> bool {
+        self.preview.as_ref().is_some_and(|(i, _)| *i == index)
+    }
+
     fn image(&mut self, url: Option<&str>, w: f32, cx: &mut Cx) -> Option<Arc<RenderImage>> {
         let url = url.filter(|u| !u.is_empty())?;
         if !self.request_images {
@@ -186,6 +191,9 @@ fn verified(
     color: gpui::Hsla,
     on: bool,
 ) -> Div {
+    if !on {
+        return line(name, size, lh, weight, color).min_w(px(0.0));
+    }
     div()
         .flex()
         .items_center()
@@ -213,9 +221,11 @@ fn video_badges(v: &Video) -> Option<Div> {
 }
 
 /// The "⋮" button shown on hover; it opens the card menu at the pointer.
+/// `group`: shown while that group is hovered; `None`: shown (the caller draws it only on the
+/// hovered row).
 fn more_button(
     id: impl Into<gpui::ElementId>,
-    group: &'static str,
+    group: Option<&'static str>,
     page: PageId,
     index: usize,
     cx: &mut Cx,
@@ -231,8 +241,9 @@ fn more_button(
         .items_center()
         .justify_center()
         .rounded_full()
-        .opacity(0.0)
-        .group_hover(group, |s| s.opacity(1.0))
+        .when_some(group, |d, group| {
+            d.opacity(0.0).group_hover(group, |s| s.opacity(1.0))
+        })
         .hover(|s| s.bg(fill()))
         .cursor_pointer()
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -393,18 +404,23 @@ impl NtApp {
             Kind::Home { topic } => Some(topic),
             _ => None,
         };
-        // Build the viewport plus one viewport of overscan (half above, half below); request
-        // images a full viewport beyond the screen without building those rows.
+        // Feed rows are rebuilt on every scroll frame, so only build rows that can paint.
+        // Prefetch images beyond the viewport without building their interactive trees.
+        // Watch keeps its existing overscan for the player and related content.
         let (blocks, prefetch, content_h) = match &page.layout {
             Some((_, lay)) => {
-                let (a, b) = (offset - vh * 0.5, offset + vh * 1.5);
-                let built: Vec<Block> = lay.visible(a, b).cloned().collect();
+                let (a, b) = if watch {
+                    (offset - vh * 0.5, offset + vh * 1.5)
+                } else {
+                    // The hover background extends 8 px beyond a card.
+                    (offset - 8.0, offset + vh + 8.0)
+                };
+                let built: Vec<_> = lay.visible(a, b).collect();
                 let pre = if watch {
                     Vec::new()
                 } else {
                     lay.visible(offset - vh, offset + 2.0 * vh)
                         .filter(|bl| bl.y + bl.h <= a || bl.y >= b)
-                        .cloned()
                         .collect()
                 };
                 (built, pre, lay.content_h)
@@ -427,7 +443,7 @@ impl NtApp {
                 .filter(|(id, _)| *id == page.id)
                 .map(|(_, index)| (*index, self.preview.clone())),
         };
-        for b in &prefetch {
+        for b in prefetch {
             prefetch_images(&mut ctx, b, cx);
         }
         let mut area = div()
@@ -449,7 +465,7 @@ impl NtApp {
                     window.focus(&this.focus, cx);
                 }),
             );
-        for b in &blocks {
+        for b in blocks {
             ctx.tab = b.y + b.h > offset && b.y < offset + vh;
             // Related rows are cheap to build, but rapid Watch navigation rarely visits the
             // second viewport. Give visible posters and one or two rows of lead time priority.
@@ -1699,8 +1715,11 @@ fn card(ctx: &mut Ctx, index: usize, w: f32, show_avatar: bool, cx: &mut Cx) -> 
         .right(px(-8.0))
         .bottom(px(-8.0))
         .rounded(px(12.0))
-        .group_hover("card", |s| s.bg(c(0x272727)));
+        .bg(c(0x272727));
     let hover_id = v.id.clone();
+    // The plate and "⋮" exist only on the hovered card: every visible card is rebuilt on each
+    // scroll frame, so elements that are invisible most of the time are worth leaving out.
+    let hovered = ctx.hovered(index);
     div()
         .id(("card", index))
         .on_hover(cx.listener(move |a, active: &bool, _, cx| {
@@ -1710,7 +1729,7 @@ fn card(ctx: &mut Ctx, index: usize, w: f32, show_avatar: bool, cx: &mut Cx) -> 
         .children(target(cx, Layer::Page, "card", v.title.as_str()))
         .group("card")
         .relative()
-        .child(plate)
+        .when(hovered, |d| d.child(plate))
         .on_mouse_down(
             MouseButton::Right,
             cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
@@ -1756,13 +1775,9 @@ fn card(ctx: &mut Ctx, index: usize, w: f32, show_avatar: bool, cx: &mut Cx) -> 
                                 .child(line(meta_line(v), 14.0, 20.0, W400, text2()).min_w(px(0.0)))
                                 .children(video_badges(v)),
                         )
-                        .child(more_button(
-                            ("card-more", index),
-                            "card",
-                            page_id,
-                            index,
-                            cx,
-                        )),
+                        .when(hovered, |d| {
+                            d.child(more_button(("card-more", index), None, page_id, index, cx))
+                        }),
                 ),
         )
         .into_any_element()
@@ -1925,7 +1940,9 @@ fn list_row(ctx: &mut Ctx, index: usize, w: f32, h: f32, cx: &mut Cx) -> AnyElem
                 .children(snippet)
                 .children(video_badges(v))
                 .children(moment)
-                .child(more_button(("row-more", index), "row", page_id, index, cx)),
+                .when(ctx.hovered(index), |d| {
+                    d.child(more_button(("row-more", index), None, page_id, index, cx))
+                }),
         )
         .into_any_element()
 }
@@ -1980,7 +1997,13 @@ fn compact_row(ctx: &mut Ctx, index: usize, cx: &mut Cx) -> AnyElement {
                     v.channel_verified,
                 ))
                 .child(line(meta_line(v), 12.0, 18.0, W400, text2()))
-                .child(more_button(("rel-more", index), "rel", page_id, index, cx)),
+                .child(more_button(
+                    ("rel-more", index),
+                    Some("rel"),
+                    page_id,
+                    index,
+                    cx,
+                )),
         )
         .into_any_element()
 }

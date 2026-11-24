@@ -3,5 +3,7 @@ target/
 apps/*/shots/*.png
 bench/results/raw/
 .cache/
+__pycache__/
+*.py[cod]
 bench/results/*/data/
 bench/results/**/*.png

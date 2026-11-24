@@ -79,7 +79,9 @@
 
 ## Video
 
-- The main `Player` warms on a worker after the first window frame. The software path uses `PixelFormat::Rgba`.
+- The main `Player` warms on a worker 250 ms after Home is drawn. On Wayland the window
+  thread then attaches the GPU surface. `NT_NO_PREWARM` skips both startup steps.
+  The software path uses `PixelFormat::Rgba`.
   iced's image API is straight RGBA (`image::Handle::from_rgba`).
 - **Getting a frame:** the player's waker sends a coalesced message. If `frame_generation()`
   changed, `update` keeps the new `Arc<VideoFrame>` without copying it, and the rebuilt watch
@@ -286,7 +288,7 @@ Escape. The independent repros and proposed upstream changes are in `shells/iced
   `NT_TEST_FULLSCREEN=1`.
 - **Idle memory on Home (perf gate).** The GPU surface was attached as soon as the player
   warmed up, which loads EGL with both GL vendors (NVIDIA eglcore/glcore, Mesa gallium and
-  LLVM). That came to about 38 MiB PSS before any video played. It now attaches on the first
+  LLVM). That came to about 38 MiB PSS before any video played. We moved attach to the first
   sign of playback: a hover dwell or press on a card (with the preload), or the open itself.
   In that last case the page opens once the attach is done (about 60 ms), and the streams
   resolve meanwhile through `prepare_next`. A/B on NT-ICED against 2caf0fa (fixtures, 2 s
@@ -298,6 +300,14 @@ Escape. The independent repros and proposed upstream changes are in `shells/iced
   click pay for loading libmpv). Home → content rose from about 22 ms after the first frame to
   about 88 ms: core's `home_feed` asks for FEwhat_to_watch, which is empty logged out, and
   only then fetches the topic mix.
+- **GPU prewarm after EGL vendor selection (2026-11-24).** Core now selects the compositor's
+  EGL vendor at startup. With the extra driver gone, iced attaches the hidden Wayland surface
+  after Home draws. The first click can adopt an attach already in progress and resolve its
+  streams while it waits. Failed attaches continue through software playback.
+  The three-run fixture gate passed all 14 budgets against `2caf0fa`. Median open → first
+  frame was 112.1 ms (94.5 ms baseline, 209.8 ms on the earlier deferred-attach run).
+  Idle PSS was 162.14 MiB (119.71 MiB baseline, +42.43 MiB of the allowed +48).
+  See `.cache/perf/out/compare-F70v7wbg/summary.md`.
 - **Review fixes (2026-11-20).**
   - A first comments page that has a cursor but no parsed comments used to make the next
     request reuse the watch page's cursor and replay page 1. `comments_started` now records
