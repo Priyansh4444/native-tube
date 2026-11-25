@@ -37,6 +37,9 @@ pub fn flush_marks() {
     let mut m = PENDING_MARKS.lock().unwrap_or_else(|e| e.into_inner());
     for name in m.drain(..) {
         nt_core::metrics::mark(name);
+        if name == nt_core::metrics::marks::HOME_LOADED {
+            crate::video::prewarm();
+        }
     }
 }
 
@@ -2081,7 +2084,11 @@ impl App {
                 let want = w.comments_state == Load::Idle
                     && if !w.comments_started {
                         w.info.as_ref().is_some_and(|info| info.comments.is_some())
-                            && near(comments_top)
+                            && nt_core::policy::comments_due(
+                                f64::from(comments_top),
+                                f64::from(target),
+                                f64::from(g.vh),
+                            )
                     } else {
                         w.comments_next.is_some()
                             && w.comments_state == Load::Idle

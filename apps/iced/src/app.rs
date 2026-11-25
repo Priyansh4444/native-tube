@@ -20,6 +20,7 @@ use iced::widget::image::Handle as ImageHandle;
 use iced::{Point, Size, Subscription, Task, event, mouse, window};
 use nt_core::autopilot::Command;
 use nt_core::metrics::marks;
+use nt_core::policy::Prewarm;
 use nt_core::{
     ChannelInfo, ChannelRef, Comment, CommentPage, Continuation, PlaybackState, SearchFilter,
     SearchNotice, SearchPage, SearchResult, Status, TOPICS, Video, VideoFrame, WatchInfo, client,
@@ -549,6 +550,8 @@ pub struct App {
     pub want_playback_mark: Cell<bool>,
     pub surface_visible: Cell<bool>,
     surface: SurfaceState,
+    /// What starts ahead of the first click (`NT_PREWARM`; iced ships `full`).
+    prewarm: Prewarm,
     pub player_error: Option<String>,
     pub fullscreen: bool,
     pub fullscreen_scroll: ScrollModel,
@@ -657,6 +660,7 @@ impl App {
             want_playback_mark: Cell::new(false),
             surface_visible: Cell::new(false),
             surface: SurfaceState::default(),
+            prewarm: Prewarm::for_process(Prewarm::Full),
             player_error: None,
             fullscreen: false,
             fullscreen_scroll: ScrollModel::default(),
@@ -701,7 +705,7 @@ impl App {
             .and_then(window::scale_factor)
             .map(Message::Scale);
         let id = window::latest().map(Message::WindowId);
-        (app, Task::batch([task, scale, id]))
+        (app, Task::batch([task, scale, id, ext::autopilot()]))
     }
 
     /// The page on top. The stack is never empty (every path that pops keeps the root).
@@ -1567,6 +1571,7 @@ impl App {
         let id = page.id;
         let near = page.scroll.near_end();
         let (offset, vh) = (page.scroll.offset(), page.scroll.viewport().height);
+        let heading = page.scroll.heading();
         let feed = match &mut page.body {
             Body::Home(h) if h.load == Load::Ready => Some((&mut h.feed, h.req)),
             Body::Search(s) if s.load == Load::Ready => {
@@ -1587,7 +1592,11 @@ impl App {
             }
             Body::Channel(c) if c.load == Load::Ready => Some((&mut c.feed, c.req)),
             Body::Watch(w) => {
-                let near_comments = w.comments_y.get() <= offset + 2.5 * vh;
+                let near_comments = nt_core::policy::comments_due(
+                    f64::from(w.comments_y.get()),
+                    f64::from(heading),
+                    f64::from(vh),
+                );
                 let go = match w.comments_state {
                     Comments::NotStarted => near_comments && w.load == Load::Ready,
                     Comments::Idle => near && w.comments_next.is_some(),
@@ -1877,7 +1886,28 @@ impl App {
                 Task::none()
             }
             Message::Ext(Ext::Player) => self.on_player(),
-            Message::Ext(Ext::PlayerReady) => self.init_surface(),
+            Message::Ext(Ext::PlayerReady) => {
+                if self.prewarm.surface() && matches!(self.surface, SurfaceState::Unrequested) {
+                    nt_core::policy::trace("surface");
+                    self.init_surface()
+                } else {
+                    Task::none()
+                }
+            }
+            Message::Ext(Ext::Presented { marks, recheck }) => {
+                for name in marks {
+                    nt_core::metrics::mark(name);
+                    crate::scroller::trace_event(name);
+                    if name == nt_core::metrics::marks::HOME_LOADED {
+                        ext::prewarm(self.prewarm);
+                    }
+                }
+                if recheck {
+                    self.maybe_more()
+                } else {
+                    Task::none()
+                }
+            }
             Message::SurfaceAttached => {
                 if let SurfaceState::Attaching(Some(open)) =
                     std::mem::replace(&mut self.surface, SurfaceState::Finished)
@@ -3529,7 +3559,6 @@ impl App {
     pub fn subscription(&self) -> Subscription<Message> {
         Subscription::batch([
             Subscription::run(ext::events),
-            Subscription::run(ext::autopilot),
             event::listen_with(|e, status, id| match e {
                 iced::Event::Window(window::Event::Resized(s)) => Some(Message::WindowSize(s)),
                 iced::Event::Window(window::Event::Opened { size, .. }) => {

@@ -43,6 +43,8 @@ struct Phase {
     video_end: u64,
     rss_peak: u64,
     rss_end: u64,
+    /// core's decoded image cache when the phase ended.
+    images_end: usize,
 }
 
 struct State {
@@ -196,6 +198,7 @@ pub(crate) fn wait_mark(name: &str, after: u64, timeout: Duration) -> Option<f64
 /// Start a named phase (ending the previous one).
 pub(crate) fn phase(name: &str) {
     let (t, cpu, rss) = (now(), cpu_seconds(), rss_bytes());
+    let images = crate::images::cached_bytes();
     let video = metrics().video_frames.load(Ordering::Relaxed);
     let mut s = lock();
     let frames = s.frames.len();
@@ -207,6 +210,7 @@ pub(crate) fn phase(name: &str) {
         p.frame_end = frames;
         p.video_end = video;
         p.rss_end = rss;
+        p.images_end = images;
     }
     if !name.is_empty() {
         s.phases.push(Phase {
@@ -221,6 +225,7 @@ pub(crate) fn phase(name: &str) {
             video_end: video,
             rss_peak: rss,
             rss_end: rss,
+            images_end: images,
         });
     }
 }
@@ -264,6 +269,7 @@ pub(crate) fn report() -> Value {
                 "video_frames_rendered": p.video_end - p.video_start,
                 "rss_mb_end": p.rss_end as f64 / 1048576.0,
                 "rss_mb_peak": p.rss_peak as f64 / 1048576.0,
+                "image_cache_mb_end": p.images_end as f64 / 1048576.0,
             })
         })
         .collect();

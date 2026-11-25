@@ -38,6 +38,8 @@ pub struct Images {
     map: RefCell<HashMap<(String, u32), Entry>>,
     epoch: Cell<u64>,
     bytes: Cell<usize>,
+    /// The window has been laid out, so views know the drawn widths and the window's scale.
+    ready: Cell<bool>,
 }
 
 impl Images {
@@ -75,9 +77,20 @@ fn request(url: &str, width: u32, pixels: &Pixels, failed: &Arc<AtomicBool>) {
 }
 
 impl Images {
+    /// From the first layout on, `get` asks for images. Views before it (the window not yet
+    /// configured, the scale still the default) would ask at a width nothing draws: on a 2x
+    /// output that decoded every Home thumbnail twice, at 1x and then at 2x.
+    pub fn set_ready(&self) {
+        self.ready.set(true);
+    }
+
     /// The image at `url`, drawn `width_px` physical pixels wide. Paints nothing until it
-    /// arrives (callers draw a placeholder under it).
+    /// arrives (callers draw a placeholder under it), and asks for nothing before the window's
+    /// first layout.
     pub fn get(&self, url: &str, width_px: u32) -> Pixels {
+        if !self.ready.get() {
+            return Pixels::new();
+        }
         let width = bucket(width_px);
         let epoch = self.epoch.get();
         let mut map = self.map.borrow_mut();
@@ -135,5 +148,22 @@ impl Images {
                 self.bytes.set(self.bytes.get().saturating_sub(e.bytes));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn asks_for_nothing_before_the_first_layout() {
+        let images = Images::default();
+        // An empty URL keeps the entry but sends no request, so this runs offline.
+        let _ = images.get("", 384);
+        assert_eq!(images.census().0, 0);
+        images.set_ready();
+        let _ = images.get("", 384);
+        let _ = images.get("", 380);
+        assert_eq!(images.census().0, 1, "one entry per width bucket");
     }
 }

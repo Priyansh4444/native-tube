@@ -9,7 +9,7 @@ for tool in nt-input nt-explore; do
     cp -r "tools/$tool"/{Cargo.toml,Cargo.lock,src} "$context/tools/$tool/"
 done
 cp -r tools/nt-explore/tests "$context/tools/nt-explore/"
-cp tools/iso-test/{Dockerfile,sway.patch,start.sh,batch.py,sway.conf,explore-headless.sh,perf-sway.py} "$context/tools/iso-test/"
+cp tools/iso-test/{Dockerfile,sway.patch,start.sh,batch.py,sway.conf,explore-headless.sh,perf-sway.py,fair.py} "$context/tools/iso-test/"
 cp tools/{check-performance.py,perf-budget.json} "$context/tools/"
 cp tools/performance/*.py "$context/tools/performance/"
 cp bench/shells.py "$context/bench/"

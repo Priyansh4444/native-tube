@@ -7,6 +7,7 @@
 //! - [`Player`]: libmpv playback that hands out RGBA/BGRA frames.
 //! - [`scroll`]: Chromium's scroll physics, so every frontend scrolls the same way.
 //! - [`metrics`] and [`autopilot`]: the benchmark harness's hooks.
+//! - [`policy`]: prewarm, lazy comments and first-picture rules every frontend shares.
 
 pub mod autopilot;
 mod captions;
@@ -23,6 +24,7 @@ mod model;
 #[cfg(target_os = "linux")]
 mod mpris;
 pub mod player;
+pub mod policy;
 mod polite;
 pub mod resolve;
 pub mod scroll;

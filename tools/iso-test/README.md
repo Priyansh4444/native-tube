@@ -55,6 +55,17 @@ performance budgets and workload against release baseline binaries from `2caf0fa
 directory containing that build. Append `--smoke` for one repeat. The Sway `window:new` event
 provides the compositor map timestamp. Results measure the private Sway renderer and a focused test window.
 
+## Latest offline verification
+
+The matched benchmark binaries passed 14 automated cases in one isolated batch. I reviewed
+the five visual cases from the same run for focus rings, hover feedback, and channel thumbnails.
+An initial GPUI Shift+N failure reproduced with Wayland tracing. The private seat withdrew the
+temporary keyboard before GPUI processed the capability change. Holding that keyboard through
+the keypress let the same shortcut and next-video playback complete in three fresh runs.
+
+Local evidence is in `.cache/iso-test/out/batch-6EvyyNrX` and
+`.cache/media/closeout/shift-fixed-*.log`.
+
 ## Live captions and audio
 
 Build the app binaries from the checkout containing `open_video_id` and pass their absolute paths
@@ -76,6 +87,9 @@ Auto-translate in both iced and GPUI. The two translation checks remain unverifi
 All 55 host samples across these sessions showed both pause files present and zero test
 windows and outputs. Local evidence is in `.cache/iso-test/out/live-KTJdkAE8` and
 `.cache/iso-test/out/live-qFAj6a9B`.
+
+A later isolated retry also received HTTP 429 while checking iced auto-translate. The runner
+stopped before the GPUI attempt. Both auto-translate checks are still unverified.
 
 ## GitHub Actions equivalent
 

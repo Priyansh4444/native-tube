@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-mode=${1:?smoke, batch, live, explore or perf}
+mode=${1:?smoke, batch, live, explore, perf or fair}
 shift
 out=${NT_ISO_OUT:-/out}
 mkdir -p "$out"
@@ -32,7 +32,7 @@ case "${NT_ISO_RENDER:-intel}" in
 esac
 case "$mode" in
   live) export NT_LIVE=1 ;;
-  smoke|batch|explore|perf)
+  smoke|batch|explore|perf|fair)
     export NT_LIVE=0 NT_FIXTURE_MODE=replay NT_FIXTURES=/fixtures NT_VIDEO_OVERRIDE=/clip.mp4
     ;;
   *) exit 2 ;;
@@ -109,6 +109,8 @@ if [[ "$mode" == explore ]]; then
     done
 elif [[ "$mode" == perf ]]; then
     python -u /iso/perf-sway.py "$out" "$@"
+elif [[ "$mode" == fair ]]; then
+    python -u /iso/fair.py "$out" "$@"
 else
     python -u /iso/batch.py "$mode" "$out" "$@"
 fi

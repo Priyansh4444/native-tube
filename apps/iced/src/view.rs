@@ -2662,6 +2662,21 @@ fn retry_row<'a>(label: &'static str, message: &'a str, retry: Message) -> El<'a
 
 fn comments<'a>(app: &'a App, l: &mut LaneB<'a>, w: &'a Watch, width: f32) {
     w.comments_y.set(l.y);
+    // Laid out within reach before any scroll: check again once this frame is presented, as
+    // GPUI and Rune do after every layout.
+    if w.comments_state == Comments::NotStarted
+        && w.load == Load::Ready
+        && w.info.as_ref().is_some_and(|i| i.comments.is_some())
+        && app.top().is_some_and(|p| {
+            nt_core::policy::comments_due(
+                f64::from(l.y),
+                f64::from(p.scroll.heading()),
+                f64::from(p.scroll.viewport().height),
+            )
+        })
+    {
+        crate::scroller::recheck_after_frame();
+    }
     l.item(K_CHEAD, 0, 76.0, || {
         let label = match &w.comments_total {
             Some(n) => format!("{n} Comments"),

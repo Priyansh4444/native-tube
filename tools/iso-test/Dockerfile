@@ -16,11 +16,11 @@ RUN pacman -Syu --noconfirm --needed wtype wl-clipboard vulkan-intel intel-media
 RUN if [ -n "$(getcap /usr/bin/sway)" ]; then setcap -r /usr/bin/sway; fi
 COPY --from=builder /build/tools/nt-input/target/release/nt-input /usr/local/bin/nt-input
 COPY --from=builder /build/tools/nt-explore/target/release/nt-explore /usr/local/bin/nt-explore
-COPY tools/iso-test/start.sh tools/iso-test/batch.py tools/iso-test/perf-sway.py tools/iso-test/sway.conf /iso/
+COPY tools/iso-test/start.sh tools/iso-test/batch.py tools/iso-test/perf-sway.py tools/iso-test/fair.py tools/iso-test/sway.conf /iso/
 COPY tools/iso-test/explore-headless.sh /iso/tools/headless.sh
 COPY tools/check-performance.py tools/perf-budget.json /iso/tools/
 COPY tools/performance/ /iso/tools/performance/
 COPY bench/shells.py /iso/bench/shells.py
 WORKDIR /iso
-RUN bash -n start.sh && bash -n tools/headless.sh && python -m py_compile batch.py perf-sway.py
+RUN bash -n start.sh && bash -n tools/headless.sh && python -m py_compile batch.py perf-sway.py fair.py
 ENTRYPOINT ["/iso/start.sh"]

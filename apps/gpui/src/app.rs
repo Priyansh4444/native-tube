@@ -23,6 +23,7 @@ use gpui::{
 };
 use nt_core::autopilot::Command;
 use nt_core::metrics::{self, marks};
+use nt_core::policy::Prewarm;
 use nt_core::{ChannelTab, Job, SearchFilter, TOPICS, Video, client, library};
 use std::time::Duration;
 
@@ -101,6 +102,8 @@ pub struct NtApp {
     last_precise: bool,
     pending_marks: Vec<&'static str>,
     first_frame: bool,
+    /// Home's first draw has scheduled the prewarm (once per process).
+    prewarm_scheduled: bool,
     pub menu: Option<CardMenu>,
     pub playlist: crate::playlist::PlaylistPopup,
     pub about: Option<(Load, nt_core::ChannelAbout)>,
@@ -192,6 +195,7 @@ impl NtApp {
             last_precise: false,
             pending_marks: vec![marks::FIRST_FRAME],
             first_frame: true,
+            prewarm_scheduled: false,
             menu: None,
             playlist: Default::default(),
             about: None,
@@ -222,20 +226,6 @@ impl NtApp {
         }
         app.spawn_autopilot(window, cx);
         probe::spawn(window, cx);
-        // Shortly after start, while the user looks at Home, set up the player so the first
-        // click doesn't pay for libmpv and the GPU surface. `NT_NO_PREWARM` turns it off (as in
-        // iced and Rune), so the first open creates and attaches them instead.
-        if std::env::var_os("NT_NO_PREWARM").is_none() {
-            cx.spawn_in(window, async move |this, cx| {
-                cx.background_executor()
-                    .timer(Duration::from_millis(600))
-                    .await;
-                let _ = this.update_in(cx, |app, window, cx| {
-                    app.player.update(cx, |p, cx| p.prewarm(window, cx));
-                });
-            })
-            .detach();
-        }
         // Test-only (`NT_TEST_THEATRE=1`): start in theatre mode, for input-free layout checks.
         if std::env::var("NT_TEST_THEATRE").as_deref() == Ok("1") {
             app.theatre = true;
@@ -321,6 +311,26 @@ impl NtApp {
 
     fn is_top(&self, id: PageId) -> bool {
         self.top().is_some_and(|p| p.id == id)
+    }
+
+    /// `PREWARM_AFTER_HOME` after Home has drawn, while the user looks at it, set up what the
+    /// policy says (`NT_PREWARM`; GPUI ships `full`): libmpv, and under `full` the GPU surface
+    /// too, so the first click doesn't pay for them.
+    fn schedule_prewarm(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let policy = Prewarm::for_process(Prewarm::Full);
+        if !policy.player() || std::mem::replace(&mut self.prewarm_scheduled, true) {
+            return;
+        }
+        cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor()
+                .timer(nt_core::policy::PREWARM_AFTER_HOME)
+                .await;
+            let _ = this.update_in(cx, |app, window, cx| {
+                app.player
+                    .update(cx, |p, cx| p.prewarm(policy.surface(), window, cx));
+            });
+        })
+        .detach();
     }
 
     fn mark_if_top(&mut self, id: PageId, mark: &'static str) {
@@ -1794,9 +1804,11 @@ impl NtApp {
         });
         let comments = page.watch().and_then(|w| {
             let cy = lay.comments_y? as f64;
-            let first = w.comments.is_empty()
+            // The shared rule, against the laid-out page with its info (not the skeleton).
+            let first = w.info.is_some()
+                && w.comments.is_empty()
                 && w.comments_state == CommentsState::NotStarted
-                && cy - bottom < vh;
+                && nt_core::policy::comments_due(cy, page.scroll.target(), vh);
             let later = w.comments_state == CommentsState::Idle
                 && w.comments_next.is_some()
                 && (lay.comments_end as f64) - bottom < 1.5 * vh;
@@ -2370,20 +2382,31 @@ impl Render for NtApp {
 
         self.images.evict(window);
 
-        // The frame hook: this canvas paints once per drawn frame, right before present.
+        // The frame hook: this canvas paints once per drawn frame, right before present. Its
+        // marks are recorded by a deferred effect, which GPUI runs once the frame's draw and
+        // `Window::present` (GPU submit and swap) have returned (`nt_core::policy`).
         let marks_now = if self.first_frame || !self.pending_marks.is_empty() {
             self.first_frame = false;
             std::mem::take(&mut self.pending_marks)
         } else {
             Vec::new()
         };
+        let me = cx.entity().downgrade();
         let hook = canvas(
             |_, _, _| (),
-            move |_, _, _, _| {
+            move |_, _, window, cx| {
                 metrics::frame();
-                for m in marks_now {
-                    metrics::mark(m);
+                if marks_now.is_empty() {
+                    return;
                 }
+                window.defer(cx, move |window, cx| {
+                    for m in marks_now {
+                        metrics::mark(m);
+                        if m == marks::HOME_LOADED {
+                            let _ = me.update(cx, |app, cx| app.schedule_prewarm(window, cx));
+                        }
+                    }
+                });
             },
         )
         .absolute()

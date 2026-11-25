@@ -114,6 +114,13 @@ override = [
   { crate = "nt_core", lint = "hawk::dead_public", item = "player::video_surface::VideoSurface::set_clip", level = "expect", target = 'cfg(target_os = "linux")', reason = "used by apps/rune/src/wayland_video.rs" },
   { crate = "nt_core", lint = "hawk::dead_public", item = "player::video_surface::VideoSurface::set_scale", level = "expect", target = 'cfg(target_os = "linux")', reason = "used by apps/iced/src/surface.rs, apps/rune/src/wayland_video.rs" },
   { crate = "nt_core", lint = "hawk::dead_public", item = "player::video_surface::VideoSurface::set_visible", level = "expect", target = 'cfg(target_os = "linux")', reason = "used by apps/iced/src/surface.rs, apps/rune/src/wayland_video.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "policy::PREWARM_AFTER_HOME", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/ext.rs, apps/rune/src/video.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "policy::Prewarm::for_process", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/app.rs, apps/rune/src/video.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "policy::Prewarm::player", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/ext.rs, apps/rune/src/video.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "policy::Prewarm::surface", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/app.rs, apps/rune/src/video.rs" },
+  { crate = "nt_core", lint = "hawk::dead_public", item = "policy::trace", level = "expect", reason = "used by apps/gpui/src/player.rs, apps/iced/src/app.rs, apps/rune/src/video.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "policy::comments_due", level = "expect", reason = "used by apps/gpui/src/app.rs, apps/iced/src/view.rs, apps/rune/src/app.rs" },
+  { crate = "nt_core", lint = "hawk::unnecessary_public", item = "policy::gpu_picture_ready", level = "expect", reason = "used by apps/gpui/src/player.rs, apps/iced/src/surface.rs, apps/rune/src/wayland_video.rs" },
 ]
 
 [[production]]

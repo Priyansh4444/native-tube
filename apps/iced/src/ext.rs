@@ -9,8 +9,11 @@
 //! playing video from costing a full view per frame when nobody sees it.
 
 use crate::app::Message;
+use iced::Task;
 use iced::futures::channel::mpsc;
 use iced::futures::{SinkExt, Stream, StreamExt};
+use nt_core::autopilot::Command;
+use nt_core::policy::Prewarm;
 use nt_core::{PixelFormat, PlaybackState, Player, RgbaImage};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -21,6 +24,13 @@ pub enum Ext {
     Player,
     PlayerReady,
     Preview,
+    /// A frame that carried marks (or asked for a lazy-load check) was drawn. iced handles this
+    /// message only after that redraw returned, i.e. after its GPU submit and present, which is
+    /// where every frontend records its frame marks (`nt_core::policy`).
+    Presented {
+        marks: Vec<&'static str>,
+        recheck: bool,
+    },
 }
 
 type Chan = (
@@ -67,30 +77,36 @@ pub fn player() -> Result<&'static Player, String> {
     Ok(PLAYER.get_or_init(|| p))
 }
 
-/// Start libmpv outside the UI thread after Home has been drawn. Resolution is left to
-/// the actual preload or click, so warming up never spends an extra YouTube request.
-pub fn prewarm_player() {
+/// Start libmpv outside the UI thread `PREWARM_AFTER_HOME` after Home has been drawn, if the
+/// policy prewarms at all; `Ext::PlayerReady` then attaches the GPU surface under `full`.
+/// Resolution is left to the actual preload or click, so warming up never spends an extra
+/// YouTube request.
+pub fn prewarm(policy: Prewarm) {
     static ONCE: std::sync::Once = std::sync::Once::new();
-    if std::env::var_os("NT_NO_PREWARM").is_none() {
-        ONCE.call_once(|| {
-            let warm = || match player() {
+    if !policy.player() {
+        return;
+    }
+    ONCE.call_once(|| {
+        let warm = || {
+            nt_core::policy::trace("player");
+            match player() {
                 Ok(_) => {
                     crate::scroller::trace_event("player_ready");
                     send(Ext::PlayerReady);
                 }
                 Err(e) => eprintln!("nt-iced: player warm-up: {e}"),
-            };
-            match nt_core::try_runtime() {
-                Ok(runtime) => {
-                    runtime.spawn(async move {
-                        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-                        runtime.spawn_blocking(warm);
-                    });
-                }
-                Err(_) => warm(),
             }
-        });
-    }
+        };
+        match nt_core::try_runtime() {
+            Ok(runtime) => {
+                runtime.spawn(async move {
+                    tokio::time::sleep(nt_core::policy::PREWARM_AFTER_HOME).await;
+                    runtime.spawn_blocking(warm);
+                });
+            }
+            Err(_) => warm(),
+        }
+    });
 }
 
 pub fn refresh_player() {
@@ -234,13 +250,26 @@ pub fn events() -> impl Stream<Item = Message> {
     }
 }
 
-pub fn autopilot() -> impl Stream<Item = Message> {
-    iced::stream::channel(16, async |mut out: mpsc::Sender<Message>| {
+/// The autopilot's commands. Wheel input (`scroll`, `scroll_pixels`, `fling`) takes the path a
+/// real wheel event takes: the page's scroller applies it, stamped with its arrival time, on the
+/// next frame, and only a redraw is requested, with no message and so no `view` rebuild. The
+/// other commands become `Message::Pilot`.
+pub fn autopilot() -> Task<Message> {
+    let commands = iced::stream::channel(16, async |mut out: mpsc::Sender<Command>| {
         while let Some(cmd) = nt_core::autopilot::next_command().await {
-            if out.send(Message::Pilot(cmd)).await.is_err() {
+            if out.send(cmd).await.is_err() {
                 return;
             }
         }
         std::future::pending::<()>().await;
+    });
+    Task::stream(commands).then(|cmd| match cmd {
+        Command::Scroll { .. } | Command::ScrollPixels { .. } | Command::Fling { .. } => {
+            crate::scroller::queue_wheel(cmd, crate::clock::now());
+            iced_runtime::task::effect(iced_runtime::Action::Window(
+                iced_runtime::window::Action::RedrawAll,
+            ))
+        }
+        cmd => Task::done(Message::Pilot(cmd)),
     })
 }

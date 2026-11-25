@@ -6,8 +6,6 @@ use crate::app::{App, Message};
 use iced::advanced::Renderer as _;
 use iced::advanced::renderer::Quad;
 use iced::{Color, Rectangle, Renderer, Task, window};
-#[cfg(target_os = "linux")]
-use nt_core::Status;
 
 pub fn enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -145,11 +143,8 @@ fn update_surface(app: &App, window: Rectangle) -> Option<Rectangle> {
     surface.set_clip((crop != (0, 0, width as u32, height as u32)).then_some(crop));
     // Only a real decoded frame of this load counts (`presented_frames`); the surface also
     // reports presenting after the black render it maps with, which would flash black.
-    let real_frame = crate::ext::existing_player().is_some_and(|p| p.presented_frames() > 0);
-    if !matches!(app.play.status, Status::Ready | Status::Ended)
-        || !surface.is_presenting()
-        || !real_frame
-    {
+    let frames = crate::ext::existing_player().map_or(0, |p| p.presented_frames());
+    if !nt_core::policy::gpu_picture_ready(&app.play.status, surface.is_presenting(), frames) {
         return None;
     }
     watch.first_frame.set(true);

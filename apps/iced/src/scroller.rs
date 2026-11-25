@@ -24,6 +24,7 @@ use iced::keyboard::{self, key::Named};
 use iced::{
     Border, Color, Element, Event, Length, Rectangle, Renderer, Size, Theme, Vector, window,
 };
+use nt_core::autopilot::Command;
 use nt_core::scroll::{self, ScrollAnimator};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -99,6 +100,11 @@ impl ScrollModel {
 
     pub fn offset(&self) -> f32 {
         self.offset.get()
+    }
+    /// Where the motion is heading (the offset itself when at rest).
+    pub fn heading(&self) -> f32 {
+        let a = self.anim.borrow();
+        a.offset().max(a.target()) as f32
     }
     pub fn viewport(&self) -> Size {
         self.viewport.get()
@@ -422,6 +428,16 @@ impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for Scroller<'a, M> {
         if let Event::Window(window::Event::RedrawRequested(at)) = event {
             let now = clock::secs(*at);
             let mut a = model.anim.borrow_mut();
+            // Autopilot wheel input, applied as a wheel event would have been when it arrived.
+            for (cmd, arrived) in take_wheel() {
+                match cmd {
+                    Command::Scroll { ticks } => a.wheel_ticks(ticks, arrived),
+                    Command::ScrollPixels { px } => a.wheel_pixels(px, arrived),
+                    Command::Fling { velocity } => a.fling(velocity, arrived),
+                    _ => continue,
+                }
+                model.last_motion.set(arrived);
+            }
             if a.needs_frame() {
                 let off = snap(a.tick(now) as f32, self.scale).min(a.max_offset() as f32);
                 if off != model.offset.get() {
@@ -739,8 +755,9 @@ impl<'a, M: Clone + 'a> From<Scroller<'a, M>> for Element<'a, M> {
     }
 }
 
-/// The root wrapper: counts presented frames and emits pending marks from `draw`, which iced
-/// calls exactly once per `RedrawRequested`, right before `present`.
+/// The root wrapper: counts drawn frames in `draw`, which iced calls exactly once per
+/// `RedrawRequested`, right before `present`. A frame's pending marks go out as
+/// `Ext::Presented`, which `update` records once iced has submitted and presented that frame.
 pub struct FrameHook<'a> {
     inner: Element<'a, crate::app::Message>,
     app: &'a crate::app::App,
@@ -748,6 +765,28 @@ pub struct FrameHook<'a> {
 
 thread_local! {
     static PENDING_MARKS: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
+    static RECHECK: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Autopilot wheel commands with their arrival time, for the top page's scroller.
+static WHEEL: std::sync::Mutex<Vec<(Command, f64)>> = std::sync::Mutex::new(Vec::new());
+
+/// Queue an autopilot wheel command (from the autopilot task, off the UI thread).
+pub fn queue_wheel(cmd: Command, arrived: f64) {
+    WHEEL
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push((cmd, arrived));
+}
+
+fn take_wheel() -> Vec<(Command, f64)> {
+    std::mem::take(&mut *WHEEL.lock().unwrap_or_else(|e| e.into_inner()))
+}
+
+/// After the next presented frame, have `update` run the lazy-load checks again (the view just
+/// laid out something a check depends on, such as the comments header).
+pub fn recheck_after_frame() {
+    RECHECK.with(|r| r.set(true));
 }
 
 /// With `NT_TRACE` set, print every occurrence of an event (the core prints only the first of
@@ -866,15 +905,11 @@ impl Widget<crate::app::Message, Theme, Renderer> for FrameHook<'_> {
             .draw(tree, renderer, theme, style, layout, cursor, viewport);
         self.app.probe.draw(self.app);
         nt_core::metrics::frame();
-        PENDING_MARKS.with(|p| {
-            for name in p.borrow_mut().drain(..) {
-                nt_core::metrics::mark(name);
-                trace_event(name);
-                if name == nt_core::metrics::marks::HOME_LOADED {
-                    crate::ext::prewarm_player();
-                }
-            }
-        });
+        let marks = PENDING_MARKS.with(|p| std::mem::take(&mut *p.borrow_mut()));
+        let recheck = RECHECK.with(|r| r.replace(false));
+        if !marks.is_empty() || recheck {
+            crate::ext::send(crate::ext::Ext::Presented { marks, recheck });
+        }
     }
     fn mouse_interaction(
         &self,
@@ -899,5 +934,22 @@ impl Widget<crate::app::Message, Theme, Renderer> for FrameHook<'_> {
         self.inner
             .as_widget_mut()
             .overlay(tree, layout, renderer, viewport, translation)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn autopilot_wheel_keeps_order_and_arrival_time() {
+        queue_wheel(Command::Scroll { ticks: 1.0 }, 1.0);
+        queue_wheel(Command::Fling { velocity: -300.0 }, 1.5);
+        let queued = take_wheel();
+        assert!(matches!(queued[0], (Command::Scroll { ticks }, at) if ticks == 1.0 && at == 1.0));
+        assert!(
+            matches!(queued[1], (Command::Fling { velocity }, at) if velocity == -300.0 && at == 1.5)
+        );
+        assert!(take_wheel().is_empty());
     }
 }

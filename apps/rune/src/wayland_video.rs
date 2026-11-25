@@ -3,7 +3,7 @@
 use crate::app::{App, handle};
 use crate::theme::{TOP_BAR, t};
 use libloading::Library;
-use nt_core::{Player, Status, VideoSurface};
+use nt_core::{Player, VideoSurface};
 use rune::raw_window_handle::{RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle};
 use rune::{Color, El, Live, WindowHandle, el};
 use std::ffi::c_void;
@@ -161,9 +161,12 @@ impl NativeVideo {
             // `is_presenting` stays true from the previous video until the worker unmaps it,
             // and the first render after mapping may come before a decoded picture: open the
             // hole only once a frame was rendered after this video's load.
-            let presenting = lease.is_presenting() && crate::video::gpu_picture(s.video.serial);
-            let ready = matches!(s.video.shown.status, Status::Ready | Status::Ended);
-            if let Some([left, top, right, bottom]) = visible.filter(|_| ready && presenting) {
+            let ready = nt_core::policy::gpu_picture_ready(
+                &s.video.shown.status,
+                lease.is_presenting(),
+                crate::video::gpu_frames(s.video.serial),
+            );
+            if let Some([left, top, right, bottom]) = visible.filter(|_| ready) {
                 video.showing = true;
                 let rects = [
                     [0.0, 0.0, s.win_w, top],

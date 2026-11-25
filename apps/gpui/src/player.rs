@@ -296,10 +296,14 @@ impl PlayerView {
         }
     }
 
-    /// Create libmpv and attach the GPU surface ahead of the first click (about 75 + 40 ms on
-    /// the test laptop), so opening a video only resolves and loads.
-    pub fn prewarm(&mut self, window: &Window, cx: &mut Context<Self>) {
-        self.attach_hardware(window, cx);
+    /// Create libmpv, and with `surface` attach the GPU surface, ahead of the first click (about
+    /// 75 + 40 ms on the test laptop), so opening a video only resolves and loads.
+    pub fn prewarm(&mut self, surface: bool, window: &Window, cx: &mut Context<Self>) {
+        if surface {
+            nt_core::policy::trace("surface");
+            self.attach_hardware(window, cx);
+        }
+        nt_core::policy::trace("player");
         let _ = self.ensure(cx);
     }
 
@@ -399,14 +403,16 @@ impl PlayerView {
 
     fn native_frame_available(&self) -> bool {
         #[cfg(target_os = "linux")]
-        if matches!(self.state.status, Status::Ready | Status::Ended)
-            && let (Some(surface), Some(player)) = (&self.surface, &self.player)
-        {
+        if let (Some(surface), Some(player)) = (&self.surface, &self.player) {
             // A real picture of this file, not the black render the surface maps with (or a
             // resize-only render before the first picture): `presented_frames` counts only
             // decoded frames since this load's playback restart. Until then the poster or the
             // last frame stays.
-            return surface.is_presenting() && player.presented_frames() > 0;
+            return nt_core::policy::gpu_picture_ready(
+                &self.state.status,
+                surface.is_presenting(),
+                player.presented_frames(),
+            );
         }
         false
     }
@@ -2818,7 +2824,9 @@ impl Render for PlayerView {
                         trace("paint", id);
                     }
                     presented.set(true);
-                    metrics::mark(metrics::marks::PLAYBACK_STARTED);
+                    // Recorded once this frame's draw and present have returned, like every
+                    // other frame mark (`nt_core::policy`).
+                    cx.defer(|_| metrics::mark(metrics::marks::PLAYBACK_STARTED));
                 }
                 if dragging {
                     let m1 = me.clone();

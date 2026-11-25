@@ -65,6 +65,10 @@ enum Cmd {
         serial: u64,
         job: Job,
     },
+    /// Start libmpv, and with `surface` attach the GPU surface, ahead of the first video.
+    Warm {
+        surface: bool,
+    },
 }
 
 impl Cmd {
@@ -167,6 +171,19 @@ fn run(cmd: Cmd) {
                 p.stop();
             }
         }
+        Cmd::Warm { surface } => {
+            if PLAYER.get().is_none() {
+                nt_core::policy::trace("player");
+                if let Err(e) = player() {
+                    eprintln!("nt-rune: player warm-up: {e}");
+                    return;
+                }
+            }
+            if surface && !ATTACH_ASKED.swap(true, Ordering::AcqRel) {
+                nt_core::policy::trace("surface");
+                attach_before_first_load();
+            }
+        }
         Cmd::Shutdown(done) => {
             shutdown_player();
             let _ = done.send(());
@@ -237,21 +254,47 @@ pub fn player_if_started() -> Option<&'static Player> {
     PLAYER.get().map(Arc::as_ref)
 }
 
-/// Whether this load's picture is really on the GPU surface: core counts surface frames
-/// that carried a decoded picture since mpv's `playback-restart` for the current file
+/// This load's frames really on the GPU surface: core counts surface frames that carried a
+/// decoded picture since mpv's `playback-restart` for the current file
 /// (`Player::presented_frames`, reset by every load). Core reports Ready and maps the surface
-/// with one render before anything is decoded; that render is black and doesn't count.
-pub fn gpu_picture(serial: u64) -> bool {
-    let Some(p) = PLAYER.get() else { return false };
+/// with one render before anything is decoded; that render is black and doesn't count. 0 while
+/// the player still has another load than `serial`.
+pub fn gpu_frames(serial: u64) -> u64 {
+    let Some(p) = PLAYER.get() else { return 0 };
     let applied = {
         let surface = surface();
         surface.loaded == serial && surface.serial == serial
     };
-    applied && p.presented_frames() > 0
+    if applied { p.presented_frames() } else { 0 }
 }
 
-/// The first load asked the UI thread to attach the GPU surface (it does so once).
+/// The first load (or a `full` prewarm) asked the UI thread to attach the GPU surface (once).
 static ATTACH_ASKED: AtomicBool = AtomicBool::new(false);
+
+/// `PREWARM_AFTER_HOME` after Home has drawn, what the policy says (`NT_PREWARM`): libmpv on
+/// the command thread, and under `full` the GPU surface too. Rune ships `off`: attaching the
+/// surface early saved ~60 ms but cost 75 MiB of idle PSS (EGL and the GL driver), and libmpv
+/// alone ~43 MiB, over the idle budget. It resolves nothing and loads nothing.
+pub fn prewarm() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    let policy = nt_core::policy::Prewarm::for_process(nt_core::policy::Prewarm::Off);
+    if !policy.player() {
+        return;
+    }
+    ONCE.call_once(|| {
+        let started = std::thread::Builder::new()
+            .name("nt-prewarm".into())
+            .spawn(move || {
+                std::thread::sleep(nt_core::policy::PREWARM_AFTER_HOME);
+                send(Cmd::Warm {
+                    surface: policy.surface(),
+                });
+            });
+        if let Err(e) = started {
+            eprintln!("nt-rune: can't schedule the player warm-up: {e}");
+        }
+    });
+}
 
 /// On the command thread, once, between creating the player and its first load: has the UI
 /// thread (which owns the window) attach the GPU surface, and waits for it (at most 1 s).

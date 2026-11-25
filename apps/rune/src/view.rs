@@ -39,6 +39,8 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         .on_layout(|s: &mut App, r: [f32; 4]| {
             s.win_w = r[2];
             s.win_h = r[3];
+            // The view this report runs again draws at the laid-out size and the window's scale.
+            s.images.set_ready();
         })
         .on_wheel(|s: &mut App, e, tx| s.on_wheel(e, tx))
         .pointer_buttons([PointerButton::Back, PointerButton::Forward])

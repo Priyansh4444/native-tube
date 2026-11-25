@@ -357,7 +357,9 @@ def gpui_next(d):
     d.watch({"related"})
     current = d.playing()
     next_target = d.target({"related"})
-    before = d.input("key", "shift+n")
+    # Keep Sway's temporary keyboard present long enough for GPUI to bind it and
+    # process the key while the newly opened Watch page is rendering.
+    before = d.input("key", "wait=250", "shift+n", "wait=250")
     state = d.wait(lambda s: video(s).get("id") not in {None, video(current)["id"]},
                    "Shift+N advanced after related click", after=before)
     d.playing()
