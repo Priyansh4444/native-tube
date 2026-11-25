@@ -244,6 +244,7 @@ fn snapshot(app: &App) -> Option<Value> {
                 "id": w.video.id, "status": status, "position": app.play.position,
                 "duration": app.play.duration, "paused": app.play.paused, "muted": app.play.muted,
                 "first_frame": w.first_frame.get(),
+                "captions": app.play.selected_captions,
             }));
             let error = app.player_error.as_deref().or(
                 match (&w.load, &w.comments_state, &app.play.status) {

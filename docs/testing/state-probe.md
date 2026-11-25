@@ -55,3 +55,15 @@ there is one. Only elements actually on screen and not covered by a popup are li
   of properties work on every framework.
 - **Truthfulness:** report what is on screen, not what was requested (for example,
   `video.first_frame` only after a frame was actually presented).
+
+For live-media tests, an `NT_AUTOPILOT` scenario can use
+`{"cmd":"open_video_id","id":"5C_HPTJg5ek"}` to open a specific video through the normal Watch
+path. Verify the exact ID and first frame in the probe before sending input. The CC button
+uses kind `captions` and label `CC`. The Settings button is `settings` with label `Settings`.
+Visible settings rows use kind `menu_item` and the stable labels `Subtitles/CC`, `Audio track`,
+and `Auto-translate`. Painted, visible hit rectangles determine whether targets are present.
+
+Live playback probes expose `video.captions` as `null` or `[track_index, translation_code]`.
+GPUI and Rune expose `video.caption_lift` from 0 (resting) to 1 (lifted). This is the
+position input to the renderer. Measure the rendered caption box in screenshots.
+Rune exposes its playing track as `video.audio_track` and `video.audio_label`.

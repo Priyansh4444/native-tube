@@ -1313,14 +1313,14 @@ impl PlayerView {
             .children(target(
                 cx,
                 Layer::Player,
-                id,
+                if id == "cc" { "captions" } else { id },
                 match id {
                     "play" => "Play / pause",
                     "next" => "Next",
                     "settings" => "Settings",
                     "theatre" => "Theatre mode",
                     "fullscreen" => "Fullscreen",
-                    "cc" => "Subtitles",
+                    "cc" => "CC",
                     _ => id,
                 },
             ))
@@ -2643,11 +2643,14 @@ fn menu_row(
     value: Option<SharedString>,
     check: bool,
 ) -> gpui::Stateful<gpui::Div> {
+    let probe_label = label
+        .strip_prefix("Subtitles/CC (")
+        .map_or_else(|| label.clone(), |_| "Subtitles/CC".into());
     div()
         .id(id)
         .tab_index(0)
         .focus_visible(focus_ring)
-        .children(target(cx, layer, "menu_item", label.clone()))
+        .children(target(cx, layer, "menu_item", probe_label))
         .h(px(40.0))
         .flex_none()
         .px(px(16.0))
@@ -3001,6 +3004,8 @@ impl PlayerView {
             "paused": s.paused,
             "muted": s.muted,
             "first_frame": self.has_picture(),
+            "captions": s.selected_captions,
+            "caption_lift": self.caption_lift,
         }))
     }
 }

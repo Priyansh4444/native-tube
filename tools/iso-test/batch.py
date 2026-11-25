@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -25,6 +26,16 @@ def latest(log):
 
 def command(*args, **kwargs):
     return subprocess.run(args, check=True, timeout=15, **kwargs)
+
+
+def live_block(log):
+    if os.environ.get("NT_LIVE") != "1":
+        return None
+    return next((
+        line for line in reversed(log.read_text().splitlines())
+        if line.startswith("nt-core: YouTube signalled ")
+        and "pausing all requests" in line
+    ), None)
 
 
 @contextmanager
@@ -150,6 +161,8 @@ class Driver:
             status, note = "SKIPPED", str(error)
         except (AssertionError, subprocess.SubprocessError) as error:
             status, note = "FAIL", str(error)
+        if status != "PASS" and (block := live_block(self.log)):
+            status, note = "SKIPPED", block
         self.shot(name)
         self.event(case=name, status=status, notes=note, log=self.log.name)
         print(self.app, name, status, note, flush=True)
@@ -523,69 +536,243 @@ def rune_retry(d):
     return "Retry invoked against a deliberate replay miss; probe confirmed returned error"
 
 
-def live_watch(d):
-    state = d.search("0y6RKiIk6cs")
-    if not state["items"]:
-        raise Unavailable("unsigned live search did not return a video")
-    for _ in range(4):
-        try:
-            d.watch(label=r"Rust for Dummies in 12 Minutes")
-            break
-        except Unavailable:
-            d.input("wheel", 770, 680, 5, 50)
-            time.sleep(0.45)
-    else:
-        raise Unavailable("target video absent after four unsigned result viewports")
-    d.wait(lambda s: video(s).get("id") == "0y6RKiIk6cs",
-           "watch target is exactly 0y6RKiIk6cs", seconds=8)
-    d.playing()
+LIVE_ID = os.environ.get("NT_ISO_LIVE_VIDEO_ID", "5C_HPTJg5ek")
+LIVE_CASES = {
+    "iced": ("iced-5-live-captions",),
+    "gpui": ("gpui-3-caption-position", "gpui-caption-ease", "gpui-cc-settings"),
+    "rune": ("rune-cc", "rune-audio", "rune-caption-position"),
+}
 
 
-def live_controls(d):
-    live_watch(d)
+def is_painted(state, kind, label):
+    return any(t["kind"] == kind and t["label"] == label for t in state["targets"])
+
+
+def watch_live(d):
+    d.wait(lambda s: s["page"] == "watch" and video(s).get("id") == LIVE_ID,
+           "opened exact video ID", seconds=15)
+    d.wait(lambda s: video(s).get("first_frame") and video(s).get("muted")
+           and video(s).get("position", 0) > 0.05,
+           "public video produced an advancing muted first frame", seconds=22)
+
+
+def live_subtitle(d):
+    # Read one playback property from the app's private mpv socket. No URLs or
+    # track payloads are requested. Grab frames only while a cue can be visible.
+    try:
+        with socket.socket(socket.AF_UNIX) as client:
+            client.settimeout(0.2)
+            client.connect(str(d.mpv_socket))
+            client.sendall(b'{"command":["get_property","sub-text"],"request_id":1}\n')
+            with client.makefile("rb") as stream:
+                for line in stream:
+                    reply = json.loads(line)
+                    if reply.get("request_id") == 1:
+                        return reply.get("data") or ""
+    except (OSError, ValueError):
+        return ""
+    return ""
+
+
+def subtitle_frame(d, name, accepts=bool):
+    d.wait(lambda _: accepts(live_subtitle(d)), f"active cue for {name}", seconds=12)
+    d.event(cue=live_subtitle(d), frame=name)
+    d.shot(name)
+
+
+def cc(d):
     d.controls()
-    d.shot("controls-before")
-    if d.app == "gpui":
-        d.hover(d.target({"scrubber"}), "storyboard", 650)
+    if video(d.state()).get("captions") is None:
+        d.target({"captions"}, r"^CC$")
+        before = d.input("key", "c") if d.app == "iced" else d.click({"captions"}, r"^CC$")
+        d.wait(lambda s: video(s).get("captions") is not None,
+               "real CC input selected a caption track", seconds=8, after=before)
+    subtitle_frame(d, "cc-selected")
+    return "CC selected a caption track in the probe and mpv reported a visible cue"
+
+
+def translate(d):
+    cc(d)
+    d.settings(r"^Subtitles/CC$")
+    before = d.click({"menu_item"}, r"^Auto-translate$")
+    d.wait(lambda s: is_painted(s, "menu_item", "Arabic"),
+           "Auto-translate language menu arrived", after=before)
+    d.shot("translation-menu")
+    before = d.click({"menu_item"}, r"^Arabic$")
+    d.wait(lambda s: (video(s).get("captions") or [None, None])[1] == "ar",
+           "the player selected Arabic translation", seconds=12, after=before)
+    d.input("move", 1248, 50)
+    subtitle_frame(d, "translated-caption", lambda cue: re.search(r"[\u0600-\u06ff]", cue))
+    return "CC, Settings, Subtitles/CC, Auto-translate and Arabic were activated using painted targets"
+
+
+def caption_box(d, frame, player_rect):
+    # The live test enables a diagnostic magenta subtitle background without
+    # changing font, size or placement. Decode the actual Sway screenshot.
+    raw = command("ffmpeg", "-loglevel", "error", "-threads", "1",
+                  "-i", str(d.out / f"{frame}.png"), "-frames:v", "1",
+                  "-pix_fmt", "rgb24", "-threads:v", "1", "-f", "rawvideo", "pipe:1",
+                  capture_output=True).stdout
+    assert len(raw) == 1280 * 800 * 3, "unexpected screenshot size"
+    x, y, w, h = map(round, player_rect)
+    columns = []
+    rows = []
+    for row in range(y + h // 2, min(y + h, 800)):
+        left = (row * 1280 + x) * 3
+        pixels = raw[left:left + w * 3]
+        # The control-bar gradient darkens magenta without changing its hue.
+        hits = [column for column, (r, g, b) in enumerate(zip(
+                    pixels[::3], pixels[1::3], pixels[2::3], strict=True))
+                if min(r, b) >= 128 and abs(r - b) <= 20 and g <= 32]
+        if len(hits) >= 20:
+            columns.extend(hits)
+            rows.append(row)
+    if len(rows) < 5:
+        return None
+    return [x + min(columns), min(rows), max(columns) - min(columns) + 1, max(rows) - min(rows) + 1]
+
+
+def caption_position(d):
+    cc(d)
+    settings = d.controls()["rect"]
+    player = d.target({"player"})["rect"]
+    x, y, width, height = d.target({"scrubber"})["rect"]
+    bar = [x, y, width, max(height, settings[1] + settings[3] - y)]
+    d.wait(lambda s: video(s).get("caption_lift") == 1,
+           "caption lift settled with the bar shown")
+    subtitle_frame(d, "caption-shown")
+    before = d.input("move", 1248, 50)
+    d.wait(lambda s: not is_painted(s, "settings", "Settings"),
+           "control bar hidden on pointer leave", after=before)
+    time.sleep(0.35)
+    subtitle_frame(d, "caption-hidden")
+    shown = caption_box(d, "caption-shown", player)
+    hidden = caption_box(d, "caption-hidden", player)
+    d.event(control_bar=bar, caption_box_shown=shown, caption_box_hidden=hidden)
+    assert shown and hidden, "could not measure a rendered caption box in both frames"
+    clearance = bar[1] - (shown[1] + shown[3])
+    drop = (hidden[1] + hidden[3]) - (shown[1] + shown[3])
+    assert clearance >= 0 and drop >= 5, f"caption clearance {clearance:.1f}px, drop {drop}px"
+    return f"Caption bottom cleared the visible seek bar by {clearance:.1f}px and moved down {drop}px when hidden"
+
+
+def caption_ease_duration(log, start_ms, end_ms):
+    samples = []
+    for line in log.read_text().splitlines():
+        if not line.startswith("NT_STATE "):
+            continue
         try:
-            d.click({"captions", "cc"}, "captions|CC|subtitles")
-        except Unavailable:
-            x, y = d.point(d.target({"settings"}))
-            d.input("click", x - 40, y)
-    else:
-        d.input("key", "c")
-    time.sleep(1.1)
-    d.shot("caption-key-or-cc")
+            state = json.loads(line[9:])
+        except ValueError:
+            continue
+        lift = video(state).get("caption_lift")
+        if (start_ms < state["t_ms"] <= end_ms and lift is not None
+                and 0 < lift < 1 and not is_painted(state, "settings", "Settings")):
+            samples.append((state["t_ms"], lift))
+    if len(samples) < 2:
+        raise Unavailable("probe cadence yielded fewer than two intermediate ease samples")
+    first, last = samples[0], samples[-1]
+    # The cubic ease-out has lift = (1 - elapsed / duration)^3 when hiding.
+    # Fit elapsed time from the app clock. Grim's subprocess completion
+    # timestamps include capture overhead and are only useful for ordering.
+    progress = first[1] ** (1 / 3) - last[1] ** (1 / 3)
+    assert progress > 0, f"caption lift did not decrease: {samples}"
+    return (last[0] - first[0]) / progress, samples
+
+def caption_ease(d):
+    cc(d)
     d.controls()
-    d.shot("caption-controls")
-    if d.app == "gpui":
-        d.input("move", 1248, 50)
-        for index, delay in enumerate((0.0, 2.65, 0.2, 0.2, 0.2)):
-            time.sleep(delay)
-            d.shot(f"caption-hide-{index}")
-    d.settings(r"Subtitles|closed captions")
-    d.shot("caption-menu")
-    d.click(None, r"Auto.translate")
-    d.shot("auto-translate")
-    d.click(None, r"^Arabic$")
-    time.sleep(1)
-    d.shot("translated-caption")
-    raise Unavailable("captions, animation and storyboard require review of the captured frames")
+    d.wait(lambda s: video(s).get("caption_lift") == 1,
+           "caption lift reached shown position")
+    player = d.target({"player"})["rect"]
+    subtitle_frame(d, "ease-start")
+    before, argv = d.start_input("move", 1248, 50)
+    start = time.monotonic()
+    frames = []
+    with subprocess.Popen(argv, stdout=subprocess.DEVNULL) as pointer:
+        while time.monotonic() - start < 0.65 and len(frames) < 40:
+            name = f"ease-{len(frames):02d}"
+            d.shot(name)
+            frames.append(((time.monotonic() - start) * 1000, name))
+        assert pointer.wait(timeout=5) == 0, "pointer did not leave the player"
+    rest = d.wait(lambda s: not is_painted(s, "settings", "Settings")
+                  and video(s).get("caption_lift") == 0,
+                  "caption lift returned to rest after the control bar hid", after=before)
+    subtitle_frame(d, "ease-end")
+    lifted = caption_box(d, "ease-start", player)
+    rested = caption_box(d, "ease-end", player)
+    assert lifted and rested, "could not measure caption boxes across the fade"
+    top_bottom = lifted[1] + lifted[3]
+    rest_bottom = rested[1] + rested[3]
+    samples = []
+    for ms, name in frames:
+        box = caption_box(d, name, player)
+        if box:
+            samples.append([round(ms), box[1] + box[3]])
+    d.event(caption_ease_frames=samples, caption_bottom_shown=top_bottom,
+            caption_bottom_hidden=rest_bottom)
+    middle = [ms for ms, y in samples if top_bottom + 2 < y < rest_bottom - 2]
+    settled = [ms for ms, y in samples if middle and ms > middle[0] and abs(y - rest_bottom) <= 2]
+    assert middle and settled, f"no measurable intermediate and settled caption positions: {samples}"
+    duration, lifts = caption_ease_duration(d.log, before, rest["t_ms"])
+    d.event(caption_ease_duration_ms=duration, caption_lift_samples=lifts)
+    assert 160 <= duration <= 250, f"caption ease fit was {duration:.0f} ms"
+    return f"Controls hid on pointer leave and rendered captions eased down, with a {duration:.0f} ms app-clock duration"
 
 
 def live_audio(d):
-    d.search("Last Person Standing Wins $250,000")
-    d.watch(label=r"Last Person Standing Wins")
-    d.playing()
-    d.settings()
-    d.shot("audio-settings")
-    d.click(None, r"^Audio track")
-    d.shot("audio-tracks")
+    d.settings(r"^Audio track$")
     alternate = d.target({"menu_item"}, r"Spanish|French|German|Arabic|Hindi|Portuguese")
-    d.input("click", *d.point(alternate))
+    current = video(d.state()).get("audio_track")
+    expected = alternate["label"].removesuffix(" (auto-dubbed)")
+    d.shot("audio-tracks")
+    before = d.input("click", *d.point(alternate))
+    d.wait(lambda s: video(s).get("audio_track") not in {None, current}
+           and video(s).get("audio_label") == expected,
+           "selected alternate track is active", seconds=18, after=before)
     d.playing()
     d.shot("audio-track-selected")
-    raise Unavailable(f"selected {alternate['label']!r}; retain the screenshots for comparison")
+    return f"Playback switched to {alternate['label']!r}"
+
+
+def live_app(d, selected):
+    assert re.fullmatch(r"[A-Za-z0-9_-]{11}", LIVE_ID), f"invalid video ID: {LIVE_ID!r}"
+    scenario = Path(os.environ["XDG_RUNTIME_DIR"]) / f"watch-{d.app}.json"
+    scenario.write_text(json.dumps([
+        {"wait_mark": "home_loaded", "timeout": 12},
+        {"cmd": "open_video_id", "id": LIVE_ID},
+        {"sleep": 180},
+    ]))
+    d.mpv_socket = Path(os.environ["XDG_RUNTIME_DIR"]) / f"{d.app}-mpv"
+    d.extra_env = {
+        "NT_AUTOPILOT": str(scenario),
+        "NT_MPV_OPTS": f"ao=null,input-ipc-server={d.mpv_socket},sub-back-color=#FFFF00FF",
+    }
+    actions = {
+        "iced-5-live-captions": translate,
+        "gpui-3-caption-position": caption_position,
+        "gpui-caption-ease": caption_ease,
+        "gpui-cc-settings": translate,
+        "rune-cc": cc,
+        "rune-audio": live_audio,
+        "rune-caption-position": caption_position,
+    }
+    cases = [name for name in LIVE_CASES[d.app] if selected is None or name in selected]
+    with d.launch("live"):
+        try:
+            watch_live(d)
+        except AssertionError as error:
+            d.shot("live-unavailable")
+            for case in cases:
+                d.event(case=case, status="SKIPPED", notes=str(error), log=d.log.name)
+                print(d.app, case, "SKIPPED", error, flush=True)
+            return
+        for name in cases:
+            if block := live_block(d.log):
+                d.event(case=name, status="SKIPPED", notes=block, log=d.log.name)
+                print(d.app, name, "SKIPPED", block, flush=True)
+            else:
+                d.check(name, lambda: actions[name](d))
 
 
 OFFLINE = {
@@ -617,10 +804,14 @@ def main():
                 driver.shot("home")
                 print(app, state["page"], state["items"], len(state["targets"]), flush=True)
             continue
-        cases = OFFLINE[app] if mode == "batch" else [(f"{app}-live", live_controls)]
-        if mode == "live" and app == "rune":
-            cases.append(("rune-audio", live_audio))
-        for name, case in cases:
+        if mode == "live":
+            live_app(driver, selected)
+            if re.search(r"sign in.*bot|pausing all requests|HTTP(?: error)? (?:403|429)",
+                         driver.log.read_text(), re.I):
+                print("Live run stopped on sign-in requirement, denial or cooldown.", flush=True)
+                return
+            continue
+        for name, case in OFFLINE[app]:
             if selected is not None and name not in selected:
                 continue
             if driver.profile.exists():
@@ -633,12 +824,6 @@ def main():
             with seat, driver.launch(name):
                 driver.check(name, lambda: case(driver))
             driver.extra_env = {}
-            if mode == "live" and re.search(
-                r"sign in.*bot|pausing all requests|HTTP(?: error)? (?:403|429)",
-                driver.log.read_text(), re.I,
-            ):
-                print("Live run stopped on sign-in requirement, denial or cooldown.", flush=True)
-                return
         if mode == "batch" and app == "rune" and (selected is None or "rune-resume" in selected):
             try:
                 status, note = "PASS", rune_resume(driver)

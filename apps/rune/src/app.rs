@@ -1929,6 +1929,15 @@ impl App {
                     self.submit_search(tx);
                     true
                 }
+                Command::OpenVideoId { id } => {
+                    let video = Video {
+                        thumbnail: Video::thumbnail_url(&id),
+                        id,
+                        ..Video::default()
+                    };
+                    self.open_video(video, tx);
+                    true
+                }
                 Command::OpenVideo { index } => {
                     if let Some(v) = self.top().feed.items.get(index).cloned() {
                         self.open_video(v, tx);

@@ -32,6 +32,10 @@ pub enum Command {
     OpenVideo {
         index: usize,
     },
+    /// Open a specific video through the normal Watch path.
+    OpenVideoId {
+        id: String,
+    },
     /// Open the channel of the video on the watch page. Mark `channel_loaded`.
     OpenChannel,
     /// Go back one page.
@@ -249,6 +253,13 @@ fn take_snapshot(name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn open_video_id_parses() {
+        let command: Command =
+            serde_json::from_str(r#"{"cmd":"open_video_id","id":"5C_HPTJg5ek"}"#).unwrap();
+        assert!(matches!(command, Command::OpenVideoId { id } if id == "5C_HPTJg5ek"));
+    }
 
     /// The benchmark scenario must parse, step for step.
     #[test]

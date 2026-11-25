@@ -62,4 +62,5 @@ nice -n 19 ionice -c3 podman run --rm --network "$network" --userns=keep-id \
     --security-opt no-new-privileges --cap-drop=ALL --cpus 4 --memory 6g --pids-limit 512 \
     --read-only --tmpfs /tmp:rw,nodev,nosuid,size=512m --http-proxy=false \
     --env "NT_ISO_OUT=/out/${run_dir##*/}" --env "NT_ISO_RENDER=$render" \
+    --env "NT_ISO_LIVE_VIDEO_ID=${NT_ISO_LIVE_VIDEO_ID:-5C_HPTJg5ek}" \
     "${devices[@]}" "${mounts[@]}" nt-iso "$mode" "$@" 2>&1 | tee "$run_dir/driver.log"

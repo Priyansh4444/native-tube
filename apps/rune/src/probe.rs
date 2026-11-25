@@ -202,6 +202,9 @@ fn presented_targets(rt: &Runtime<App>) -> Vec<Target> {
 }
 
 fn target_label(kind: &'static str, label: Option<&str>) -> String {
+    if kind == "captions" {
+        return "CC".to_owned();
+    }
     match label.filter(|label| !label.trim().is_empty()) {
         Some(label) => label.to_owned(),
         None => match kind {
@@ -446,13 +449,32 @@ fn state(s: &App, targets: &[Target]) -> String {
             esc(&mut o, status);
             let _ = write!(
                 o,
-                ",\"position\":{},\"duration\":{},\"paused\":{},\"muted\":{},\"first_frame\":{}}}",
+                ",\"position\":{},\"duration\":{},\"paused\":{},\"muted\":{},\"first_frame\":{}",
                 num(v.position),
                 num(v.duration),
                 v.shown.paused,
                 v.shown.muted,
                 v.first_shown.get()
             );
+            o.push_str(",\"captions\":");
+            if let Some((index, language)) = &v.shown.cc_sel {
+                let _ = write!(o, "[{index},");
+                opt(&mut o, language.as_deref());
+                o.push(']');
+            } else {
+                o.push_str("null");
+            }
+            o.push_str(",\"audio_track\":");
+            opt(&mut o, v.shown.audio.as_deref());
+            o.push_str(",\"audio_label\":");
+            opt(
+                &mut o,
+                v.audio_tracks
+                    .iter()
+                    .find(|track| Some(&track.id) == v.shown.audio.as_ref())
+                    .map(|track| track.label.as_str()),
+            );
+            let _ = write!(o, ",\"caption_lift\":{}}}", num(f64::from(v.caption_lift)));
         }
         _ => o.push_str("null"),
     }
@@ -506,6 +528,7 @@ mod tests {
     #[test]
     fn target_labels_are_nonempty_strings() {
         assert_eq!(target_label("player", None), "Player");
+        assert_eq!(target_label("captions", Some("Subtitles (c)")), "CC");
         assert_eq!(target_label("scrubber", Some("  ")), "Seek bar");
         assert_eq!(target_label("related", Some("")), "related");
         assert_eq!(target_label("related", Some("Video title")), "Video title");

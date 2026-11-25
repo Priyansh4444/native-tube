@@ -3484,6 +3484,7 @@ impl App {
                 self.query = query;
                 self.update(Message::SearchSubmit)
             }
+            Command::OpenVideoId { id } => self.open_video_id(&id),
             Command::OpenVideo { index } => {
                 let list = if self.watch().is_some() {
                     ListRef::Related

@@ -55,6 +55,28 @@ performance budgets and workload against release baseline binaries from `2caf0fa
 directory containing that build. Append `--smoke` for one repeat. The Sway `window:new` event
 provides the compositor map timestamp. Results measure the private Sway renderer and a focused test window.
 
+## Live captions and audio
+
+Build the app binaries from the checkout containing `open_video_id` and pass their absolute paths
+via `NT_ISO_BIN_*`. The live driver opens `5C_HPTJg5ek` directly, verifies the video ID and
+muted playback in the probe, then drives the painted CC and settings targets. Set
+`NT_ISO_LIVE_VIDEO_ID` to use another public video with captions and dubbed audio if the default
+video is unavailable.
+
+The live screenshots use a diagnostic magenta subtitle background to measure the actual caption
+box against the painted control bar. This changes the background color only. The runner reads
+the current cue from a private mpv Unix socket and records its screenshots, measured boxes, and
+control and track changes in `events.jsonl`. The GPUI ease check uses the app clock and lift
+samples for duration. Grim completion times include capture overhead. YouTube rate-limit
+responses stop the live run and leave blocked checks unverified.
+
+The follow-up run on `5C_HPTJg5ek` verified every original-language caption, placement, ease
+and audio-switch check. YouTube returned HTTP 429 when the driver selected Arabic
+Auto-translate in both iced and GPUI. The two translation checks remain unverified.
+All 55 host samples across these sessions showed both pause files present and zero test
+windows and outputs. Local evidence is in `.cache/iso-test/out/live-KTJdkAE8` and
+`.cache/iso-test/out/live-qFAj6a9B`.
+
 ## GitHub Actions equivalent
 
 On a Linux runner with rootless Podman and user namespaces enabled, use the same image build.

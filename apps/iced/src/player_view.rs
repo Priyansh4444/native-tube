@@ -28,7 +28,7 @@ fn ctl<'a>(i: Icon, msg: Message) -> El<'a> {
         Icon::WidthWide => ("theatre", "Theatre"),
         Icon::Fullscreen => ("fullscreen", "Fullscreen"),
         Icon::FullscreenExit => ("fullscreen", "Exit fullscreen"),
-        Icon::ClosedCaption => ("captions", "Subtitles/closed captions (c)"),
+        Icon::ClosedCaption => ("captions", "CC"),
         _ => ("button", ""),
     };
     action(
@@ -304,7 +304,7 @@ fn captions_button<'a>(on: bool) -> El<'a> {
         .style(t::control_button)
         .on_press(msg.clone()),
         "captions",
-        "Subtitles/closed captions (c)",
+        "CC",
         msg,
     )
 }

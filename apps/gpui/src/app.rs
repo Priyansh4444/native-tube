@@ -1991,6 +1991,14 @@ impl NtApp {
                 }
             }
             Command::Search { query } => self.submit_search(query, window, cx),
+            Command::OpenVideoId { id } => {
+                let video = Video {
+                    thumbnail: Video::thumbnail_url(&id),
+                    id,
+                    ..Video::default()
+                };
+                self.open_video(video, window, cx);
+            }
             Command::OpenVideo { index } => {
                 if let Some(v) = self.top().and_then(|p| p.feed.items.get(index)).cloned() {
                     self.open_video(v, window, cx);
