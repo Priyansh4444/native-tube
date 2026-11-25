@@ -26,7 +26,7 @@ rmdir "$context"
 tools/iso-test/build.sh
 ```
 
-`build.sh` applies [sway.patch](/home/pronsh/Coding/native-tube/tools/iso-test/sway.patch) to
+`build.sh` applies [sway.patch](sway.patch) to
 copies of `nt-input` and `nt-explore` inside the image. The shared tool sources stay intact. The build checks rustfmt, Clippy with warnings denied and unit tests on
 the patched copies using Rust 1.99.1.
 
@@ -71,9 +71,9 @@ The initial compositor ran against Intel ARL GLES2, with a GBM swapchain. The of
 only loopback, an empty hardware input-device list, a private Wayland socket and the sole
 Intel render node. Sampled host window IDs are hashed and window titles are omitted.
 
-- [Private seat and output evidence](/home/pronsh/Coding/native-tube/.cache/iso-test/out/batch-YNPcEK9p/isolation.txt)
-- [Host cursor, focus and pause samples](/home/pronsh/Coding/native-tube/.cache/iso-test/out/batch-YNPcEK9p/host.jsonl)
-- [Probe and input trace for Rune's 20/35 run at (990,125)](/home/pronsh/Coding/native-tube/.cache/iso-test/out/batch-EVnn8ZuZ/rune/events.jsonl)
+- Private seat and output evidence (local run output: `.cache/iso-test/out/batch-YNPcEK9p/isolation.txt`)
+- Host cursor, focus and pause samples (local run output: `.cache/iso-test/out/batch-YNPcEK9p/host.jsonl`)
+- Probe and input trace for Rune's 20/35 run at (990,125) (local run output: `.cache/iso-test/out/batch-EVnn8ZuZ/rune/events.jsonl`)
 
 The host sampler reads Hyprland cursor, monitor, active window and client state at about
 one-second intervals. Across the replay, explorer, and live checks the focused monitor was
@@ -83,19 +83,19 @@ test windows and zero test outputs in the host samples, and both pause files wer
 before, during and after. The container's socket and mount configuration is the isolation
 guarantee. The host samples corroborate it.
 
-- [Live host samples](/home/pronsh/Coding/native-tube/.cache/iso-test/out/live-KtHVoLns/host.jsonl)
-- [Container quota, network and mount settings](/home/pronsh/Coding/native-tube/.cache/iso-test/out/perf-j6hEVlrm/container-settings.txt)
-- [Containerized full check.sh and Hawk output](/home/pronsh/Coding/native-tube/.cache/iso-test/check-final.log)
-- [Staged Rust tool test output](/home/pronsh/Coding/native-tube/.cache/iso-test/tool-tests.log)
+- Live host samples (local run output: `.cache/iso-test/out/live-KtHVoLns/host.jsonl`)
+- Container quota, network and mount settings (local run output: `.cache/iso-test/out/perf-j6hEVlrm/container-settings.txt`)
+- Containerized full check.sh and Hawk output (local run output: `.cache/iso-test/check-final.log`)
+- Staged Rust tool test output (local run output: `.cache/iso-test/tool-tests.log`)
 
 The full three-repeat performance comparison finished 72 runs. Its 1,140 host samples covered
 before, during and after. The host had zero test clients and outputs in all of them, and both
 pause files remained present.
 
-- [Performance comparison](/home/pronsh/Coding/native-tube/.cache/iso-test/out/perf-j6hEVlrm/summary.md)
-- [Performance host samples](/home/pronsh/Coding/native-tube/.cache/iso-test/out/perf-j6hEVlrm/host.jsonl)
+- Performance comparison (local run output: `.cache/iso-test/out/perf-j6hEVlrm/summary.md`)
+- Performance host samples (local run output: `.cache/iso-test/out/perf-j6hEVlrm/host.jsonl`)
 
 All three apps loaded Home in an offline software smoke run with no render node.
 
-- [Software smoke output](/home/pronsh/Coding/native-tube/.cache/iso-test/out/smoke-q0aiXkUY/driver.log)
-- [Software smoke device and socket evidence](/home/pronsh/Coding/native-tube/.cache/iso-test/out/smoke-q0aiXkUY/isolation.txt)
+- Software smoke output (local run output: `.cache/iso-test/out/smoke-q0aiXkUY/driver.log`)
+- Software smoke device and socket evidence (local run output: `.cache/iso-test/out/smoke-q0aiXkUY/isolation.txt`)
