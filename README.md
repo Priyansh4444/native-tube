@@ -3,9 +3,10 @@
 The same native YouTube client for Linux, built three times with three Rust GUI frameworks,
 to compare them: **iced**, **GPUI** and **Rune**.
 
-- Write-up (draft): [docs/blog/iced-vs-gpui-vs-rune.md](docs/blog/iced-vs-gpui-vs-rune.md)
-- Status: **work in progress.** The three apps build and run, but a review found real defects
-  (see [docs/review/](docs/review/)) and the benchmark numbers are preliminary.
+- [Framework comparison](docs/blog/x-article.md)
+- [Matched benchmark results](docs/media/fair.md) for the Intel GPU laptop on AC and battery
+  and a CPU-rendered Fly VM
+- [Review findings](docs/review/) and [known benchmark limitations](docs/media/fair.md)
 
 ## Release downloads
 
@@ -47,10 +48,6 @@ runs reuse the cached copy. For an offline run without the Hawk cache, use
 
 ## How it talks to YouTube
 
-There is no sign-in. Data comes from the same private API the YouTube website uses, and video
-streams are requested the way YouTube's own native apps request them; nothing in the app runs
-JavaScript, Lua or Python. Requests are rate-limited and back off when YouTube pushes back.
-Nothing is downloaded or saved.
-
-This is not an official client and it is outside YouTube's Terms of Service, which do not permit
-third-party clients. It is a framework comparison and a personal project; use it at your own risk.
+NativeTube is an independent, signed-out client. It uses YouTube's private web API for catalog
+data and streams video with libmpv. Requests are rate-limited and back off when YouTube pushes
+back. The app stores settings and library state locally.

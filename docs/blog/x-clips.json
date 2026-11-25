@@ -1,0 +1,16 @@
+{
+  "clips": [
+    {
+      "path": ".cache/viz/out/Demo.mp4",
+      "caption": "NativeTube in ten seconds. Home in iced, search in GPUI, and related playback and captions in Rune."
+    },
+    {
+      "path": ".cache/viz/out/FirstFrameRealTime.mp4",
+      "caption": "One open per app at normal speed. Each timer stops on the first visible fixture frame. These archived captures use approximate clock alignment."
+    },
+    {
+      "path": ".cache/viz/out/ScrollRealTime.mp4",
+      "caption": "One continuous scripted touchpad scroll in Rune, captured on the laptop at 60 fps and shown at normal speed."
+    }
+  ]
+}

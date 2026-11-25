@@ -112,3 +112,21 @@ def wheel_rate(app, field):
         return node["laptop"][app]["wheel"]["summary"][field]["median"]
     except (KeyError, TypeError):
         return None
+
+
+def cold_trials():
+    """Cold per-trial records from the Fly YouTube rerun (trusted click → first video frame)."""
+    node = receipt()
+    if node is None:
+        return []
+    return [row for row in node.get("web_rerun", []) if row.get("kind") == "result" and row.get("mode") == "cold"
+            and row.get("status") == "complete" and row.get("actual_frame_elapsed_ms") is not None]
+
+
+def cold_range_s():
+    """(fastest, slowest) cold rerun first content frame in seconds, or None."""
+    trials = cold_trials()
+    if not trials:
+        return None
+    times = [row["actual_frame_elapsed_ms"] / 1000 for row in trials]
+    return min(times), max(times)

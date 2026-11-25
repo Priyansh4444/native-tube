@@ -1,5 +1,4 @@
 """Compose the shared-clock tour and a slowed replay, entirely from saved captures."""
-import bisect
 from dataclasses import dataclass
 import json
 import math
@@ -9,43 +8,31 @@ import subprocess
 import av
 
 import data
-import normalized
 
 WORK = data.OUT.parent / "compose"
-START_LEAD = 1.35
 REPLAY_FACTOR = 4
-REPLAY_SECONDS = 1
 FPS = 60
 W, H = 1920, 1080
-TILE_W, TILE_H = 688, 430
-X0, Y0 = 251, 118
-GAP_X, GAP_Y = 42, 58
-BG = "10151F"
-DARK = "1B2535"
-INK = "F4F4EE"
-MUTED = "ACB9CB"
-MINT = "82ECC3"
+TILE_W, TILE_H = 948, 533   # captures are cropped from 16:10 to 16:9 at the bottom
+X0, Y0 = 8, 4
+GAP_X, GAP_Y = 8, 6
+BG = "000000"
+DARK = "121212"
+INK = "FFFFFF"
+MUTED = "999999"
+RIM = "2A2A2A"
+MIN_FS = 34  # libass \fs is cell height; Roboto em ≈ fs / 1.2. Labels use 40+ (≥ 32 px em); 34 is the footnote.
 
 
 @dataclass
 class Tour:
     app: str
     video: str
-    length: float
-    wheel: float
     opened: float
     visible_frame: float | None
-    stages: list[tuple[float, str]]
-    samples: list[tuple[float, float, float]]
-    memory_label: str
     sources: list[str]
     clock: str
-
-    def cursor(self, replay, fly_cut):
-        return self.opened if replay or fly_cut else self.wheel
-
-    def start(self, replay, fly_cut):
-        return self.cursor(replay, fly_cut) - (0 if replay else 7 if fly_cut else START_LEAD)
+    steps: dict  # step → (command time, mark time) on the capture clock; mark None if untimed
 
 
 def lap_entries():
@@ -106,21 +93,15 @@ def native(app, entry):
     marks = [(t / 1000 - offset, name) for t, name in report["all_marks"]]
     wheels = [t for t, cmd in commands if cmd == "scroll"]
     opens = [t for t, cmd in commands if cmd == "open_video"]
-    backs = [t for t, cmd in commands if cmd == "back"]
     search = next(t for t, name in marks if name == "search_loaded")
     played = next(t for t, name in marks if name == "playback_started" and t >= opens[0])
     switched = next(t for t, name in marks if name == "playback_started" and t >= opens[1])
     visual = clip_onsets(video, *opens)
-    stages = [(0, "HOME  ✓"), (wheels[-1], "SCROLL  ✓"), (search, "SEARCH  ✓"),
-              (visual if visual is not None else played, "PLAY  ✓"), (switched, "RELATED  ✓"),
-              (backs[0], "BACK 1 SENT"), (backs[-1], "BACK 2 SENT")]
-    samples = [
-        (at - offset, (cpu - before_cpu) * 100 / (at - before_at), rss)
-        for (before_at, before_cpu, _), (at, cpu, rss) in zip(raw, raw[4:])
-        if at > before_at and cpu >= before_cpu
-    ]
-    return Tour(app, video, length, wheels[0], opens[0], visual, stages, samples,
-                "RSS", entry["sources"], "end-aligned estimate")
+    searches = [t for t, cmd in commands if cmd == "search"]
+    steps = {"scroll": (wheels[0], None, wheels[-1]), "search": (searches[0], search, None),
+             "open": (opens[0], visual if visual is not None else played, None),
+             "related": (opens[1], switched, None)}
+    return Tour(app, video, opens[0], visual, entry["sources"], "end-aligned estimate", steps)
 
 
 def normalize_web(entry):
@@ -129,9 +110,13 @@ def normalize_web(entry):
     wheel = entry["wheel_s"]
     if not 0 <= wheel < entry["open_s"] < length:
         raise ValueError("Invalid clock for reviewed web capture")
-    return Tour("youtube", video, length, wheel, entry["open_s"], entry.get("visible_frame_s"),
-                entry["stages"], entry.get("samples", []),
-                entry.get("memory_label", "PSS"), entry["sources"], entry.get("clock", "reviewed capture"))
+    cues = dict((name, at) for at, name in entry["stages"])
+    # Only the cold open has a click time in the browser receipt; other steps are visual cues, not timed.
+    steps = {"scroll": (wheel, None, wheel), "search": (None, cues.get("SEARCH SHOWN"), None),
+             "open": (entry["open_s"], entry.get("visible_frame_s"), None),
+             "related": (None, cues.get("WARM PRE-ROLL"), None)}
+    return Tour("youtube", video, entry["open_s"], entry.get("visible_frame_s"),
+                entry["sources"], entry.get("clock", "reviewed capture"), steps)
 
 
 def rgb(color):
@@ -152,15 +137,36 @@ class Overlay:
         if ass_time(start) != ass_time(end):
             self.events.append(f"Dialogue: {layer},{ass_time(start)},{ass_time(end)},Base,,0,0,0,,{{{tag}}}{content}")
 
-    def text(self, content, x, y, start, end, *, size=22, color=INK, align=4, mono=False, bold=False):
-        font = r"\fnDejaVu Sans Mono" if mono else ""
+    def text(self, content, x, y, start, end, *, size=MIN_FS, color=INK, align=4, mono=False, bold=False, layer=1):
+        if size < MIN_FS:
+            raise ValueError(f"Overlay text below {MIN_FS}: {content!r}")
+        font = r"\fnRoboto" if mono else ""
         weight = r"\b1" if bold else ""
         safe = str(content).replace("\\", "/").replace("{", "(").replace("}", ")").replace("\n", r"\N")
-        self.event(start, end, fr"\an{align}\pos({x},{y})\fs{size}\1c{rgb(color)}{font}{weight}", safe)
+        self.event(start, end, fr"\an{align}\pos({x},{y})\fs{size}\1c{rgb(color)}{font}{weight}", safe, layer=layer)
 
-    def rect(self, x, y, w, h, start, end, color, *, layer=0):
-        self.event(start, end, fr"\an7\pos({x},{y})\p1\1c{rgb(color)}",
+    def rect(self, x, y, w, h, start, end, color, *, layer=0, alpha=0):
+        fade = fr"\1a&H{alpha:02X}&" if alpha else ""
+        self.event(start, end, fr"\an7\pos({x},{y})\p1\1c{rgb(color)}{fade}",
                    f"m 0 0 l {w} 0 {w} {h} 0 {h}", layer=layer)
+
+    def rounded(self, x, y, w, h, start, end, color, *, layer=0, outline=False, alpha=0, rim=None, width=3):
+        r = 12
+        path = (f"m {r} 0 l {w-r} 0 b {w-5} 0 {w} 5 {w} {r} l {w} {h-r} "
+                f"b {w} {h-5} {w-5} {h} {w-r} {h} l {r} {h} b 5 {h} 0 {h-5} 0 {h-r} "
+                f"l 0 {r} b 0 5 5 0 {r} 0")
+        if outline:
+            style = fr"\bord{width}\3c{rgb(color)}\1a&HFF&"
+        elif rim:
+            style = fr"\bord1\3c{rgb(rim)}" + (fr"\1a&H{alpha:02X}&" if alpha else "")
+        else:
+            style = fr"\1a&H{alpha:02X}&" if alpha else ""
+        self.event(start, end, fr"\an7\pos({x},{y})\p1\1c{rgb(color)}{style}", path, layer=layer)
+
+    def glass(self, x, y, w, h, start, end, *, layer=0, color=DARK, alpha=0):
+        """Obsidian glass card: surface, rim at 8% white, and a faint top sheen line."""
+        self.rounded(x, y, w, h, start, end, color, layer=layer, rim=RIM, alpha=alpha)
+        self.rect(x + 12, y + 1, w - 24, 1, start, end, "2E2E2E", layer=layer)
 
     def write(self, path):
         path.write_text(f"""[Script Info]
@@ -171,7 +177,7 @@ WrapStyle: 2
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Base,DejaVu Sans,22,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,4,0,0,0,1
+Style: Base,Roboto,34,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,4,0,0,0,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -183,122 +189,217 @@ def tiles():
         yield app, X0 + (i % 2) * (TILE_W + GAP_X), Y0 + (i // 2) * (TILE_H + GAP_Y)
 
 
-def annotate_tile(overlay, tour, x, y, total, replay, fly_cut):
-    clock_rate = REPLAY_FACTOR if replay else 1
-    start = tour.start(replay, fly_cut)
-    times = [t for t, _, _ in tour.samples]
-    stages = [t for t, _ in tour.stages]
-    color = data.APP_COLORS[tour.app]
-    overlay.rect(x, y + TILE_H, TILE_W, 29, 0, total, DARK)
-    cursor = tour.cursor(replay, fly_cut)
-    first = tour.visible_frame
-    if first is not None and first >= start:
-        flash = (first - start) * clock_rate
-        for bx, by, bw, bh in (
-            (x, y, TILE_W, 4), (x, y + TILE_H - 4, TILE_W, 4),
-            (x, y, 4, TILE_H), (x + TILE_W - 4, y, 4, TILE_H),
-        ):
-            overlay.rect(bx, by, bw, bh, flash, min(flash + .45, total), MINT, layer=2)
-    for tick in range(math.ceil(total * 30)):
-        at = tick / 30
-        end = min((tick + 1) / 30, total)
-        original = min(tour.length, start + at / clock_rate)
-        elapsed = original - cursor
-        timer = f"{'−' if elapsed < 0 else '+'}{abs(elapsed):05.2f} s"
-        overlay.text(timer, x + TILE_W, y - 17, at, end, size=26, color=color, mono=True, align=6)
-        stage_index = bisect.bisect_right(stages, original) - 1
-        status = tour.stages[stage_index][1] if stage_index >= 0 else "READY"
-        if (replay and first is not None and original >= first) or (first is not None and first <= original < first + .65):
-            status = "FIRST CONTENT FRAME" if tour.app == "youtube" else "FIRST VISIBLE FRAME"
-        elif original >= tour.length - .09:
-            status = "TOUR DONE"
-        elif first is not None and tour.opened <= original < first:
-            status = "OPEN SENT"
-        elif original < tour.wheel and not replay and tour.app != "youtube":
-            status = "HOME  ✓"
-        overlay.text(status, x + TILE_W - 162, y - 17, at, end, size=19, color=MINT, align=6, bold=True)
-        i = bisect.bisect_right(times, original) - 1
-        if i < 0 or original - times[i] > 1:
-            overlay.text("CPU / memory samples unavailable", x + 12, y + TILE_H + 14, at, end, size=16, color=MUTED)
+STEP_NAMES = {"scroll": "Wheel scroll", "search": "Search", "open": "Click → first frame", "related": "Related video"}
+LEAD, TAIL, OPEN_TAIL = .6, 1.6, 2.8
+
+
+def segments(tours, replay):
+    """The cut list: each step aligns every tile on its own command, so the timers race from one click."""
+    if replay:
+        return [("open", .15, 1.0)]
+    cut = []
+    for step in ("scroll", "search", "open", "related"):
+        spans = []
+        for tour in tours.values():
+            cmd, mark, until = tour.steps[step]
+            if cmd is not None and mark is not None:
+                spans.append(mark - cmd)
+            elif until is not None and cmd is not None:
+                spans.append(until - cmd)
+        if spans:
+            cut.append((step, LEAD, max(spans) + (OPEN_TAIL if step == "open" else TAIL)))
+    return cut
+
+
+def frozen_values(tours, cut):
+    """step → app → seconds from that app's own command to its mark, for every timed tile."""
+    result = {}
+    for step, _, _ in cut:
+        for app, tour in tours.items():
+            cmd, mark, _ = tour.steps[step]
+            if app != "youtube" and step != "scroll" and cmd is not None and mark is not None:
+                result.setdefault(step, {})[app] = mark - cmd
+    return result
+
+
+def anchor(tour, step):
+    """Source time that lines up with the step's command on screen."""
+    cmd, mark, _ = tour.steps[step]
+    if cmd is not None:
+        return cmd
+    return (mark - .3) if mark is not None else tour.opened
+
+
+def render(tours, *, replay, platform, web_reason, encode=True):
+    fly_cut = platform == "Fly VM"
+    name = variant_name(replay, fly_cut)
+    speed = REPLAY_FACTOR if replay else 1
+    cut = segments(tours, replay)
+    lengths = [(lead + span) * speed for _, lead, span in cut]
+    total = sum(lengths)
+    frozen = frozen_values(tours, cut)
+    if not encode:
+        return name, total, frozen
+    overlay = Overlay()
+    args = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-filter_complex_threads", "2",
+            "-f", "lavfi", "-i", f"color=0x{BG}:s={W}x{H}:r={FPS}:d={total}"]
+    graph, current, index = [], "0:v", 0
+    for app, x, y in tiles():
+        if app not in tours:
+            summary_panel(overlay, cut, frozen, lengths, x, y, replay, web_reason if fly_cut else None)
             continue
-        _, cpu, memory = tour.samples[i]
-        meter_y = y + TILE_H + 12
-        # One-core percent becomes cores busy out of the machine's logical CPUs, so no value exceeds its
-        # scale. The laptop count comes from the normalized receipt; until then the label is a placeholder.
-        cores = normalized.value("fly_logical_cpus" if fly_cut else "laptop_logical_cpus")
-        if cores:
-            cpu_label, cpu_frac = f"CPU {cpu / 100:4.2f}/{cores:.0f} cores", cpu / (100 * cores)
-        else:
-            cpu_label, cpu_frac = "CPU pending normalization", 0
-        overlay.text(cpu_label, x + 10, meter_y + 2, at, end, size=17, mono=True)
-        overlay.text(f"{tour.memory_label} {memory:.0f} MiB", x + 370, meter_y + 2, at, end, size=17, mono=True)
-        meters = ((x + 510, memory / 512, MINT),) if not cores else ((x + 193, cpu_frac, color), (x + 510, memory / 512, MINT))
-        for left, frac, fill in meters:
-            overlay.rect(left, meter_y, 150, 4, at, end, "344256")
-            if frac > 0:
-                overlay.rect(left, meter_y, min(150, round(150 * frac)), 4, at, end, fill, layer=1)
+        tour = tours[app]
+        index += 1
+        args += ["-threads", "2", "-i", tour.video]
+        parts = []
+        for k, ((step, lead, span), length) in enumerate(zip(cut, lengths)):
+            start = max(0, anchor(tour, step) - lead)
+            graph.append(f"[{index}:v]trim=start={start:.4f}:end={start + lead + span + .5:.4f},setpts={speed}*(PTS-STARTPTS),"
+                         f"fps={FPS},tpad=stop_mode=clone:stop_duration={length:.3f},trim=duration={length:.4f},"
+                         f"setpts=PTS-STARTPTS,crop=iw:iw*9/16:0:0,scale={TILE_W}:{TILE_H},setsar=1[s{index}_{k}]")
+            parts.append(f"[s{index}_{k}]")
+        graph.append(f"{''.join(parts)}concat=n={len(parts)}:v=1:a=0[t{index}]")
+        graph.append(f"[{current}][t{index}]overlay={x}:{y}:eof_action=repeat[m{index}]")
+        current = f"m{index}"
+        annotate_tile(overlay, tour, x, y, cut, lengths, frozen, speed)
+    note = "Timers start at each app's own command • clocks aligned approximately • open stops at the first visible frame"
+    if fly_cut:
+        note = "Native timers start at each app's own command • approximate clock alignment • YouTube web: live"
+    # One small footnote, on the seam between the two rows of tiles.
+    seam = Y0 + TILE_H + GAP_Y // 2
+    overlay.rounded(W // 2 - 800, seam - 22, 1600, 44, 0, total, BG, layer=5, alpha=0x30, rim=RIM)
+    overlay.text(note, W // 2, seam, 0, total, size=MIN_FS, color=MUTED, align=5, layer=6)
+    ass = WORK / f"{name}.ass"
+    overlay.write(ass)
+    graph.append(f"[{current}]ass={ass.relative_to(data.ROOT)}:fontsdir=assets/fonts,"
+                 "scale=1856:1044,pad=1920:1080:32:18:black[out]")
+    (WORK / f"{name}.filters").write_text(";\n".join(graph))
+    body = WORK / f"{name}-body.mp4"
+    subprocess.run(["nice", "-n", "19", *args, "-filter_complex", ";".join(graph), "-map", "[out]",
+                    "-t", f"{total:.4f}", "-an", "-c:v", "libx264", "-threads", "4", "-preset", "veryfast",
+                    "-profile:v", "high", "-crf", "18", "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(body)],
+                   check=True)
+    import obsidian  # The bookend cards live with the other Obsidian artwork.
+    obsidian.bookend_tour(name, body, frozen, fly_cut=fly_cut, replay=replay, web="youtube" in tours)
+    return name, total, frozen
+
+
+def frosted(overlay, x, y, w, h, start, end, layer=2):
+    overlay.rounded(x, y, w, h, start, end, BG, layer=layer, alpha=0x48, rim=RIM)
+
+
+def annotate_tile(overlay, tour, x, y, cut, lengths, frozen, speed):
+    """Overlays stay minimal: the app name, a big running timer, and the step label."""
+    color = data.APP_COLORS[tour.app]
+    total = sum(lengths)
+    top = y + (14 if y == Y0 else 32)  # clear of the footnote on the seam
+    frosted(overlay, x + 16, top, 260, 64, 0, total)
+    overlay.rect(x + 30, top + 54, 232, 4, 0, total, color, layer=3)
+    overlay.text(data.NAMES[tour.app], x + 32, top + 30, 0, total, size=46, bold=True, layer=3)
+    at = 0.0
+    for (step, lead, span), length in zip(cut, lengths):
+        cmd, mark, _ = tour.steps[step]
+        live = tour.app == "youtube"
+        words = STEP_NAMES[step] + ("  •  live, not raced" if live else "")
+        width = 30 + 23 * len(words)
+        bottom = y + TILE_H - (90 if y == Y0 else 74)
+        frosted(overlay, x + 16, bottom, width, 58, at, at + length)
+        overlay.text(words, x + 34, bottom + 29, at, at + length, size=40, bold=True, layer=3)
+        value = frozen.get(step, {}).get(tour.app)
+        if value is not None:
+            src0 = anchor(tour, step) - lead
+            stop = at + (lead + value) * speed
+            frosted(overlay, x + TILE_W - 330, top, 314, 92, at, min(stop, at + length))
+            ticks = math.ceil(length * 30)
+            for tick in range(ticks):
+                t0, t1 = at + tick / 30, min(at + (tick + 1) / 30, at + length)
+                if t0 >= stop:
+                    break
+                elapsed = max(0.0, src0 + (t0 - at) / speed - cmd)
+                overlay.text(f"{elapsed * 1000:,.0f} ms", x + TILE_W - 36, top + 46, t0, min(t1, stop),
+                             size=72, color=color, mono=True, bold=True, align=6, layer=3)
+            if stop < at + length:
+                # Frozen and highlighted: the pill turns the app's colour and the tile rim flashes white.
+                overlay.rounded(x + TILE_W - 330, top, 314, 92, stop, at + length, color, layer=2)
+                overlay.text(f"{value * 1000:,.0f} ms", x + TILE_W - 36, top + 46, stop, at + length, size=72,
+                             color=BG, mono=True, bold=True, align=6, layer=3)
+                overlay.rounded(x, y, TILE_W, TILE_H, stop, min(stop + .45, at + length), INK, layer=4,
+                                outline=True, width=6)
+        at += length
+
+
+def summary_panel(overlay, cut, frozen, lengths, x, y, replay, web_reason):
+    """The empty quadrant: the step in big type and each app's stopped time as it lands."""
+    at = 0.0
+    for (step, lead, span), length in zip(cut, lengths):
+        speed = REPLAY_FACTOR if replay else 1
+        overlay.text(STEP_NAMES[step], x + 40, y + 70, at, at + length, size=64, bold=True)
+        values = frozen.get(step, {})
+        if not values:
+            overlay.text("no stop mark for this step", x + 40, y + 140, at, at + length, size=40, color=MUTED)
+        best = min(values.values()) if values else None
+        for i, app in enumerate(sorted(values, key=values.get)):
+            land = at + (lead + values[app]) * speed
+            if land >= at + length:
+                continue
+            gap = round(values[app] * 1000) - round(best * 1000)
+            row = y + 170 + i * 96
+            overlay.text(data.NAMES[app], x + 40, row, land, at + length, size=56, color=data.APP_COLORS[app], bold=True)
+            overlay.text(f"{values[app] * 1000:,.0f} ms", x + 470, row, land, at + length, size=56,
+                         color=data.APP_COLORS[app], mono=True, bold=True, align=6)
+            if gap > 0:
+                frosted(overlay, x + 500, row - 30, 220, 60, land, at + length)
+                overlay.text(f"+{gap} ms", x + 610, row, land, at + length, size=44, bold=True, align=5, layer=3)
+        at += length
+    if web_reason:
+        overlay.text(web_reason, x + 40, y + TILE_H - 34, 0, at, size=MIN_FS, color=MUTED)
 
 
 def variant_name(replay, fly_cut):
     return "SideBySideFly" if fly_cut else "FirstSecondReplay" if replay else "SideBySide"
 
 
-def render(tours, *, replay, platform, web_reason, encode=True):
-    fly_cut = platform == "Fly VM"
-    name = variant_name(replay, fly_cut)
-    total = REPLAY_SECONDS * REPLAY_FACTOR if replay else math.ceil(
-        max(t.length - t.start(replay, fly_cut) for t in tours.values())
-    )
-    if not encode:
-        return name, total
+def first_frame_clip():
+    """One click per app at original speed, with the timer directly below its footage."""
+    WORK.mkdir(parents=True, exist_ok=True)
+    lead, seconds = .75, 4.25
+    panel_w, panel_h, top = 568, 356, 354
     overlay = Overlay()
-    title = "First second after open" if replay else "Same tour, side by side"
-    subtitle = (f"{platform}  /  {REPLAY_FACTOR}× slow motion  /  aligned to each open event" if replay
-                else f"{platform}  /  aligned to first scroll command  /  local fixture clip in native apps")
-    if fly_cut:
-        subtitle = "Fly VM  /  aligned to the cold open  /  native fixture clip and live YouTube"
-    overlay.text(title, X0, 31, 0, total, size=38, bold=True)
-    overlay.text(subtitle, X0, 68, 0, total, size=20, color=MUTED)
-    logical = normalized.value("fly_logical_cpus" if fly_cut else "laptop_logical_cpus")
-    cpu_note = f"CPU = sampled cores busy of {logical:.0f} logical CPUs." if logical else "CPU pending normalization."
-    footer = (f"Clock zero: native open command; YouTube navigation start. {cpu_note} Browser clicked Skip on one ad in this recording."
-              if fly_cut else f"Native capture clocks aligned approximately from report end. {cpu_note} "
-              "RSS is resident memory.")
-    overlay.text(footer, X0, 1067, 0, total, size=17, color=MUTED)
-    args = [
-        "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-filter_complex_threads", "2",
-        "-f", "lavfi", "-i", f"color=0x{BG}:s={W}x{H}:r={FPS}:d={total}",
-    ]
-    filter_graph = []
-    current = "0:v"
-    for app, x, y in tiles():
-        overlay.text(data.NAMES[app], x, y - 17, 0, total, size=28, color=data.APP_COLORS[app], bold=True)
-        if app not in tours:
-            overlay.rect(x, y, TILE_W, TILE_H, 0, total, DARK)
-            msg = web_reason if app == "youtube" else "Tour unavailable"
-            overlay.text(msg, x + TILE_W // 2, y + TILE_H // 2, 0, total, size=25, color=MUTED, align=5)
-            continue
-        tour = tours[app]
-        i = 1 + len(filter_graph) // 2
-        args.extend(["-threads", "2", "-ss", f"{max(0, tour.start(replay, fly_cut)):.6f}", "-i", tour.video])
-        speed = REPLAY_FACTOR if replay else 1
-        filter_graph.append(
-            f"[{i}:v]setpts={speed}*(PTS-STARTPTS),fps={FPS},"
-            f"scale={TILE_W}:{TILE_H}:force_original_aspect_ratio=decrease,"
-            f"pad={TILE_W}:{TILE_H}:(ow-iw)/2:(oh-ih)/2:color=0x{BG},setsar=1[v{i}]"
-        )
-        filter_graph.append(f"[{current}][v{i}]overlay={x}:{y}:eof_action=repeat[m{i}]")
+    overlay.text("Click to first frame", 84, 122, 0, seconds, size=78, bold=True)
+    overlay.text("Laptop fixture recordings · one open per app", 84, 204, 0, seconds, size=36, color=MUTED)
+    overlay.text("Timers start at each open command. Capture clocks are aligned approximately.",
+                 84, 959, 0, seconds, color=MUTED)
+    args = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-filter_complex_threads", "2",
+            "-f", "lavfi", "-i", f"color=black:s={W}x{H}:r={FPS}:d={seconds}"]
+    graph, current, sources = [], "0:v", {}
+    for i, (app, entry) in enumerate(lap_entries().items(), 1):
+        tour = native(app, entry)
+        if tour.visible_frame is None or tour.visible_frame <= tour.opened:
+            raise ValueError(f"{app} recording lacks a visible first frame after the open command")
+        x = 84 + (i - 1) * 592
+        args += ["-threads", "2", "-ss", f"{tour.opened - lead:.6f}", "-i", tour.video]
+        graph.append(f"[{i}:v]fps={FPS},scale={panel_w}:{panel_h},setsar=1[v{i}]")
+        graph.append(f"[{current}][v{i}]overlay={x}:{top}[m{i}]")
         current = f"m{i}"
-        annotate_tile(overlay, tour, x, y, total, replay, fly_cut)
-    ass = WORK / f"{name}.ass"
+        color = data.APP_COLORS[app]
+        overlay.text(data.NAMES[app], x, 310, 0, seconds, size=54, bold=True)
+        elapsed = tour.visible_frame - tour.opened
+        stop = lead + elapsed
+        for tick in range(math.ceil(elapsed * 30)):
+            start = lead + tick / 30
+            overlay.text(f"{round(tick * 100 / 30) * 10} ms", x, 795, start, min(stop, start + 1 / 30),
+                         size=70, mono=True, color=MUTED)
+        overlay.text(f"≈ {round(elapsed * 100) * 10} ms", x, 795, stop, seconds,
+                     size=70, mono=True, bold=True, color=color)
+        sources[f"{app} capture and clock"] = tour.sources
+    ass = WORK / "FirstFrameRealTime.ass"
     overlay.write(ass)
-    filter_graph.append(f"[{current}]ass={ass.relative_to(data.ROOT)}[out]")
-    (WORK / f"{name}.filters").write_text(";\n".join(filter_graph))
-    output = data.OUT / f"{name}.mp4"
-    subprocess.run([*args, "-filter_complex", ";".join(filter_graph), "-map", "[out]", "-t", str(total),
-                    "-an", "-c:v", "libx264", "-threads", "2", "-preset", "veryfast", "-crf", "19",
-                    "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(output)], check=True)
-    return name, total
+    graph.append(f"[{current}]ass={ass.relative_to(data.ROOT)}:fontsdir=assets/fonts[out]")
+    subprocess.run(["nice", "-n", "19", *args, "-filter_complex", ";".join(graph), "-map", "[out]",
+                    "-t", str(seconds), "-an", "-c:v", "libx264", "-threads", "2", "-preset", "veryfast",
+                    "-profile:v", "high", "-crf", "18", "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+                    str(data.OUT / "FirstFrameRealTime.mp4")], check=True)
+    return sources
 
 
 def main(fly, wanted=None):
@@ -314,17 +415,15 @@ def main(fly, wanted=None):
             captures["youtube"] = normalize_web(entries["youtube"])
         status = fly.get("web_status", {}) if fly_cut else {}
         reason = f'Browser run blocked • {status["reason"]}' if status else "No comparable browser recording"
-        name, total = render(captures, replay=replay, platform=platform, web_reason=reason,
-                             encode=wanted is None or variant_name(replay, fly_cut) in wanted)
+        name, total, frozen = render(captures, replay=replay, platform=platform, web_reason=reason,
+                                     encode=wanted is None or variant_name(replay, fly_cut) in wanted)
         receipts[name] = {
-            "platform": platform, "duration_s": total,
-            "slow_factor": REPLAY_FACTOR if replay else 1, "web_status": status,
+            "platform": platform, "duration_s": total, "bookends_s": [2.0, 2.5],
+            "steps": frozen, "slow_factor": REPLAY_FACTOR if replay else 1, "web_status": status,
             "tiles": {
                 app: {
-                    "sources": tour.sources, "video_start_s": tour.start(replay, fly_cut),
-                    "first_scroll_s": tour.wheel, "report_open_s": tour.opened,
-                    "first_visible_frame_s": tour.visible_frame, "stages": tour.stages,
-                    "alignment": tour.clock,
+                    "sources": tour.sources, "steps": tour.steps, "report_open_s": tour.opened,
+                    "first_visible_frame_s": tour.visible_frame, "alignment": tour.clock,
                 } for app, tour in captures.items()
             },
         }

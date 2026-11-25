@@ -23,7 +23,7 @@ GATE = ".cache/perf/out/compare-isDkA304/summary.md"
 APPS = ("iced", "gpui", "rune")
 ALL_APPS = (*APPS, "youtube")
 NAMES = dict(zip(ALL_APPS, ("iced", "GPUI", "Rune", "YouTube web"), strict=True))
-APP_COLORS = dict(zip(ALL_APPS, ("#77DBF7", "#F6C777", "#BCA3FF", "#FF939B"), strict=True))
+APP_COLORS = dict(zip(ALL_APPS, ("#4FD1FF", "#FFB547", "#B98CFF", "#FF4B4B"), strict=True))
 
 
 def read(path):

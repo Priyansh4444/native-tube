@@ -1,5 +1,9 @@
 # Fact-check of docs/blog/x-article.md
 
+This review covers the November 24 draft. The current article uses the later
+[matched results and laptop confirmation](../media/fair.md) and the
+[three real-time clips](x-clips.json).
+
 Checked 2026-11-24 against the sources named in the task: `docs/blog/takes/review.md` (binding),
 `docs/media/fly-bench.md` and `.cache/fly-bench/out/summary.json`, `docs/media/README.md` and
 `.cache/media/out/**`, `docs/blog/coordinator-notes.md`, `bench/results/playback.json`,
