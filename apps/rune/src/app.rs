@@ -37,10 +37,6 @@ pub fn flush_marks() {
     let mut m = PENDING_MARKS.lock().unwrap_or_else(|e| e.into_inner());
     for name in m.drain(..) {
         nt_core::metrics::mark(name);
-        // The home page is up: start the player off the UI thread for the first click.
-        if name == marks::HOME_LOADED {
-            crate::video::prewarm();
-        }
     }
 }
 

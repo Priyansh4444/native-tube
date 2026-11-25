@@ -1,0 +1,544 @@
+--- a/tools/nt-input/src/main.rs
++++ b/tools/nt-input/src/main.rs
+@@ -219,6 +219,26 @@
+     }
+ }
+ 
++fn sway_window(tree: &serde_json::Value, class: &str) -> Option<serde_json::Value> {
++    if tree["app_id"] == class {
++        return Some(tree.clone());
++    }
++    ["nodes", "floating_nodes"]
++        .into_iter()
++        .filter_map(|key| tree[key].as_array())
++        .flatten()
++        .find_map(|child| sway_window(child, class))
++}
++
++fn sway_tree() -> serde_json::Value {
++    let output = Command::new("swaymsg")
++        .args(["-t", "get_tree"])
++        .output()
++        .expect("run swaymsg against the private compositor");
++    assert!(output.status.success(), "swaymsg get_tree failed");
++    serde_json::from_slice(&output.stdout).expect("invalid Sway tree")
++}
++
+ fn sleep_ms(ms: u64) {
+     std::thread::sleep(Duration::from_millis(ms));
+ }
+@@ -322,122 +342,7 @@
+     }
+ }
+ 
+-fn main() {
+-    let args: Vec<String> = std::env::args().skip(1).collect();
+-    if args.first().is_some_and(|a| a == "__guard") {
+-        guard(&args[1..]);
+-        return;
+-    }
+-    // The owner's pause switch: while this file exists, nobody's test drives the real cursor.
+-    // `touch $XDG_RUNTIME_DIR/nt-input.paused` pauses; removing it resumes.
+-    // Checked in two places: the runtime dir (fast to toggle) and ~/.local/state, which survives
+-    // reboots. A reboot once wiped the runtime-dir file while the owner still wanted input paused.
+-    let runtime = std::env::var_os("XDG_RUNTIME_DIR")
+-        .map(std::path::PathBuf::from)
+-        .unwrap_or_else(std::env::temp_dir)
+-        .join("nt-input.paused");
+-    let state = std::env::var_os("HOME")
+-        .map(|h| std::path::PathBuf::from(h).join(".local/state/nt-input.paused"));
+-    let paused = std::iter::once(runtime).chain(state).find(|p| p.exists());
+-    if let Some(paused) = paused {
+-        eprintln!(
+-            "nt-input: PAUSED by the owner ({}): they are using the machine. Don't drive the GUI \
+-             any other way either; report the step as needing input verification.",
+-            paused.display()
+-        );
+-        std::process::exit(75);
+-    }
+-    if args.first().is_some_and(|a| a == "--stay") {
+-        eprintln!(
+-            "--stay was removed: it left the owner's real cursor on a test output. \
+-             Use `nt-input <fw> hover X Y OUT.png [MS]`, which screenshots the hover and restores."
+-        );
+-        std::process::exit(2);
+-    }
+-    if args.len() < 2 {
+-        eprintln!(
+-            "{}",
+-            include_str!("main.rs")
+-                .lines()
+-                .take(10)
+-                .map(|l| l.trim_start_matches("//! "))
+-                .collect::<Vec<_>>()
+-                .join("\n")
+-        );
+-        std::process::exit(2);
+-    }
+-    let fw = args[0].to_ascii_uppercase();
+-    let output_name = format!("NT-{fw}");
+-    let class = format!("nttest-{}", args[0]);
+-    let num = |i: usize, default: f64| {
+-        args.get(i)
+-            .and_then(|s| s.parse::<f64>().ok())
+-            .unwrap_or(default)
+-    };
+-
+-    // Several agents may drive their apps at once; the cursor is shared, so take turns.
+-    let lock_path = std::env::var_os("XDG_RUNTIME_DIR")
+-        .map(std::path::PathBuf::from)
+-        .unwrap_or_else(std::env::temp_dir)
+-        .join("nt-input.lock");
+-    let _lock = std::fs::OpenOptions::new()
+-        .create(true)
+-        .truncate(false)
+-        .write(true)
+-        .open(&lock_path)
+-        .ok();
+-    if let Some(f) = &_lock {
+-        let _ = f.lock();
+-    }
+-
+-    // What to put back afterwards.
+-    let cursor = hypr_json(&["cursorpos"]);
+-    // The owner's window to give focus back to; never a test window.
+-    let active = hypr_json(&["activewindow"]);
+-    let prev_window = active
+-        .get("address")
+-        .and_then(|a| a.as_str())
+-        .filter(|_| {
+-            !active["class"]
+-                .as_str()
+-                .is_some_and(|c| c.starts_with("nttest-"))
+-        })
+-        .map(str::to_string);
+-    let window = hypr_json(&["clients"])
+-        .as_array()
+-        .and_then(|cs| cs.iter().find(|c| c["class"] == class.as_str()).cloned());
+-    let Some(window) = window else {
+-        eprintln!(
+-            "no window with app_id {class} (start it with tools/headless.sh run {})",
+-            args[0]
+-        );
+-        std::process::exit(1);
+-    };
+-    let win_addr = window["address"].as_str().unwrap_or_default().to_string();
+-    let home = safe_home(&cursor);
+-
+-    // A watchdog in its own process group: if this process dies mid-action (killed, timed out,
+-    // crashed), it still puts the owner's cursor and focus back.
+-    if let Ok(exe) = std::env::current_exe() {
+-        use std::os::unix::process::CommandExt;
+-        let (hx, hy) = home.map_or((String::new(), String::new()), |(x, y)| {
+-            (x.to_string(), y.to_string())
+-        });
+-        let _ = Command::new(exe)
+-            .args([
+-                "__guard",
+-                &std::process::id().to_string(),
+-                &hx,
+-                &hy,
+-                prev_window.as_deref().unwrap_or("-"),
+-            ])
+-            .stdin(std::process::Stdio::null())
+-            .stdout(std::process::Stdio::null())
+-            .stderr(std::process::Stdio::null())
+-            .process_group(0)
+-            .spawn();
+-    }
+-
++fn connect_pointer(output_name: &str) -> (Pointer, wayland_client::EventQueue<State>) {
+     let conn = Connection::connect_to_env().expect("no Wayland display");
+     let mut queue = conn.new_event_queue();
+     let qh = queue.handle();
+@@ -452,7 +357,7 @@
+     let output = state
+         .outputs
+         .iter()
+-        .find(|(_, n)| n.as_deref() == Some(output_name.as_str()))
++        .find(|(_, n)| n.as_deref() == Some(output_name))
+         .map(|(o, _)| o.clone())
+         .unwrap_or_else(|| {
+             eprintln!("no output {output_name}; run tools/headless.sh setup");
+@@ -466,8 +371,158 @@
+         start: Instant::now(),
+     };
+     queue.roundtrip(&mut state).expect("roundtrip");
+-
+-    let (x, y) = (num(2, 640.0), num(3, 400.0));
++    (p, queue)
++}
++
++fn main() {
++    let sway = std::env::var("NT_INPUT_BACKEND").as_deref() == Ok("sway");
++    let args: Vec<String> = std::env::args().skip(1).collect();
++    if sway && args == ["__anchor"] {
++        let (_pointer, mut queue) = connect_pointer("HEADLESS-1");
++        println!("private pointer ready");
++        let mut state = State::default();
++        while queue.blocking_dispatch(&mut state).is_ok() {}
++        return;
++    }
++    if !sway && args.first().is_some_and(|a| a == "__guard") {
++        guard(&args[1..]);
++        return;
++    }
++    if !sway {
++        // The owner's pause switch: while this file exists, nobody's test drives the real cursor.
++        // `touch $XDG_RUNTIME_DIR/nt-input.paused` pauses; removing it resumes.
++        // Checked in two places: the runtime dir (fast to toggle) and ~/.local/state, which survives
++        // reboots. A reboot once wiped the runtime-dir file while the owner still wanted input paused.
++        let runtime = std::env::var_os("XDG_RUNTIME_DIR")
++            .map(std::path::PathBuf::from)
++            .unwrap_or_else(std::env::temp_dir)
++            .join("nt-input.paused");
++        let state = std::env::var_os("HOME")
++            .map(|h| std::path::PathBuf::from(h).join(".local/state/nt-input.paused"));
++        let paused = std::iter::once(runtime).chain(state).find(|p| p.exists());
++        if let Some(paused) = paused {
++            eprintln!(
++                "nt-input: PAUSED by the owner ({}): they are using the machine. Don't drive the GUI \
++                 any other way either; report the step as needing input verification.",
++                paused.display()
++            );
++            std::process::exit(75);
++        }
++    }
++    if args.first().is_some_and(|a| a == "--stay") {
++        eprintln!(
++            "--stay was removed: it left the owner's real cursor on a test output. \
++             Use `nt-input <fw> hover X Y OUT.png [MS]`, which screenshots the hover and restores."
++        );
++        std::process::exit(2);
++    }
++    if args.len() < 2 {
++        eprintln!(
++            "{}",
++            include_str!("main.rs")
++                .lines()
++                .take(10)
++                .map(|l| l.trim_start_matches("//! "))
++                .collect::<Vec<_>>()
++                .join("\n")
++        );
++        std::process::exit(2);
++    }
++    let fw = args[0].to_ascii_uppercase();
++    let output_name = if sway {
++        "HEADLESS-1".to_owned()
++    } else {
++        format!("NT-{fw}")
++    };
++    let class = format!("nttest-{}", args[0]);
++    let num = |i: usize, default: f64| {
++        args.get(i)
++            .and_then(|s| s.parse::<f64>().ok())
++            .unwrap_or(default)
++    };
++
++    // Several agents may drive their apps at once; the cursor is shared, so take turns.
++    let lock_path = std::env::var_os("XDG_RUNTIME_DIR")
++        .map(std::path::PathBuf::from)
++        .unwrap_or_else(std::env::temp_dir)
++        .join("nt-input.lock");
++    let _lock = std::fs::OpenOptions::new()
++        .create(true)
++        .truncate(false)
++        .write(true)
++        .open(&lock_path)
++        .ok();
++    if let Some(f) = &_lock {
++        let _ = f.lock();
++    }
++
++    let (origin, restore) = if sway {
++        let window = sway_window(&sway_tree(), &class).unwrap_or_else(|| {
++            eprintln!("no window with app_id {class}");
++            std::process::exit(1);
++        });
++        let rect = &window["rect"];
++        (
++            (
++                rect["x"].as_f64().expect("missing window x"),
++                rect["y"].as_f64().expect("missing window y"),
++            ),
++            None,
++        )
++    } else {
++        // What to put back afterwards.
++        let cursor = hypr_json(&["cursorpos"]);
++        // The owner's window to give focus back to; never a test window.
++        let active = hypr_json(&["activewindow"]);
++        let prev_window = active
++            .get("address")
++            .and_then(|a| a.as_str())
++            .filter(|_| {
++                !active["class"]
++                    .as_str()
++                    .is_some_and(|c| c.starts_with("nttest-"))
++            })
++            .map(str::to_string);
++        let window = hypr_json(&["clients"])
++            .as_array()
++            .and_then(|cs| cs.iter().find(|c| c["class"] == class.as_str()).cloned());
++        let Some(window) = window else {
++            eprintln!(
++                "no window with app_id {class} (start it with tools/headless.sh run {})",
++                args[0]
++            );
++            std::process::exit(1);
++        };
++        let win_addr = window["address"].as_str().unwrap_or_default().to_string();
++        let home = safe_home(&cursor);
++
++        // A watchdog in its own process group: if this process dies mid-action (killed, timed out,
++        // crashed), it still puts the owner's cursor and focus back.
++        if let Ok(exe) = std::env::current_exe() {
++            use std::os::unix::process::CommandExt;
++            let (hx, hy) = home.map_or((String::new(), String::new()), |(x, y)| {
++                (x.to_string(), y.to_string())
++            });
++            let _ = Command::new(exe)
++                .args([
++                    "__guard",
++                    &std::process::id().to_string(),
++                    &hx,
++                    &hy,
++                    prev_window.as_deref().unwrap_or("-"),
++                ])
++                .stdin(std::process::Stdio::null())
++                .stdout(std::process::Stdio::null())
++                .stderr(std::process::Stdio::null())
++                .process_group(0)
++                .spawn();
++        }
++        ((0.0, 0.0), Some((home, prev_window, win_addr)))
++    };
++
++    let (p, _queue) = connect_pointer(&output_name);
++
++    let (x, y) = (num(2, 640.0) + origin.0, num(3, 400.0) + origin.1);
+     let mut needs_focus_restore = false;
+     match args[1].as_str() {
+         "move" => p.move_to(x, y),
+@@ -523,7 +578,11 @@
+             p.finger_stop();
+         }
+         "drag" => {
+-            let (x2, y2, duration) = (num(4, x), num(5, y), num(6, 300.0));
++            let (x2, y2, duration) = (
++                num(4, x - origin.0) + origin.0,
++                num(5, y - origin.1) + origin.1,
++                num(6, 300.0),
++            );
+             p.move_to(x, y);
+             sleep_ms(40);
+             p.button(BTN_LEFT, true);
+@@ -537,12 +596,30 @@
+             needs_focus_restore = true;
+         }
+         "key" | "type" => {
+-            focus(&win_addr);
+-            if !wait_focus(&win_addr, 800) {
+-                // Never type into whatever does have focus (it may be the owner's editor).
+-                eprintln!("nt-input: window {win_addr} did not take focus; no keys sent");
+-                give_back(home, prev_window.as_deref(), &win_addr);
+-                std::process::exit(3);
++            if let Some((home, prev_window, win_addr)) = &restore {
++                focus(win_addr);
++                if !wait_focus(win_addr, 800) {
++                    // Never type into whatever does have focus (it may be the owner's editor).
++                    eprintln!("nt-input: window {win_addr} did not take focus; no keys sent");
++                    give_back(*home, prev_window.as_deref(), win_addr);
++                    std::process::exit(3);
++                }
++            } else {
++                assert!(
++                    matches!(args[0].as_str(), "iced" | "gpui" | "rune" | "bench"),
++                    "unknown Sway app"
++                );
++                let status = Command::new("swaymsg")
++                    .arg(format!(r#"[app_id="^{class}$"] focus"#))
++                    .status()
++                    .expect("run swaymsg focus");
++                if !status.success()
++                    || !sway_window(&sway_tree(), &class)
++                        .is_some_and(|window| window["focused"] == true)
++                {
++                    eprintln!("nt-input: {class} did not take focus; no keys sent");
++                    std::process::exit(3);
++                }
+             }
+             // wtype uploads its own keymap first. Give the client time to compile it before
+             // the first key, or that key can be dropped (seen as "first key after a pause").
+@@ -554,6 +631,11 @@
+                 cmd.arg(args[2..].join(" "));
+             } else {
+                 for k in &args[2..] {
++                    if sway && let Some(delay) = k.strip_prefix("wait=") {
++                        let delay = delay.parse::<u64>().expect("invalid key delay");
++                        cmd.args(["-s", &delay.to_string()]);
++                        continue;
++                    }
+                     let parts: Vec<&str> = k.split('+').collect();
+                     let (mods, key) = parts.split_at(parts.len() - 1);
+                     for m in mods {
+@@ -565,7 +647,11 @@
+                     }
+                 }
+             }
+-            let _ = cmd.status();
++            let status = cmd.status();
++            if sway && !status.is_ok_and(|status| status.success()) {
++                eprintln!("nt-input: wtype failed");
++                std::process::exit(3);
++            }
+             sleep_ms(80);
+             needs_focus_restore = true;
+         }
+@@ -576,14 +662,16 @@
+     }
+     sleep_ms(30);
+     p.vp.destroy();
+-    let _ = conn.flush();
+-
+-    if needs_focus_restore || cursor_on_test_output() {
+-        give_back(home, prev_window.as_deref(), &win_addr);
+-    } else if let Some((hx, hy)) = home {
+-        hypr(&[
+-            "dispatch",
+-            &format!("hl.dsp.cursor.move({{ x = {hx}, y = {hy} }})"),
+-        ]);
+-    }
+-}
++    p.flush();
++
++    if let Some((home, prev_window, win_addr)) = restore {
++        if needs_focus_restore || cursor_on_test_output() {
++            give_back(home, prev_window.as_deref(), &win_addr);
++        } else if let Some((hx, hy)) = home {
++            hypr(&[
++                "dispatch",
++                &format!("hl.dsp.cursor.move({{ x = {hx}, y = {hy} }})"),
++            ]);
++        }
++    }
++}
+--- a/tools/nt-explore/src/live.rs
++++ b/tools/nt-explore/src/live.rs
+@@ -550,18 +550,50 @@
+     Ok(serde_json::from_slice(&output.stdout)?)
+ }
+ 
++fn sway_backend() -> bool {
++    std::env::var("NT_INPUT_BACKEND").as_deref() == Ok("sway")
++}
++
++fn sway_clients(tree: &Value, clients: &mut Vec<Value>) {
++    if tree["app_id"].is_string() {
++        clients.push(tree.clone());
++    }
++    for child in ["nodes", "floating_nodes"]
++        .into_iter()
++        .filter_map(|key| tree[key].as_array())
++        .flatten()
++    {
++        sway_clients(child, clients);
++    }
++}
++
+ fn clients() -> io::Result<Vec<Value>> {
+-    Ok(serde_json::from_value(hypr_json(&["clients"])?)?)
++    if !sway_backend() {
++        return Ok(serde_json::from_value(hypr_json(&["clients"])?)?);
++    }
++    let output = Command::new("swaymsg").args(["-t", "get_tree"]).output()?;
++    if !output.status.success() {
++        return Err(io::Error::other("swaymsg get_tree failed"));
++    }
++    let mut clients = Vec::new();
++    sway_clients(&serde_json::from_slice(&output.stdout)?, &mut clients);
++    Ok(clients)
+ }
+ 
+ fn is_bench_client(window: &Value) -> bool {
+-    window["class"] == "nttest-bench"
++    window_class(window) == Some("nttest-bench")
+ }
+ 
+ fn is_test_client(window: &Value) -> bool {
+-    window["class"]
+-        .as_str()
+-        .is_some_and(|class| class.starts_with("nttest-"))
++    window_class(window).is_some_and(|class| class.starts_with("nttest-"))
++}
++
++fn window_class(window: &Value) -> Option<&str> {
++    if sway_backend() {
++        window["app_id"].as_str()
++    } else {
++        window["class"].as_str()
++    }
+ }
+ 
+ #[derive(Clone, Copy)]
+@@ -574,6 +606,9 @@
+ 
+ impl Geometry {
+     fn read(pid: u32) -> io::Result<Self> {
++        if sway_backend() {
++            return Self::read_sway(pid);
++        }
+         let monitors: Vec<Value> = serde_json::from_value(hypr_json(&["monitors", "all"])?)?;
+         let monitor = monitors
+             .iter()
+@@ -603,6 +638,30 @@
+             y: number(&window["at"][1])? - number(&monitor["y"])?,
+             width: number(&window["size"][0])?,
+             height: number(&window["size"][1])?,
++        })
++    }
++
++    fn read_sway(pid: u32) -> io::Result<Self> {
++        let clients = clients()?;
++        let mut tests = clients.iter().filter(|window| is_test_client(window));
++        let missing = || io::Error::other("app window is not mapped on the private Sway output");
++        let window = tests.next().ok_or_else(missing)?;
++        if tests.next().is_some() || !is_bench_client(window) || window["pid"] != pid {
++            return Err(missing());
++        }
++        // Sway nt-input translates window-local points using the same rect.
++        let rect = &window["rect"];
++        let number = |key: &str| {
++            rect[key]
++                .as_i64()
++                .and_then(|value| i32::try_from(value).ok())
++                .ok_or_else(missing)
++        };
++        Ok(Self {
++            x: 0,
++            y: 0,
++            width: number("width")?,
++            height: number("height")?,
+         })
+     }
+ 
+--- a/tools/nt-explore/src/main.rs
++++ b/tools/nt-explore/src/main.rs
+@@ -101,10 +101,13 @@
+ 
+ fn run() -> io::Result<ExitCode> {
+     let options = parse()?;
+-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+-        .join("../..")
++    let root = std::env::var_os("NT_EXPLORE_ROOT")
++        .map(PathBuf::from)
++        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
+         .canonicalize()?;
+-    let out = root.join("tools/nt-explore/out");
++    let out = std::env::var_os("NT_EXPLORE_OUT")
++        .map(PathBuf::from)
++        .unwrap_or_else(|| root.join("tools/nt-explore/out"));
+     fs::create_dir_all(&out)?;
+     let bundle = tempfile::Builder::new()
+         .prefix("run-")

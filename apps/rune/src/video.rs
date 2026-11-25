@@ -65,8 +65,6 @@ enum Cmd {
         serial: u64,
         job: Job,
     },
-    /// Start libmpv (and the GPU surface) ahead of the first video.
-    Warm,
 }
 
 impl Cmd {
@@ -164,13 +162,6 @@ fn run(cmd: Cmd) {
                 }
             }
         }
-        Cmd::Warm => {
-            if PLAYER.get().is_none()
-                && let Err(e) = player()
-            {
-                eprintln!("nt-rune: player warm-up: {e}");
-            }
-        }
         Cmd::Stop => {
             if let Some(p) = PLAYER.get() {
                 p.stop();
@@ -261,18 +252,6 @@ pub fn gpu_picture(serial: u64) -> bool {
 
 /// The first load asked the UI thread to attach the GPU surface (it does so once).
 static ATTACH_ASKED: AtomicBool = AtomicBool::new(false);
-
-/// Starts libmpv on the command thread once the home page has drawn, so the first click
-/// doesn't pay for it (~105 ms for `Player::new`, measured). The GPU surface still attaches on
-/// the first load: attaching it here too saved another ~60 ms but cost 75 MiB of idle PSS
-/// (EGL and the GL driver), over the idle budget. `NT_NO_PREWARM` turns it off. It resolves
-/// nothing and loads nothing.
-pub fn prewarm() {
-    static ONCE: std::sync::Once = std::sync::Once::new();
-    if std::env::var_os("NT_NO_PREWARM").is_none() {
-        ONCE.call_once(|| send(Cmd::Warm));
-    }
-}
 
 /// On the command thread, once, between creating the player and its first load: has the UI
 /// thread (which owns the window) attach the GPU surface, and waits for it (at most 1 s).

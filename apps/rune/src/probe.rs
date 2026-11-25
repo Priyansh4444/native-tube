@@ -43,7 +43,7 @@ pub struct Probe {
     targets: Vec<Target>,
 }
 
-type Target = (&'static str, [f32; 4], Option<String>);
+type Target = (&'static str, [f32; 4], String);
 
 pub fn target(el: El, kind: &'static str) -> El {
     if enabled() {
@@ -191,13 +191,25 @@ fn presented_targets(rt: &Runtime<App>) -> Vec<Target> {
             .filter(|r| r[2] - r[0] >= 2.0 && r[3] - r[1] >= 2.0)
             .max_by(|a, b| area(a).total_cmp(&area(b)))
         {
-            targets.push((kind, [x0, y0, x1 - x0, y1 - y0], e.label.clone()));
+            let label = target_label(kind, e.label.as_deref());
+            targets.push((kind, [x0, y0, x1 - x0, y1 - y0], label));
         }
         if targets.len() == MAX_TARGETS {
             break;
         }
     }
     targets
+}
+
+fn target_label(kind: &'static str, label: Option<&str>) -> String {
+    match label.filter(|label| !label.trim().is_empty()) {
+        Some(label) => label.to_owned(),
+        None => match kind {
+            "player" => "Player".to_owned(),
+            "scrubber" => "Seek bar".to_owned(),
+            _ => kind.replace('_', " "),
+        },
+    }
 }
 
 fn subtract(r: [f32; 4], c: [f32; 4]) -> Vec<[f32; 4]> {
@@ -468,7 +480,7 @@ fn state(s: &App, targets: &[Target]) -> String {
             num(r[2] as f64),
             num(r[3] as f64)
         );
-        opt(&mut o, label.as_deref());
+        esc(&mut o, label);
         o.push('}');
     }
     o.push_str("]}");
@@ -477,7 +489,7 @@ fn state(s: &App, targets: &[Target]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::rail_selected;
+    use super::{rail_selected, target_label};
     use crate::view::NAV;
 
     #[test]
@@ -489,5 +501,13 @@ mod tests {
         );
         let make_home = NAV[0].3;
         assert_eq!(rail_selected(&make_home(), false), None);
+    }
+
+    #[test]
+    fn target_labels_are_nonempty_strings() {
+        assert_eq!(target_label("player", None), "Player");
+        assert_eq!(target_label("scrubber", Some("  ")), "Seek bar");
+        assert_eq!(target_label("related", Some("")), "related");
+        assert_eq!(target_label("related", Some("Video title")), "Video title");
     }
 }
