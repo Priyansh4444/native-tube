@@ -255,7 +255,7 @@ def strands(image, core, starts):
 
 
 def cover():
-    """1600×900: the title in two lines, three app strands converging into one shared core, and the twist."""
+    """Draw the article title and three app strands converging into one shared core."""
     title = (data.ROOT / ARTICLE).read_text().splitlines()[0].removeprefix("# ")
     head, suffix = title.split(": ", 1)
     image = Image.new("RGB", (1600, 900), "black")
@@ -275,7 +275,7 @@ def cover():
         if i < 2:
             draw.text((x, 290), "vs.", font=face(64, True), fill=SECONDARY, anchor="ls")
             x += round(draw.textlength("vs.", font=face(64, True))) + 26
-    ImageDraw.Draw(image).text((70, 375), "GPU playback saved CPU work on the laptop. The VM flipped the result.",
+    ImageDraw.Draw(image).text((70, 375), "One YouTube client, built three ways.",
                                font=face(36), fill="#bdbdbd", anchor="ls")
     ImageDraw.Draw(image).text((1180, 785), "one shared Rust core", font=face(30, True), fill=SECONDARY, anchor="ms")
     image.save(data.OUT / "cover.png")

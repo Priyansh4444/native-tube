@@ -1,30 +1,40 @@
-# We Built Native YouTube Three Times in Rust: iced vs. GPUI vs. Rune
+# Choosing a Rust GUI: iced vs. GPUI vs. Rune
 
-*One shared Rust core, three native UI toolkits, real hardware counters, and a clean cloud VM against YouTube in Chromium—here is what actually separated them, down to the CPU instruction.*
+For a Rust desktop app on Linux, I'd start with **iced**, reach for **GPUI** if layered controls are central to the design, and try **Rune** if I wanted reactive bindings for a custom UI and could pin a pre-1.0 toolkit.
+
+- **iced** had the lowest idle memory on both test machines with the video player prewarmed. It used the least CPU for scrolling and opened video fastest on the CPU-rendered VM. Its message-driven architecture made floating controls more work to wire up.
+- **GPUI** made floating menus, video overlays, and a custom seek bar easiest to build. It used the most idle memory and spent the most CPU time scrolling on the laptop. Two video opens timed out with prewarm disabled.
+- **Rune** used the fewest CPU instructions per drawn scroll frame on the laptop and had the lowest peak memory in the short playback test. This build required a git pin and two crate forks.
+
+On the laptop, all three opened the same video fixture in about **100 ms** with full prewarm. For a video-heavy app, the playback architecture was the bigger decision. Giving `libmpv` its own Wayland surface for GPU rendering cut CPU instructions per video frame by **16–19×** across all three clients.
 
 [MEDIA: .cache/viz/out/cover.png — One shared Rust core feeding three native UI toolkits: iced, GPUI, and Rune.]
 
 ---
 
-## 1. What I Built—and How
+## 1. The Same App, Three UI Architectures
 
 [MEDIA: .cache/viz/out/Demo.mp4 — NativeTube in ten seconds. Home in iced, search in GPUI, and related playback and captions in Rune.]
 
-Debates about Rust GUI frameworks usually end in vibes because nobody builds the same real app three times. Over twelve days, I did—working with a team of AI agents (Claude Opus 5.5, GPT 6.2 Sol, and Gemini 4 Neon under one coordinator).
+I built **NativeTube**, a signed-out desktop YouTube client with Home feeds, search, watch pages, related videos, scrubbing, and keyboard navigation, in **iced 0.14**, **GPUI** (`gpui-pre` 0.3.12 and `gpui-component` 0.9.1), and **Rune** (`anomalyco/rune`, git rev `4fbd2d6`).
 
-We built **NativeTube**—a logged-out desktop YouTube client with Home feeds, search, watch pages, related videos, scrubbing, and keyboard navigation—in **iced 0.14**, **GPUI** (`gpui-pre` 0.3.12 + `gpui-component` 0.9.1), and **Rune** (`anomalyco/rune`, git rev `4fbd2d6`).
+All three use the same Rust core for networking, image caching, scroll physics, and `libmpv` playback. I benchmarked the clients on my Intel GPU laptop and a GPU-less Fly VM using the same recorded feeds and local video. Each frontend still decides when to lay out a view, mount thumbnails, and repaint.
 
-All three share one Rust core (`nt-core`) handling networking, a polite traffic gate, image caching, Chromium's scroll physics, and `libmpv` playback—no JavaScript, Electron, webview, `yt-dlp`, or Lua. The signed-out client uses YouTube's visionOS web API path.
+### How each framework updates the UI
 
-Because the backend is identical, most differences in startup, scrolling, memory, crashes, and effort come from the UI toolkit and how each app drives it (though prewarm policy and thumbnail decode counts also differ).
+**iced** follows an Elm-style loop. Widgets emit messages, `update(&mut self, Message)` changes state and can return a task, and `view` describes the UI. The mutable borrow keeps updates from re-entering. In NativeTube, a custom scroller uses `with_translation` to shift already-laid-out children until the visible range changes. Floating controls need more explicit state and message wiring.
+
+**GPUI** keeps state in entities and renders views from that state. It checks entity borrows at runtime, so a callback that re-enters an entity update can panic. GPUI's `anchored()` and `deferred()` primitives make it easy to position and layer floating UI. In our client, scrolling still invalidates the page view and runs Taffy layout even with the page split into five cached views.
+
+**Rune** lets a reactive `Live` value drive a property directly. In our scroller, `Tx::live_only()` shifts the visible items between virtualization boundaries. The app commits a new view and layout when it needs a different set of items. That kept the scroll path short, though integrating Wayland required extra work and the pinned version hit a release assertion when combining live text with wrapping or truncation.
 
 ---
 
-## 2. The One Decision That Mattered Most: Route Video Around the UI (When You Have a GPU)
+## 2. How the Video Path Changes CPU Cost
 
 Originally, `libmpv` decoded frames into CPU memory, and each toolkit uploaded them as textures and redrew the window. At 848×476, one uncompressed RGBA picture is about 1.6 MB (~48 MB/s at 30 fps).
 
-Borrowing Akshar Patel's `yt-music-gpui` technique, I moved video to a Wayland subsurface. The UI paints around a transparent hole, and the compositor stacks the UI over the video directly.
+I moved video to a Wayland subsurface. On the laptop, `libmpv` renders into its own GPU surface, and the compositor places that surface behind a transparent area in the UI.
 
 [MEDIA: .cache/viz/out/FramePathStill.png — Software copies each 848×476 RGBA frame (~1.6 MB) through RAM and the UI toolkit. With a Wayland subsurface, libmpv renders directly into a separate compositor surface below the transparent hole.]
 
@@ -36,7 +46,7 @@ That single architectural change dwarfed every toolkit difference:
 
 ---
 
-## 3. Startup, First Frame, and Real YouTube in Chromium
+## 3. Startup and Time to First Frame
 
 [MEDIA: .cache/viz/out/FirstFrameRealTime.mp4 — One open per app at normal speed. Each timer stops on the first visible fixture frame. These archived captures use approximate clock alignment.]
 
@@ -61,21 +71,7 @@ Under each app's shipped default, iced and GPUI still overlap on click to first 
 
 One startup lesson almost bit iced before the app even existed: out of the box, bare iced 0.14 was *slowest* (**460 ms**, **113 MiB**, **107 wakeups/s**) because `iced_wgpu` defaulted to `HighPerformance` and woke our NVIDIA GPU. Setting `WGPU_POWER_PREF=low` and `WGPU_BACKEND=vulkan` dropped it to **175 ms**, **50 MiB**, and **2 wakeups/s**, beating bare GPUI (**253 ms / 96 MiB**) and Rune (**259 ms / 78 MiB**).
 
-### Against real YouTube in Chromium
-
-The native runs replayed local fixtures. Chromium loaded live YouTube over the network. Both used the same Fly VM class: four vCPUs, 8 GiB RAM and headless Sway with software rendering.
-
-- **Native apps on Fly (matched rerun, full prewarm, local fixtures):** click to first frame took **240 ms** on iced, **363 ms** on GPUI, and **393 ms** on Rune. iced's observed range sat entirely below both others.
-- **Live YouTube in Chromium 158 (cold, live network):** **1,857 ms (~1.9 s)** to first content frame (854×480), burning **1.24 cores** (**30.9%** of the VM) at **865 MiB PSS** (**1,014 MiB peak**).
-- **Live YouTube warm switch (clean rerun on a fresh Fly VM):** early warm trials sat behind pre-roll ads, so a trusted-click probe separated (a) any frame, (b) the requested video excluding ad time, and (c) ad duration. **No ads were skipped or blocked:**
-
-| Warm trial (Chromium on Fly) | (a) Any frame | Actual (wall) | (b) Excl. ad | (c) Ad duration |
-|---|---:|---:|---:|---:|
-| Trial 1 | 0.613 s | >130 s (timeout) | — | — |
-| Trial 2 | 0.717 s | 0.717 s | 0.717 s | 0 s |
-| Trial 3 | 0.735 s | 16.064 s | 0.693 s | 15.371 s |
-
-Warm trials hit a first frame in **0.61–0.74 s** (cold rerun trials: **2.23–3.30 s**, ad-free). Trial 2 reached the requested video in **0.717 s**; Trial 3 showed a **15.4 s** ad (**16.1 s** wall, **0.693 s** excl. ad); Trial 1 timed out behind an ad.
+On the CPU-rendered Fly VM, median click to first frame was **240 ms** on iced, **363 ms** on GPUI, and **393 ms** on Rune with full prewarm and local fixtures. iced's observed range sat entirely below the other two.
 
 ---
 
@@ -94,7 +90,7 @@ For the measured workload, I replayed 27 wheel notches with prewarm off and coun
 
 On the laptop, iced and Rune overlap on CPU cores, and GPUI burns more CPU than both; Rune retires the fewest instructions per drawn frame, closely followed by iced. On the CPU-rendered Fly VM, iced wins both metrics decisively. Because the apps drew different frame counts on Fly, per-frame cost sits right next to total CPU time.
 
-Why the spread? Rune pushes a live scroll offset between virtualization bands without re-running layout. iced translates children inside a custom scroller. GPUI invalidates its page view and runs layout. The virtualized viewports also mount and decode different thumbnail counts and use different antialiasing settings—real properties of these builds that stay in the measured work.
+The scroll paths in section 1 explain part of the spread. The viewports also mount and decode different numbers of thumbnails and use different antialiasing settings, all of which contribute to the measured work.
 
 ---
 
@@ -113,7 +109,7 @@ PSS apportions shared memory across processes. With its shipped prewarm-off defa
 
 ---
 
-## 6. Stability and the Week of Hiccups
+## 6. Stability and Failure Modes
 
 Our stability harness (`stability.py`) scored **100 (3/3 clean)** across all **30 assessable historical runs** (10 build × app cells, software path), and NOW switch checks found **0 black, 0 stale, 0 frozen frames** out of 9 per app.
 
@@ -144,16 +140,23 @@ Across five usage-cap pauses and handoffs (Opus 5.5 → GPT 6.2 Sol → Gemini 4
 
 ---
 
-## 8. The Verdict: Who Should Pick Which?
+## 8. Benchmark Methods and Detailed Results
 
-- **iced** posted the lowest full-prewarm Home idle memory on both machines and led first-frame latency and scrolling on the CPU-rendered Fly VM—with zero framework patches.
-- **GPUI** made layered controls and floating menus easiest to build in this project, but carried the highest Home idle footprint, spent more CPU scrolling on the laptop, and still has two unresolved prewarm-off first-frame timeouts.
-- **Rune** posted the lowest peak PSS in the short full-prewarm playback scenario and retired the fewest instructions per laptop scroll frame, at the cost of pre-1.0 APIs, git pins, and crate forks.
-- **Video architecture mattered most.** Routing video through a Wayland subsurface cut CPU instructions **16–19×** on the laptop GPU. Without a GPU on the VM, the same EGL path emulated OpenGL on CPU and lost to forced software.
+### Live YouTube in Chromium on Fly
 
----
+Chromium loaded live YouTube over the network. The native runs replayed local fixtures. Both used the same Fly VM class with four vCPUs, 8 GiB RAM, and headless Sway with software rendering.
 
-## 9. For the Nerds: Hardware Counters, Normalized Tables, Internals, and Receipts
+Chromium 158 took **1,857 ms** to show the first content frame (854×480) from a cold start. It used **1.24 cores** (**30.9%** of the VM) at **865 MiB PSS** (**1,014 MiB peak**).
+
+Early warm trials sat behind pre-roll ads. On a fresh VM, I measured time to any frame, time to the requested video, and ad duration without skipping or blocking ads.
+
+| Warm trial (Chromium on Fly) | Any first frame | Content first frame (wall time) | Content first frame (excluding ad) | Ad duration |
+|---|---:|---:|---:|---:|
+| Trial 1 | 0.613 s | >130 s (timeout) | — | — |
+| Trial 2 | 0.717 s | 0.717 s | 0.717 s | 0 s |
+| Trial 3 | 0.735 s | 16.064 s | 0.693 s | 15.371 s |
+
+The ad-free cold trials on the fresh VM took **2.23–3.30 s** to show the first frame.
 
 ### Earlier normalized CPU and per-unit instruction tables
 
@@ -236,12 +239,6 @@ Two more multi-app integration notes from the build: a transitive GPUI dependenc
 
 Cold Home (`NT_NO_PREWARM=1`, `libmpv` unmapped) → Warm Home (default prewarm, `libmpv` mapped throughout the idle window) adds **+54 MiB** in iced (99 → 153 MiB), **+45 MiB** in GPUI (143 → 188 MiB), and **+38 MiB** in Rune (131 → 169 MiB); on Fly, Warm Home settled at 235 / 315 / 220 MiB (vs. Cold Home 175 / 273 / 182 MiB). Separately, in our performance gate A/B on iced, disabling post-Home GPU surface prewarm dropped idle memory from **162 MiB to 126 MiB** (−36 MiB) while raising click-to-first-frame from **112.1 ms to 209.8 ms** (+98 ms, failing its +75 ms budget).
 
-### Framework mechanics under the hood
-
-- **Rune:** `poll` pushes `[0, -offset]` into `Live<[f32; 2]>` via `Tx::live_only()`, bypassing view and layout commits between half-viewport bands. Combining `.wrap()`/`.truncate()` with `.live_text()` hits a release `assert!` at `flatten.rs:258` (`4fbd2d6`). To reach Wayland from Rune, our agent leaked a `'static` string for `set_app_id` and used `libloading` for `wl_proxy_get_display`.
-- **GPUI:** Entities live in an `EntityMap` guarded by runtime borrow leases (`lease_erased`); synchronous re-entry via `cx.defer_in` → `dispatch_keystroke` panics at `entity_map.rs:192`. Even split into five cached views, scrolling still pays Taffy layout, and the GPUI agent traced much of the remaining wheel CPU to `nt-core` poster decoding.
-- **iced:** `update(&mut self, Message) -> Task` prevents re-entrancy at compile time. Our `Scroller` shifts laid-out children with `with_translation(0, -offset)` between bands—note that before the fairness fix, autopilot `Scroll` messages routed through `update` and triggered `view` rebuilds that real wheel input skipped (the matched rerun routed autopilot wheel directly through the scroller). Overlaying the search icon and changing only padding worked around `row!` skipping zero-width children in 0.14.2.
-
 ### Sizes, crate counts, and local upstream reports
 
 [MEDIA: .cache/viz/out/SizesStill.png — Stripped release binaries and lockfile package counts for the three NOW apps.]
@@ -286,7 +283,7 @@ The earlier laptop benchmark metrics in this appendix are medians of **n = 3** r
 8. **Matched rerun (prewarm policies, first-frame timeouts, timing ranges, memory, and per-window counters):** `docs/media/fair.md`
 9. **Capture and clip receipts:** `.cache/viz/out/sources.json` and `docs/blog/x-clips.json`
 10. **Bare shells (460/175/253/259 ms, 113/50/96/78 MiB, wakeups, threads, shell crate counts), first-build cost and time, bounded-range 16.6 s → 0.7 s, mpv script settings, serde `preserve_order` and 1,145 fixtures, macOS text:** `docs/blog/coordinator-notes.md` (shells also in `bench/results/shells.json`)
-11. **Parity estimates (±50%):** `docs/review/youtube-parity.md`; **`yt-music-gpui` prior art:** `docs/review/yt-music-gpui-notes.md`
+11. **Parity estimates (±50%):** `docs/review/youtube-parity.md`
 12. **Dirty details and framework mechanics:** `docs/upstream/*.md` (7 reports), `apps/gpui/NOTES.md` (heatmap ~20 lines, hole ~50 lines), `apps/iced/NOTES.md` (Clamp, 1×1 badges, ~38 MiB EGL cost, surface prewarm), `apps/rune/NOTES.md` (GPU-switch stall, 2.6 s black hole, 453–474 MiB plateau, ~50 MiB NVIDIA libraries)
 13. **Performance gate A/B (iced surface prewarm 209.8 → 112.1 ms at 126 → 162 MiB idle; wheel CPU ratios; idle CPU):** `.cache/perf/out/compare-isDkA304/summary.md` and `.cache/perf/out/compare-F70v7wbg/summary.md`
 14. **VA-API 1,129 → 79 ms, usage-cap pauses, zero lint allows:** `.cache/orchestrate/native-tube/ledger.tsv` (verified in `docs/blog/takes/review.md`)
