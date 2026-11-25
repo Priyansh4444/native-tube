@@ -7,3 +7,6 @@ __pycache__/
 *.py[cod]
 bench/results/*/data/
 bench/results/**/*.png
+
+# manim writes its text cache to ./media when run from the repo root
+/media/

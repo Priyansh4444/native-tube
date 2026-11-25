@@ -1,0 +1,15 @@
+{
+  "wheel_s": 4.0,
+  "open_s": 9.21,
+  "visible_frame_s": 11.1666666667,
+  "stages": [
+    [1.65, "HOME SHOWN"],
+    [8.2, "SEARCH SHOWN"],
+    [11.1666666667, "CONTENT PLAYING"],
+    [18.0, "WARM PRE-ROLL"],
+    [30.5, "WARM CONTENT"],
+    [34.1, "BACK TO WATCH"],
+    [39.0, "BACK TO SEARCH"]
+  ],
+  "clock": "First visible content frame in the reviewed capture minus the cold navigation receipt's wall_ms. Other cues are visually marked; wheel attempts on the empty signed-out Home are not visible."
+}

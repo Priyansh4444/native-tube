@@ -403,6 +403,23 @@ def median_tree(rows):
     return rows[0] if all(row == rows[0] for row in rows) else None
 
 
+def summarize_samples(samples):
+    result = median_tree(samples)
+    result["runs"] = samples
+    if any("error" in sample for sample in samples):
+        result["error"] = "one or more of the three counter runs failed"
+        return result
+    # The median of each PMU independently need not add up to the median total.
+    # Keep the per-PMU breakdown from the observed run that supplied each total.
+    cpu = result["cpu"]
+    for metric in CPU_EVENTS:
+        total = cpu[metric]
+        representative = next((sample["cpu"] for sample in samples
+                               if total is not None and sample["cpu"][metric] == total), None)
+        cpu["per_pmu"][metric] = representative["per_pmu"][metric] if representative else None
+    return result
+
+
 def measure(args):
     engine_gt = engine_map()
     destination = args.out / "counters.json"
@@ -419,10 +436,7 @@ def measure(args):
         samples = []
         for repeat in range(1, 4):
             samples.append(measure_sample(args, app, name, binary, repeat, engine_gt))
-        result = median_tree(samples)
-        result["runs"] = samples
-        if any("error" in sample for sample in samples):
-            result["error"] = "one or more of the three counter runs failed"
+        result = summarize_samples(samples)
         builds["results"].setdefault(app, {})[name] = result
         add_attribution(builds)
         write_json(destination, builds)

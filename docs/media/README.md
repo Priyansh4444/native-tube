@@ -2,6 +2,10 @@
 
 Measured 2026-11-24. NOW uses the landed working-tree snapshot from the media build manifest. The historical benchmark runs and their receipts are preserved.
 
+## Normalized results
+
+The laptop's GPU playback uses **0.59–0.65% of its 16 logical CPUs** (0.095–0.105 cores busy). Software playback uses **2.76–2.83%** (0.44–0.45 cores), versus **2.26%** (0.36 cores) for `ntctl play`. The apps retire about **54 instructions per expected frame-pixel** at 848×476, versus **26** for `ntctl play` at 1280×720. The ratio includes fixed per-frame work. [Normalized tables, controls and warm audit](normalized.md)
+
 ## Builds
 
 | Milestone | Commit date | What it is |
@@ -56,7 +60,7 @@ How each number is measured:
 - **Window ms**: from the guard's `CLOCK_MONOTONIC` stamp just before `spawn` to Hyprland's matching `openwindow` event for `nttest-bench`. PID and monitor are verified afterwards.
 - **Home ms**: from the same stamp until the collector sees `NT_MARK home_loaded` in the app log, polled every 10 ms.
 - **Open→frame**: from the autopilot's `open_video` command timestamp to the first `playback_started` before the next command. † 96df4ec and cb25193 don't log command timestamps. For them the command time is reconstructed as `home_loaded` + 4000 ms, since the scenario sends the command right after a 4 s sleep that follows the Home wait. On the 2caf0fa runs this reconstruction matched the logged command timestamps within 0.2 ms.
-- **Warm switch**: the same measurement for the related-video open after six seconds of playback. It is n/a for 96df4ec and cb25193, whose reports keep only the first mark of each name. With three runs this metric is noisy: the bars in `warm_ms.png` span 33–88 ms for a single build.
+- **Warm switch**: the same measurement for the related-video open after six seconds of playback. The local override bypasses successor stream preparation, so the window measures switching on an already-running player. It is n/a for 96df4ec and cb25193, whose reports keep only the first mark of each name. Across the three NOW runs per app, the saved related switches span 30.1–54.0 ms. The earlier timestamped builds span 27.8–104.9 ms.
 - **Idle PSS**: process-tree `Pss` from `smaps_rollup`, taken 2 s after Home.
 - **Peak PSS**: the highest process-tree PSS sampled every 250 ms (the gate's `tools/performance/procfs.Sampler`) over the whole run: Home, playback and the warm switch.
 - **Playback CPU**: the app's own CPU seconds over the six-second `playback` phase divided by wall time. 100% equals one core. It is counted only when video frames were rendered.
@@ -124,7 +128,7 @@ The tours (`tools/media/tour.json`: Home, scroll, search "rust", open a result, 
 
 CPU counters use `perf stat -p` for user-space instructions and cycles. The collector records unscaled values from `cpu_core`, `cpu_atom`, and `cpu_lowpower` and sums the observed counts. Unscaled values avoid extrapolating time spent on one core type to the rest of the window. It reports instructions per Home reload, per second of the wheel phase, and per rendered video frame reported by core. Core counts software-rendered frames and GPU swaps. A compositor presentation count is unavailable, so the per-frame metric uses renderer output.
 
-`ntctl play` uses the same clip and collects ten seconds after the first frame. The software playback bars show this player-only CPU reference, adjusted to the app's enabled duration, and the signed app-minus-reference result. This residual estimates additional frontend and integration work. GPU playback and the UI-only scenarios show their full app totals because `ntctl play` has no matching workload for them.
+`ntctl play` uses the same clip and collects ten seconds after the first frame. The software playback bars show this player-only CPU reference, adjusted to the app's enabled duration, and the signed app-minus-reference result. The app and control render different target sizes. The signed difference includes that geometry effect. GPU playback and the UI-only scenarios show their full app totals because `ntctl play` has no matching workload for them.
 
 System-wide i915 and RAPL collection requires the coordinator's measurement window and `perf_event_paranoid <= 0`. With the usual setting it records “not measured.” Each available engine reports busy nanoseconds. Estimated busy cycles are busy ns × average GT frequency in MHz ÷ 1000. Average MHz is the i915 frequency accumulator divided by its enabled seconds. On this Arrow Lake-P iGPU, render, copy and compute use GT0 and video decode uses GT1. RC6 is residency time. Engines can be busy concurrently, so their sum is engine work. Package and GPU energy are separate, overlapping RAPL domains. Both GPU work and energy can include other system activity. [Linux i915 PMU implementation](https://raw.githubusercontent.com/torvalds/linux/master/drivers/gpu/drm/i915/i915_pmu.c) · [Linux i915 PCI device definitions](https://github.com/torvalds/linux/blob/master/drivers/gpu/drm/i915/i915_pci.c)
 
