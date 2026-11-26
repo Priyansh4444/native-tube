@@ -6,7 +6,7 @@
     },
     {
       "path": ".cache/viz/out/FrameworkUpdates.mp4",
-      "caption": "Scroll a YouTube feed wireframe. Follow the cards, scrollbar, search bar, and sidebar to see which parts each event changes."
+      "caption": "Same YouTube feed scroll in iced, GPUI, and Rune: View, Layout, and Draw, cached chrome vs. active feed, and the matched laptop and Fly VM instruction counts."
     },
     {
       "path": ".cache/viz/out/FirstFrameRealTime.mp4",
