@@ -377,6 +377,7 @@ def main():
     tour_receipts = tours.main(fly, wanted)
     references = source_map(fly, tour_receipts)
     references["FrameworkUpdates"] = {
+        "Matched scroll counters": ["docs/media/fair.md", ".cache/media/out/fair/summary.json"],
         "NativeTube update and scroll paths": ["apps/iced/src/scroller.rs", "apps/gpui/NOTES.md",
                                               "apps/rune/src/scroller.rs", "apps/rune/src/view.rs"],
     }

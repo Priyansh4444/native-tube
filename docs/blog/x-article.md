@@ -22,7 +22,7 @@ All three use the same Rust core for networking, image caching, scroll physics, 
 
 ### How each framework updates the UI
 
-[MEDIA: .cache/viz/out/FrameworkUpdates.mp4 — Follow the same cards through view, layout, and draw. See what each client reuses as the feed scrolls and new cards come into range.]
+[MEDIA: .cache/viz/out/FrameworkUpdates.mp4 — See how a feed becomes a frame, what each client reuses on scroll, and how the measured CPU work changes between the laptop and VM.]
 
 Picture a feed at rest. Keep three snapshots in mind: **which cards are mounted**, **the sizes and positions layout computed for them**, and **the last frame you saw**. Now scroll a little. The frame has to change. The mounted card list can stay the same, and the renderer can shift cards using the geometry it already has. Scroll farther and the app needs a different group of cards. The view must describe that group, layout must place it, and draw must produce a new frame.
 
@@ -33,7 +33,9 @@ Read the scroll handler as a state transition. The app starts with **(mounted ca
 | Offset changes within the mounted group | Reuse view and layout. Draw with a translation. | Rebuild the page view, run Taffy layout, draw. | Reuse view and layout. Sample the live offset, draw. |
 | Scroll reaches the next mounted group | Send a message, rebuild the group, lay it out, draw. | The page view and layout still run. Cached chrome can be reused. | Commit a view with the new group, lay it out, draw. |
 
-Here **rebuild** means running view code again. **Layout** resolves geometry, potentially using cached work. **Draw** emits a frame using the resulting geometry and transforms. A frame can be redrawn while the view and layout are reused. Likewise, running page view code can leave a cached sidebar untouched.
+**View** describes what belongs in the interface, such as a thumbnail and title for each mounted video. **Layout** gives those elements sizes and positions, such as a 160-pixel thumbnail beside a title that wraps to fit. **Draw** turns those descriptions and positions into drawing commands. The renderer produces the pixels, clipping cards at the viewport edge and applying the scroll offset. For a small scroll, iced and Rune can draw the same cards at a new offset using their existing geometry.
+
+The transition table tracks which stages run. Each stage can cost a different amount. Rune had the lowest instructions per drawn frame on the GPU laptop (**8.25 million**), with iced close at **8.56 million** and GPUI at **17.5 million**. Rune and iced overlapped on laptop CPU time. On the software-rendered VM, iced led at **175 million**, with Rune at **442 million** and GPUI at **481 million**. View reuse can save CPU, and the renderer and the work the app submits still affect the total.
 
 **React on the web.** A state setter queues work. React runs the relevant components to produce element descriptions, reconciles them with the previous render, and commits the needed DOM changes. The DOM is the browser’s tree of page objects. What changed determines the subsequent browser work. Changing text can affect layout. A transform can sometimes be handled in compositing. Rendering a React component therefore tells you little by itself about the cost of the final frame. [React’s render and commit guide](https://react.dev/learn/render-and-commit)
 

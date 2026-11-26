@@ -1158,9 +1158,14 @@ class FrameworkUpdates(Page):
         names = VGroup(*(label(name, -6.85, y, VALUE, color, bold=True, font=self.title_font)
                          for name, y, color in zip(stages, ys, colors, strict=True)))
         strips = [self.strip(y, color) for y, color in zip(ys, colors, strict=True)]
-        self.title("What has to run again?")
-        self.play(FadeIn(names), *(FadeIn(group) for group in strips), run_time=.8)
-        self.foot("View chooses the cards. Layout places them. Draw produces the frame.")
+        self.title("Building a frame")
+        definitions = VGroup(*(label(text, -6.85, y - .45, LABEL, MUTED, font=self.title_font)
+                               for text, y in zip(("Which cards?", "Size and position", "Paint pixels"), ys, strict=True)))
+        for name, definition, strip in zip(names, definitions, strips, strict=True):
+            self.play(FadeIn(name), FadeIn(definition), FadeIn(strip), run_time=.6)
+            self.wait(.8)
+        self.wait(1.5)
+        self.play(FadeOut(definitions), run_time=.3)
 
         self.title("Same cards, new offset")
         self.foot("iced translates cached geometry. Rune samples a bound offset.")
@@ -1215,6 +1220,25 @@ class FrameworkUpdates(Page):
                     for dot in row[:2]), run_time=.75)
         self.foot("The view and layout run again when iced or Rune mounts new cards.")
         self.wait(1.5)
+        self.clear_stage(run_time=.4)
+
+        results = data.read(".cache/media/out/fair/summary.json")
+        for machine, heading in (("Laptop GPU", "Laptop with GPU"), ("Fly no GPU", "Fly VM without GPU")):
+            self.title(heading)
+            self.foot("Million CPU instructions per drawn scroll frame · lower is better · own scale")
+            wheel = results[machine]["metrics"]["wheel_minstr_per_frame"]["off"]
+            values = [wheel[app]["warm"]["median"] for app in APPS]
+            for app, value, y in zip(APPS, values, ys, strict=True):
+                color = COLOR[app]
+                width = 7.9 * value / max(values)
+                self.play(
+                    FadeIn(label(NAME[app], -6.85, y, VALUE, color, bold=True, font=self.title_font)),
+                    GrowFromEdge(bar(-3.7, y, width, color, height=.26), LEFT),
+                    FadeIn(label(f"{value:.3g}", -3.4 + width, y, VALUE, font=self.title_font)),
+                    run_time=.4,
+                )
+            self.wait(1.5)
+            self.clear_stage(run_time=.35)
 
     @classmethod
     def strip(cls, y, color):
@@ -1223,8 +1247,9 @@ class FrameworkUpdates(Page):
     @staticmethod
     def tile(x, y, color, index):
         shell = RoundedRectangle(width=1.95, height=.95, corner_radius=.12,
-                                 stroke_color=color, stroke_width=2.5, fill_color=color,
-                                 fill_opacity=.18 if y < 0 else .04).move_to(point(x, y))
+                                 stroke_color=color, stroke_width=2.5 if y < 1 else 0,
+                                 fill_color=color,
+                                 fill_opacity=.4 if y < 0 else 0).move_to(point(x, y))
         glyphs = VGroup()
         for i in range(1 + index % 4):
             glyphs.add(Dot(point(x + .23 * (i - (index % 4) / 2), y),
