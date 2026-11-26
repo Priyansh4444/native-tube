@@ -44,6 +44,7 @@ SKY = "#4FD1FF"
 ROSE = "#FF4B4B"
 LILAC = "#B98CFF"
 FONT = "Roboto"
+FRAMEWORK_TITLE_FONT = "STIX Two Text"
 MONO = "Roboto"
 APPS, ALL, COLOR, NAME = data.APPS, data.ALL_APPS, data.APP_COLORS, data.NAMES
 SOFT, GPU = GOLD, MINT  # software-path and GPU-path series
@@ -72,9 +73,9 @@ def point(x, y):
     return np.array([x, y, 0])
 
 
-def label(string, x, y, size=LABEL, color=INK, *, align="left", mono=False, limit=14.4, bold=False, role="label"):
+def label(string, x, y, size=LABEL, color=INK, *, align="left", mono=False, limit=14.4, bold=False, role="label", font=FONT):
     weight = "BOLD" if bold else "NORMAL"
-    text = Text(string, font=MONO if mono else FONT, font_size=size, weight=weight, color=color)
+    text = Text(string, font=MONO if mono else font, font_size=size, weight=weight, color=color)
     natural = text.width
     if align == "left":
         limit = min(limit, SAFE_X - x)
@@ -174,6 +175,7 @@ class Readout(VGroup):
 
 
 class Page(MovingCameraScene):
+    title_font = FONT
     # ---------------------------------------------------------------- page furniture
     def setup(self):
         self.camera.background_color = BG
@@ -199,7 +201,7 @@ class Page(MovingCameraScene):
         self.foot(footnote)
 
     def title(self, text, run_time=.55):
-        new = label(text, -SAFE_X, 3.3, TITLE, bold=True, role="title")
+        new = label(text, -SAFE_X, 3.3, TITLE, bold=True, role="title", font=self.title_font)
         if self.heading is None:
             self.play(FadeIn(new, shift=point(0, -.12)), run_time=run_time, rate_func=rate_functions.ease_out_cubic)
         else:
@@ -1146,7 +1148,10 @@ class Hiccups(Page):
 class FrameworkUpdates(Page):
     """Explain invalidation by moving one feed through three cached representations."""
 
+    title_font = FRAMEWORK_TITLE_FONT
+
     def construct(self):
+        register_font(str(data.ROOT / "assets/fonts/STIXTwoText-Variable.ttf"))
         stages = ("View", "Layout", "Draw")
         colors = (SKY, GOLD, LILAC)
         ys = (1.75, .05, -1.65)
