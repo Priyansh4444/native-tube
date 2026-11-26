@@ -44,7 +44,7 @@ SKY = "#4FD1FF"
 ROSE = "#FF4B4B"
 LILAC = "#B98CFF"
 FONT = "Roboto"
-FRAMEWORK_TITLE_FONT = "STIX Two Text"
+FRAMEWORK_FONT = "Google Sans"
 MONO = "Roboto"
 APPS, ALL, COLOR, NAME = data.APPS, data.ALL_APPS, data.APP_COLORS, data.NAMES
 SOFT, GPU = GOLD, MINT  # software-path and GPU-path series
@@ -190,8 +190,8 @@ class Page(MovingCameraScene):
         self.add(*self.source_tag(source))
 
     @staticmethod
-    def source_tag(text):
-        words = label(text, -SAFE_X + .22, -3.35, FOOT, MUTED, role="foot", limit=14.0)
+    def source_tag(text, font=FONT):
+        words = label(text, -SAFE_X + .22, -3.35, FOOT, MUTED, role="foot", limit=14.0, font=font)
         shell = box(-SAFE_X + words.width / 2 + .22, -3.35, words.width + .44, .44)
         return shell, words
 
@@ -210,7 +210,7 @@ class Page(MovingCameraScene):
         self.heading = new
 
     def foot(self, text):
-        new = VGroup(*self.source_tag(text))
+        new = VGroup(*self.source_tag(text, font=self.title_font))
         if self.footer is None:
             self.play(FadeIn(new), run_time=.3)
         else:
@@ -1148,14 +1148,14 @@ class Hiccups(Page):
 class FrameworkUpdates(Page):
     """Explain invalidation by moving one feed through three cached representations."""
 
-    title_font = FRAMEWORK_TITLE_FONT
+    title_font = FRAMEWORK_FONT
 
     def construct(self):
-        register_font(str(data.ROOT / "assets/fonts/STIXTwoText-Variable.ttf"))
+        register_font(str(data.ROOT / "assets/fonts/GoogleSans-Variable.ttf"))
         stages = ("View", "Layout", "Draw")
         colors = (SKY, GOLD, LILAC)
         ys = (1.75, .05, -1.65)
-        names = VGroup(*(label(name, -6.85, y, VALUE, color, bold=True)
+        names = VGroup(*(label(name, -6.85, y, VALUE, color, bold=True, font=self.title_font)
                          for name, y, color in zip(stages, ys, colors, strict=True)))
         strips = [self.strip(y, color) for y, color in zip(ys, colors, strict=True)]
         self.title("What has to run again?")
@@ -1190,7 +1190,7 @@ class FrameworkUpdates(Page):
         self.title("What runs again?")
         self.foot("NativeTube feed paths · each row starts with a changed scroll offset")
         xs = (-1.7, 1.55, 4.8)
-        header = VGroup(*(label(name, x, 1.95, VALUE, INK, align="center", bold=True)
+        header = VGroup(*(label(name, x, 1.95, VALUE, INK, align="center", bold=True, font=self.title_font)
                           for name, x in zip(stages, xs, strict=True)))
         self.play(FadeIn(header), run_time=.4)
         rows = (
@@ -1201,13 +1201,13 @@ class FrameworkUpdates(Page):
         markers = []
         for index, (name, color, work) in enumerate(rows):
             y = .8 - 1.24 * index
-            self.play(FadeIn(label(name, -6.5, y, VALUE, color, bold=True)), run_time=.25)
+            self.play(FadeIn(label(name, -6.5, y, VALUE, color, bold=True, font=self.title_font)), run_time=.25)
             row = [Dot(point(x, y), radius=.19, color=color, fill_opacity=int(active),
                        stroke_color=color, stroke_opacity=1, stroke_width=2)
                    for x, active in zip(xs, work, strict=True)]
             self.play(*(FadeIn(dot, scale=.5) for dot in row), run_time=.55)
             markers.append(row)
-        key = label("Filled = runs     Outline = reuses", -6.5, -3.02, LABEL, MUTED)
+        key = label("Filled = runs     Outline = reuses", -6.5, -3.02, LABEL, MUTED, font=self.title_font)
         self.play(FadeIn(key), run_time=.4)
         self.wait(1.5)
         self.title("When the mounted group changes")
