@@ -1141,3 +1141,80 @@ class Hiccups(Page):
 
 
 # The runner passes stills.py to Manim separately to keep static and moving output independent.
+
+
+class FrameworkUpdates(Page):
+    """Use the same thumbnail to compare how a small state change reaches the screen."""
+
+    def construct(self):
+        beats = (
+            ("React", MINT, ("Set state", "Run component", "Commit changes")),
+            ("iced", SKY, ("Widget message", "Update state", "Build view")),
+            ("GPUI", GOLD, ("Change entity", "Notify views", "Render view")),
+            ("Rune", LILAC, ("Change Live value", "Update binding")),
+        )
+        self.foot("Example: highlight a video card")
+        self.title("Click a video card")
+        example = self.card(0, .25).scale(1.55)
+        self.play(FadeIn(example), run_time=.25)
+        self.play(example[1].animate.set_fill(MINT, opacity=1), run_time=.35)
+        self.wait(.5)
+        self.clear_stage(run_time=.2)
+
+        for framework, color, steps in beats:
+            self.title(framework)
+            xs = (-5.2, -1.65, 1.75) if len(steps) == 3 else (-5.2, .15)
+            stages = VGroup(*(chip(step, x, .25, 2.95 if len(steps) == 3 else 3.55)
+                              for x, step in zip(xs, steps, strict=True)))
+            card = self.card(5.5, .25)
+            nodes = [*stages, card]
+            links = VGroup(*(right_arrow(a.get_right()[0] + .10, .25, b.get_left()[0] - .10, .25)
+                             for a, b in zip(nodes, nodes[1:])))
+            self.add(*links, *stages, card)
+            for stage, link in zip(stages, links, strict=True):
+                signal = Dot(link.get_start(), radius=.065, color=color)
+                self.add(signal)
+                self.play(MoveAlongPath(signal, link), stage[0].animate.set_stroke(color, width=3), run_time=.4)
+                self.remove(signal)
+            self.play(card[1].animate.set_fill(color, opacity=1), run_time=.45)
+            self.wait(1.5)
+            self.clear_stage(run_time=.25)
+
+        self.title("Now scroll the feed")
+        labels = ("Move cards", "Lay out page", "Move cards")
+        rows = VGroup()
+        moving = []
+        operations = []
+        for index, (app, action) in enumerate(zip(APPS, labels, strict=True)):
+            y = 1.62 - 1.65 * index
+            color = COLOR[app]
+            cards = VGroup(self.card(2.25, y, color), self.card(5.35, y))
+            operation = chip(action, -2.0, y, 2.8, color)
+            rows.add(label(NAME[app], -6.65, y, VALUE, color, bold=True), operation,
+                     right_arrow(-.48, y, .87, y), cards)
+            moving.append(cards)
+            operations.append(operation)
+        self.play(FadeIn(rows), run_time=.4)
+        self.play(*(cards.animate.shift(.44 * UP) for cards in moving), run_time=.9)
+        self.wait(1)
+        self.title("When the card group changes")
+        self.play(FadeOut(operations[0]), FadeOut(operations[2]), run_time=.2)
+        self.play(
+            FadeIn(chip("Rebuild group", -2.0, 1.62, 2.8, SKY)),
+            FadeIn(chip("Commit new view", -2.0, -1.68, 2.8, LILAC)),
+            moving[0][1][1].animate.set_fill(SKY, opacity=1),
+            moving[2][1][1].animate.set_fill(LILAC, opacity=1),
+            run_time=.4,
+        )
+        self.foot("NativeTube's scroll paths")
+        self.wait(1.5)
+
+    @staticmethod
+    def card(x, y, accent=RING):
+        return VGroup(
+            box(x, y, 2.5, .97),
+            RoundedRectangle(corner_radius=.06, width=.67, height=.61, stroke_width=0,
+                             fill_color=accent, fill_opacity=1).move_to(point(x - .72, y)),
+            line(x - .18, y + .13, x + .85, y + .13, MUTED, 4),
+            line(x - .18, y - .13, x + .54, y - .13, RING, 4),
+        )

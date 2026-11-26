@@ -30,6 +30,7 @@ EXPLAINERS = {
     "ScrollCost": (6, 9, 26, 37),
     "Memory": (5, 13, 23, 41),
     "Hiccups": (6, 10, 28),
+    "FrameworkUpdates": (),
 }
 STILLS = (
     "FramePathStill", "EGLStill", "InstructionsStill", "PerCoreStill",
@@ -123,6 +124,8 @@ def verify(recordings=None, *, wanted=None):
     if recordings and "SideBySideFly" in recordings:
         names.append("SideBySideFly")
     for name in PUBLICATION_VIDEOS:
+        if name in EXPLAINERS:
+            continue
         if (data.OUT / f"{name}.mp4").is_file() or wanted is not None and name in wanted:
             names.append(name)
     for name in names:
@@ -373,6 +376,10 @@ def main():
         scene_set("stills", stills, "1600,900", still=True, fly=fly)
     tour_receipts = tours.main(fly, wanted)
     references = source_map(fly, tour_receipts)
+    references["FrameworkUpdates"] = {
+        "NativeTube update and scroll paths": ["apps/iced/src/scroller.rs", "apps/gpui/NOTES.md",
+                                              "apps/rune/src/scroller.rs", "apps/rune/src/view.rs"],
+    }
     if "Cover" in wanted:
         obsidian.cover()
     if (stale := data.OUT / "Cover.png").is_file():
@@ -380,7 +387,6 @@ def main():
     existing = data.read(".cache/viz/out/sources.json") if (data.OUT / "sources.json").is_file() else {}
     for name, build in {
         "Demo": obsidian.demo,
-        "FrameworkUpdates": obsidian.framework_updates,
         "FirstFrameRealTime": tours.first_frame_clip,
         "ScrollRealTime": obsidian.scroll_clip,
     }.items():

@@ -22,13 +22,15 @@ All three use the same Rust core for networking, image caching, scroll physics, 
 
 ### How each framework updates the UI
 
-[MEDIA: .cache/viz/out/FrameworkUpdates.mp4 — How state reaches the screen in each framework, followed by an animated diagram of what changes during a NativeTube scroll.]
+[MEDIA: .cache/viz/out/FrameworkUpdates.mp4 — One card changes color. Follow that update through React, iced, GPUI, and Rune, then see which parts of NativeTube update during a scroll.]
 
-**iced** follows an Elm-style loop. Widgets emit messages, `update(&mut self, Message)` changes state and can return a task, and `view` describes the UI. The mutable borrow keeps updates from re-entering. In NativeTube, a custom scroller uses `with_translation` to shift already-laid-out children. Once the scroll offset crosses a threshold, the scroller sends a message to rebuild the band of mounted cards. Floating controls need more explicit state and message wiring.
+Say you click a video card and it lights up. The app records which card is selected, then draws that card with a highlight. On the web, a React state change queues a render. React calls your component to describe the next UI, then applies the changes to the browser’s document. [React’s render and commit guide](https://react.dev/learn/render-and-commit)
 
-**GPUI** keeps state in entities and renders views from that state. It checks entity borrows at runtime, so a callback that re-enters an entity update can panic. GPUI's `anchored()` and `deferred()` primitives make it easy to position and layer floating UI. In our client, scrolling still invalidates the page view and runs Taffy layout even with the page split into five cached views.
+- **iced** gives the click a name, like `SelectVideo(id)`. The app’s `update` function handles the message and changes the state. Then `view` describes the screen from that state. This feels like React with a reducer. In Rust, the mutable borrow in `update` keeps it from re-entering. Floating controls take more explicit state and message wiring.
+- **GPUI** keeps state in entities. A handler can update the relevant entity and notify views that depend on it, so GPUI knows which views need to render again. It checks borrows at runtime, so re-entering an entity update can panic. Its `anchored()` and `deferred()` primitives make it easier to position and layer floating controls.
+- **Rune** can wire a `Live` value directly to a visual property such as position or color. Changing the value updates that property without asking the app to describe the whole view again. Structural changes, like adding cards, still go through a view and layout update.
 
-**Rune** lets a reactive `Live` value drive a property directly. In our scroller, `Tx::live_only()` shifts the visible items between virtualization boundaries. The app commits a new view and layout when it needs a different set of items. That kept the scroll path short, though integrating Wayland required extra work and the pinned version hit a release assertion when combining live text with wrapping or truncation.
+All three NativeTube clients use the same scroll animator and build the cards they need around the visible area. While that group stays the same, iced’s custom scroller draws the cards at a new offset and Rune updates its live offset. Both update the view when they need a different group of cards. In this GPUI build, each scroll tick marks the page view for another render and Taffy recalculates its layout. The top bar and other cached views can still be reused.
 
 ---
 

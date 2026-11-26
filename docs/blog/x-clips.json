@@ -6,7 +6,7 @@
     },
     {
       "path": ".cache/viz/out/FrameworkUpdates.mp4",
-      "caption": "How state reaches the screen in each framework, followed by an animated diagram of what changes during a NativeTube scroll."
+      "caption": "One card changes color. Follow that update through React, iced, GPUI, and Rune, then see which parts of NativeTube update during a scroll."
     },
     {
       "path": ".cache/viz/out/FirstFrameRealTime.mp4",

@@ -54,7 +54,7 @@ def create_sheets(video, destination):
     print(f"{video.stem}: {count} sampled frames", flush=True)
 
 
-EXPLAINERS = ("FramePath", "FirstFrame", "ScrollCost", "Memory", "Hiccups")
+EXPLAINERS = ("FramePath", "FirstFrame", "ScrollCost", "Memory", "Hiccups", "FrameworkUpdates")
 # Background points along the outer margin. The grid has a narrower border than the cards.
 MARGIN_POINTS = ((20, 20), (1900, 20), (20, 1060), (1900, 1060), (960, 12), (960, 1068), (12, 540), (1908, 540))
 GRID_POINTS = ((8, 8), (1911, 8), (8, 1071), (1911, 1071), (8, 300), (1911, 820))
