@@ -12,6 +12,7 @@ import math
 import os
 import random
 import re
+from statistics import median
 
 import numpy as np
 from manim import (
@@ -1180,8 +1181,27 @@ class FrameworkUpdates(Page):
             self.wait(1.5)
             self.clear_stage(run_time=.25)
 
+        self.title("Rune Live")
+        publication = data.read("bench/results/rune-live-publication.json")
+        bound_ns = median(sample[2] for sample in publication["samples"])
+        self.foot(f"Bound publication: {bound_ns:.0f} ns median with a wake already pending")
+        actions = (("live_only()", 1.25, ("Set flag", "Skip view commit")),
+                   ("Live::set()", -.55, ("Atomic swap", "Wake → sample → draw")))
+        for name, y, steps in actions:
+            row = VGroup(
+                label(name, -6.65, y, LABEL, LILAC, bold=True),
+                right_arrow(-3.5, y, -2.55, y),
+                chip(steps[0], -.7, y, 3.3, LILAC),
+                right_arrow(1.13, y, 2.02, y),
+                chip(steps[1], 4.25, y, 4.2, LILAC),
+            )
+            self.play(FadeIn(row, shift=.12 * UP), run_time=.55)
+        self.wait(1.5)
+        self.clear_stage(run_time=.3)
+
         self.title("Now scroll the feed")
-        labels = ("Move cards", "Lay out page", "Move cards")
+        self.foot("NativeTube's scroll paths")
+        labels = ("Translate + draw", "Taffy + draw", "Sample + draw")
         rows = VGroup()
         moving = []
         operations = []
@@ -1206,7 +1226,23 @@ class FrameworkUpdates(Page):
             moving[2][1][1].animate.set_fill(LILAC, opacity=1),
             run_time=.4,
         )
-        self.foot("NativeTube's scroll paths")
+        self.wait(1.5)
+        self.clear_stage(run_time=.35)
+
+        self.title("What the laptop measured")
+        self.foot("Million user-space CPU instructions per drawn frame · whole wheel phase")
+        metrics = data.read(".cache/media/out/fair/summary.json")
+        wheel = metrics["Laptop GPU"]["metrics"]["wheel_minstr_per_frame"]["off"]
+        for index, app in enumerate(APPS):
+            y = 1.72 - 1.45 * index
+            value = wheel[app]["warm"]["median"]
+            width = 7.9 * value / 20
+            self.play(
+                FadeIn(label(NAME[app], -6.65, y, VALUE, COLOR[app], bold=True)),
+                GrowFromEdge(bar(-3.55, y, width, COLOR[app], height=.28), LEFT),
+                FadeIn(label(f"{value:.3g}", -3.25 + width, y, VALUE, bold=True)),
+                run_time=.45,
+            )
         self.wait(1.5)
 
     @staticmethod

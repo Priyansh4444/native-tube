@@ -1,0 +1,25 @@
+{
+  "rune_revision": "4fbd2d6ac4dd12595dd8ed0b7849b28a309c7c00",
+  "cpu": "Intel Core Ultra 7 255H",
+  "pinned_logical_cpu": 0,
+  "ac": false,
+  "energy_performance_preference": "balance_power",
+  "rustc": "1.99.1 (58cf8f9c3 2026-10-13)",
+  "iterations_per_batch": 4000000,
+  "columns_ns_per_call": [
+    "same value, unbound",
+    "changing value, unbound",
+    "changing value, one bound runtime with wake already pending"
+  ],
+  "samples": [
+    [10.312, 21.157, 37.674],
+    [11.257, 19.567, 36.836],
+    [11.194, 22.086, 37.823],
+    [11.347, 21.169, 38.547],
+    [12.158, 21.888, 41.396],
+    [12.398, 21.946, 41.235],
+    [11.795, 21.342, 40.157],
+    [12.169, 21.266, 39.764],
+    [11.784, 21.223, 40.139]
+  ]
+}

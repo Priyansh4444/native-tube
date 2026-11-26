@@ -6,7 +6,7 @@
     },
     {
       "path": ".cache/viz/out/FrameworkUpdates.mp4",
-      "caption": "One card changes color. Follow that update through React, iced, GPUI, and Rune, then see which parts of NativeTube update during a scroll."
+      "caption": "From a card highlight to a scroll frame. Follow the update paths and see the total CPU work measured on the laptop."
     },
     {
       "path": ".cache/viz/out/FirstFrameRealTime.mp4",

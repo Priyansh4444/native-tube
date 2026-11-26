@@ -42,7 +42,7 @@ Everything renders on pure black. Glass (#121212 with sheen and an 8 % rim) is l
 The side-by-sides use archived footage. A 2 × 2 grid shows the recordings, cut per step and aligned on each tile's own command. Native tiles have the app name, a running timer for timed steps, and the step label. The timer stops and the tile flashes when the app reaches its mark. The open step stops at the first visible video frame. The live-network YouTube web tile plays alongside the native race with a step label.
 
 The article uses four short exports. `Demo.mp4` has one shot per feature.
-`FrameworkUpdates.mp4` uses Manim to compare a React update with the three native paths and show how the NativeTube clients scroll a group of cards.
+`FrameworkUpdates.mp4` uses Manim to compare React with the three native update paths. It shows Rune’s publication microbenchmark and the matched laptop scroll counters.
 `FirstFrameRealTime.mp4` shows one archived open per app at normal speed and labels the footage as predating the matched benchmark.
 `ScrollRealTime.mp4` uses a continuous 60 fps recording from a private Sway output. Its source
 and unretimed trim are in `.cache/viz/scroll-capture/`. The [matched benchmark](../../docs/media/fair.md)

@@ -22,15 +22,23 @@ All three use the same Rust core for networking, image caching, scroll physics, 
 
 ### How each framework updates the UI
 
-[MEDIA: .cache/viz/out/FrameworkUpdates.mp4 — One card changes color. Follow that update through React, iced, GPUI, and Rune, then see which parts of NativeTube update during a scroll.]
+[MEDIA: .cache/viz/out/FrameworkUpdates.mp4 — From a card highlight to a scroll frame. Follow the update paths and see the total CPU work measured on the laptop.]
 
-Say you click a video card and it lights up. The app records which card is selected, then draws that card with a highlight. On the web, a React state change queues a render. React calls your component to describe the next UI, then applies the changes to the browser’s document. [React’s render and commit guide](https://react.dev/learn/render-and-commit)
+Think of selecting a video card. The handler changes a value, the toolkit decides which work that change invalidates, and eventually a new frame appears. A view describes what to draw. Layout computes sizes and positions. Paint produces drawing commands, which the renderer turns into pixels. Those are separate costs.
 
-- **iced** gives the click a name, like `SelectVideo(id)`. The app’s `update` function handles the message and changes the state. Then `view` describes the screen from that state. This feels like React with a reducer. In Rust, the mutable borrow in `update` keeps it from re-entering. Floating controls take more explicit state and message wiring.
-- **GPUI** keeps state in entities. A handler can update the relevant entity and notify views that depend on it, so GPUI knows which views need to render again. It checks borrows at runtime, so re-entering an entity update can panic. Its `anchored()` and `deferred()` primitives make it easier to position and layer floating controls.
-- **Rune** can wire a `Live` value directly to a visual property such as position or color. Changing the value updates that property without asking the app to describe the whole view again. Structural changes, like adding cards, still go through a view and layout update.
+**React on the web.** A state setter queues work. React runs the relevant components to produce element descriptions, reconciles them with the previous render, and commits the needed DOM changes. The DOM is the browser’s tree of page objects. What changed determines the subsequent browser work. Changing text can affect layout. A transform can sometimes be handled in compositing. Rendering a React component therefore tells you little by itself about the cost of the final frame. [React’s render and commit guide](https://react.dev/learn/render-and-commit)
 
-All three NativeTube clients use the same scroll animator and build the cards they need around the visible area. While that group stays the same, iced’s custom scroller draws the cards at a new offset and Rune updates its live offset. Both update the view when they need a different group of cards. In this GPUI build, each scroll tick marks the page view for another render and Taffy recalculates its layout. The top bar and other cached views can still be reused.
+**iced.** A click usually emits a `Message`. The app handles it in `update(&mut self, Message)`, and `view` supplies the next widget description. iced can diff it against retained widget state and reuse cached work. NativeTube’s custom scroller takes a shorter route for movement inside the existing card group. It updates the offset and requests a redraw, then clips the viewport, applies `with_translation`, and draws the intersecting children from their existing layouts. A band change sends a message to rebuild the needed rows. Even on the short route, iced still visits and draws widgets.
+
+**GPUI.** Entity state has stable identity, and a view renders from it. `cx.notify()` tells GPUI an entity changed. The runtime checks which windows track that entity, then schedules the relevant invalidation or queues an observer notification. When the snapped scroll offset changes, NativeTube marks the page view and root dirty. The page builds elements for the currently visible cards and GPUI uses Taffy to resolve geometry before painting. Cached views like the top bar can reuse their work. Timing `notify()` alone would miss the work it schedules.
+
+**Rune.** `Tx` collects requests from an event handler. The body of `tx.live_only()` sets one Boolean. It tells the runtime that this handler changed nothing the view reads, so the event can skip rebuilding the view and running layout. A numeric `Live::set` is a separate operation. At the pinned revision it encodes the value and atomically swaps a 128-bit word without allocating. An unchanged ordinary write returns without notifying. A changed write walks listeners, and each subscribed runtime coalesces wakes. NativeTube publishes the content offset and scrollbar geometry this way. On a live frame, Rune walks its retained nodes, samples their bound properties, and applies changes to the scene. Paint walks the scene to emit GPU draw instances and update hit-test data at the new positions. A band change asks for a view commit so the right cards get mounted. [Rune’s numeric Live source](https://github.com/anomalyco/rune/blob/4fbd2d6ac4dd12595dd8ed0b7849b28a309c7c00/crates/rune/src/live.rs) · [Rune’s frame sampling](https://github.com/anomalyco/rune/blob/4fbd2d6ac4dd12595dd8ed0b7849b28a309c7c00/crates/rune/src/runtime/motion/live_latch.rs)
+
+Rune’s numeric `Live` is signal-like in the sense that one source feeds a specific property. Here the binding is explicit, stores the latest value, and is sampled on a frame. That differs from a signal system where reading a value inside an effect registers a dependency and a write schedules that effect. These native toolkits have their own widget, element, or scene structures. None of these paths goes through a browser DOM.
+
+**How expensive is a Rune publication?** On my laptop on battery, a release-build microbenchmark of `Live<[f32; 2]>::set` took a median **12 ns per call** for an unchanged value without listeners, **21 ns** for a changing value without listeners, and **40 ns** for a changing value bound to one runtime with a wake already pending. Each case ran in nine tight-loop batches of four million calls pinned to one logical CPU. These are publication timings, including the loop overhead. They exclude platform wake delivery, frame sampling, and paint. The `live_only()` setter is the single Boolean assignment described above and has no separately measured timing here. [Benchmark source](../../bench/rune-live-publication.rs) · [Raw samples](../../bench/results/rune-live-publication.json)
+
+**How expensive is the frame?** The matched laptop run yielded median CPU time per drawn frame of **3.44 ms for iced, 5.75 ms for GPUI, and 3.21 ms for Rune**. These are whole-process ratios across the scroll window. They include work such as thumbnail decoding and tell us how much CPU the app spent, while click-to-pixel latency and stage-by-stage attribution require separate measurements. Section 4 has the ranges and instruction counts.
 
 ---
 
@@ -88,13 +96,15 @@ For the measured workload, I replayed 27 wheel notches with prewarm off and coun
 | Wheel workload | iced | GPUI | Rune |
 |---|---:|---:|---:|
 | Laptop cores | 0.203 | 0.340 | 0.192 |
+| Laptop CPU ms / drawn frame (observed range) | 3.44 (3.13–3.91) | 5.75 (5.69–6.10) | 3.21 (3.01–3.87) |
 | Laptop million instructions / drawn frame | 8.56 | 17.5 | 8.25 |
+| Laptop million user-space cycles / drawn frame | 4.13 | 8.02 | 3.77 |
 | Fly cores | 1.60 | 3.06 | 3.02 |
 | Fly million instructions / drawn frame | 175 | 481 | 442 |
 
 On the laptop, iced and Rune overlap on CPU cores, and GPUI burns more CPU than both; Rune retires the fewest instructions per drawn frame, closely followed by iced. On the CPU-rendered Fly VM, iced wins both metrics decisively. Because the apps drew different frame counts on Fly, per-frame cost sits right next to total CPU time.
 
-The scroll paths in section 1 explain part of the spread. The viewports also mount and decode different numbers of thumbnails and use different antialiasing settings, all of which contribute to the measured work.
+For each warm laptop run I divided the wheel phase’s total process CPU time by its number of drawn UI frames, then took the median of five run-level ratios. Total CPU time is wheel duration multiplied by cores used. I computed cycles per frame the same way using the wheel-window `cycles:u` counter as the numerator. The viewports mount different numbers of cards, decode different amounts of thumbnail data, and use different antialiasing settings. There is no per-stage attribution in these totals.
 
 ---
 
