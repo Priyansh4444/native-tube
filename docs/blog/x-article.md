@@ -22,9 +22,9 @@ All three use the same Rust core for networking, image caching, scroll physics, 
 
 ### How each framework updates the UI
 
-[MEDIA: .cache/viz/out/FrameworkUpdates.mp4 — See how a feed becomes a frame, what each client reuses on scroll, and how the measured CPU work changes between the laptop and VM.]
+[MEDIA: .cache/viz/out/FrameworkUpdates.mp4 — Scroll a YouTube feed wireframe. Watch the thumbnails move, see what each client rebuilds, and compare the laptop and VM measurements.]
 
-Picture a feed at rest. Keep three snapshots in mind: **which cards are mounted**, **the sizes and positions layout computed for them**, and **the last frame you saw**. Now scroll a little. The frame has to change. The mounted card list can stay the same, and the renderer can shift cards using the geometry it already has. Scroll farther and the app needs a different group of cards. The view must describe that group, layout must place it, and draw must produce a new frame.
+Open the YouTube home feed. The search bar and sidebar stay put while thumbnails and video titles scroll upward. Keep three things in mind: **which video cards the app has built**, **where it placed each thumbnail and title**, and **how far the feed has scrolled**. A small scroll changes only the offset. When you scroll far enough, the app swaps in another group of video cards. It has to choose those cards and place their thumbnails and titles before drawing the next frame.
 
 Read the scroll handler as a state transition. The app starts with **(mounted cards, layout, scroll offset)**. If the new offset fits the existing group, iced and Rune keep its cards and layout and change the offset used by draw. If the offset crosses the group’s rebuild threshold, they update the mounted cards and compute layout for the new group. GPUI’s NativeTube handler takes the page rebuild path whenever the snapped offset changes, even if the same cards remain visible.
 

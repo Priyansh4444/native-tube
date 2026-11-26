@@ -1153,42 +1153,60 @@ class FrameworkUpdates(Page):
     def construct(self):
         register_font(str(data.ROOT / "assets/fonts/GoogleSans-Variable.ttf"))
         stages = ("View", "Layout", "Draw")
-        colors = (SKY, GOLD, LILAC)
         ys = (1.75, .05, -1.65)
-        names = VGroup(*(label(name, -6.85, y, VALUE, color, bold=True, font=self.title_font)
-                         for name, y, color in zip(stages, ys, colors, strict=True)))
-        strips = [self.strip(y, color) for y, color in zip(ys, colors, strict=True)]
-        self.title("Building a frame")
-        definitions = VGroup(*(label(text, -6.85, y - .45, LABEL, MUTED, font=self.title_font)
-                               for text, y in zip(("Which cards?", "Size and position", "Paint pixels"), ys, strict=True)))
-        for name, definition, strip in zip(names, definitions, strips, strict=True):
-            self.play(FadeIn(name), FadeIn(definition), FadeIn(strip), run_time=.6)
-            self.wait(.8)
-        self.wait(1.5)
-        self.play(FadeOut(definitions), run_time=.3)
+        window = box(2.45, -.25, 8.7, 5.55, TRACK, RING)
+        chrome = VGroup(
+            label("NativeTube", -1.55, 2.02, LABEL, INK, bold=True, font=self.title_font),
+            box(3.35, 2.03, 3.35, .49, PANEL, RING),
+            label("Search", 2.0, 2.02, LABEL, MUTED, font=self.title_font),
+            line(-1.8, 1.64, 6.68, 1.64),
+            line(-.12, 1.64, -.12, -2.93),
+            label("Home", -1.55, 1.13, LABEL, INK, font=self.title_font),
+            label("Library", -1.55, .60, LABEL, MUTED, font=self.title_font),
+        )
+        top = VGroup(self.video_card(1.65, .45, SKY), self.video_card(4.85, .45, GOLD))
+        bottom = VGroup(self.video_card(1.65, -1.54, LILAC), self.video_card(4.85, -1.54, MINT))
+        self.title("A YouTube feed")
+        self.play(FadeIn(window), FadeIn(chrome), run_time=.65)
+        self.foot("NativeTube feed wireframe")
 
-        self.title("Same cards, new offset")
-        self.foot("iced translates cached geometry. Rune samples a bound offset.")
-        draw_offset = .58
-        self.play(strips[2].animate.shift(draw_offset * LEFT), run_time=1)
-        self.play(pulse(names[2], 1.1), run_time=.45)
+        stage = label("View", -6.85, .95, 50, SKY, bold=True, font=self.title_font)
+        detail = label("Choose thumbnails\nand titles", -6.85, -.05, LABEL, INK,
+                       limit=4.65, font=self.title_font)
+        self.play(FadeIn(stage), FadeIn(detail), FadeIn(top), FadeIn(bottom), run_time=.85)
         self.wait(1.5)
-
-        self.title("Same gesture in GPUI")
-        self.foot("NativeTube invalidates PageView. Cached chrome can be reused.")
-        for name, strip in zip(names, strips, strict=True):
-            self.play(pulse(name, 1.1), pulse(strip, 1.045), run_time=.8)
+        self.play(FadeOut(stage), FadeOut(detail), run_time=.25)
+        stage = label("Layout", -6.85, .95, 50, GOLD, bold=True, font=self.title_font)
+        detail = label("Size and place\neach card", -6.85, -.05, LABEL, INK,
+                       limit=4.65, font=self.title_font)
+        bounds = VGroup(*(Rectangle(width=card.width + .15, height=card.height + .16,
+                                    color=GOLD, stroke_width=2).move_to(card) for card in (*top, *bottom)))
+        self.play(FadeIn(stage), FadeIn(detail), Create(bounds), run_time=.75)
         self.wait(1.5)
+        self.play(FadeOut(stage), FadeOut(detail), FadeOut(bounds), run_time=.25)
+        stage = label("Draw", -6.85, .95, 50, LILAC, bold=True, font=self.title_font)
+        detail = label("Render the\nvisible feed", -6.85, -.05, LABEL, INK,
+                       limit=4.65, font=self.title_font)
+        self.play(FadeIn(stage), FadeIn(detail),
+                  *(card[0].animate.set_fill(opacity=.45) for card in (*top, *bottom)), run_time=.8)
+        self.wait(1.5)
+        self.play(FadeOut(stage), FadeOut(detail), run_time=.25)
 
-        self.title("Scroll far enough")
-        self.foot("A different group of cards must be mounted.")
-        for y, color, group in zip(ys, colors, strips, strict=True):
-            incoming_x = 5.1 - (draw_offset if group is strips[2] else 0)
-            self.play(
-                FadeOut(group[0], shift=.35 * LEFT),
-                FadeIn(self.tile(incoming_x, y, color, len(group)), shift=.35 * LEFT),
-                run_time=.7,
-            )
+        self.title("A short scroll")
+        self.foot("iced and Rune reuse the card list and geometry. Search and sidebar stay put.")
+        self.play(top.animate.shift(.24 * UP), bottom.animate.shift(.24 * UP), run_time=.9)
+        self.wait(1.5)
+        self.title("The same scroll in GPUI")
+        self.foot("NativeTube rebuilds the feed view and runs layout. Cached chrome can be reused.")
+        self.play(pulse(top, 1.04), pulse(bottom, 1.04), run_time=.75)
+        self.wait(1.5)
+        self.title("Scroll farther")
+        self.foot("iced and Rune also run view and layout when the mounted cards change.")
+        arriving = VGroup(self.video_card(1.65, -1.54, ROSE), self.video_card(4.85, -1.54, SKY))
+        for card in arriving:
+            card[0].set_fill(opacity=.45)
+        self.play(FadeOut(top, shift=.38 * UP), bottom.animate.shift(1.75 * UP),
+                  FadeIn(arriving, shift=.35 * UP), run_time=1)
         self.wait(1.5)
         self.clear_stage(run_time=.45)
 
@@ -1240,18 +1258,12 @@ class FrameworkUpdates(Page):
             self.wait(1.5)
             self.clear_stage(run_time=.35)
 
-    @classmethod
-    def strip(cls, y, color):
-        return VGroup(*(cls.tile(x, y, color, index) for index, x in enumerate((-2.7, -.1, 2.5))))
-
     @staticmethod
-    def tile(x, y, color, index):
-        shell = RoundedRectangle(width=1.95, height=.95, corner_radius=.12,
-                                 stroke_color=color, stroke_width=2.5 if y < 1 else 0,
-                                 fill_color=color,
-                                 fill_opacity=.4 if y < 0 else 0).move_to(point(x, y))
-        glyphs = VGroup()
-        for i in range(1 + index % 4):
-            glyphs.add(Dot(point(x + .23 * (i - (index % 4) / 2), y),
-                           radius=.075, color=color))
-        return VGroup(shell, glyphs)
+    def video_card(x, y, color):
+        thumbnail = RoundedRectangle(width=2.85, height=1.10, corner_radius=.12,
+                                     stroke_color=color, stroke_width=2.5,
+                                     fill_color=color, fill_opacity=0).move_to(point(x, y + .20))
+        icon = Dot(point(x - 1.28, y - .55), radius=.10, color=color)
+        title = line(x - 1.05, y - .50, x + .98, y - .50, INK, 3)
+        channel = line(x - 1.05, y - .68, x + .38, y - .68, MUTED, 2)
+        return VGroup(thumbnail, icon, title, channel)

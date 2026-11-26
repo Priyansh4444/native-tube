@@ -6,7 +6,7 @@
     },
     {
       "path": ".cache/viz/out/FrameworkUpdates.mp4",
-      "caption": "See how a feed becomes a frame, what each client reuses on scroll, and how the measured CPU work changes between the laptop and VM."
+      "caption": "Scroll a YouTube feed wireframe. Watch the thumbnails move, see what each client rebuilds, and compare the laptop and VM measurements."
     },
     {
       "path": ".cache/viz/out/FirstFrameRealTime.mp4",
