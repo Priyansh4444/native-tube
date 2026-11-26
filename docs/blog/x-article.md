@@ -130,6 +130,8 @@ On the laptop, iced and Rune overlap on CPU cores, and GPUI burns more CPU than 
 
 For each warm laptop run I divided the wheel phase’s total process CPU time by its number of drawn UI frames, then took the median of five run-level ratios. Total CPU time is wheel duration multiplied by cores used. I computed cycles per frame the same way using the wheel-window `cycles:u` counter as the numerator. The viewports mount different numbers of cards, decode different amounts of thumbnail data, and use different antialiasing settings. There is no per-stage attribution in these totals.
 
+For a YouTube viewer, the scroll metric to start with is **frame cadence**. Look at the p95 gap between frames and the share of frames that missed a refresh interval. Then use CPU time and instructions to explain how much work the app spent delivering that cadence. The wheel table covers the native clients on replayed inputs. The live YouTube browser run measured playback, so it supplies a separate reference point.
+
 ---
 
 ## 5. Memory: Idle and Playback Peaks Tell Different Stories
@@ -195,6 +197,8 @@ Early warm trials sat behind pre-roll ads. On a fresh VM, I measured time to any
 | Trial 3 | 0.735 s | 16.064 s | 0.693 s | 15.371 s |
 
 The ad-free cold trials on the fresh VM took **2.23–3.30 s** to show the first frame.
+
+For watching YouTube, **click to first content frame** captures the wait for the requested video. **Click to any frame** can be much shorter when the first frame is an ad. Report both, then check dropped frames, buffering time and CPU use while playing at a fixed resolution. A direct web-versus-native comparison would need the same video, quality, machine, and warm or cold starting state, with ad time identified. The native timing table uses a local fixture, while the Chromium timings include a live network request.
 
 ### Earlier normalized CPU and per-unit instruction tables
 
