@@ -6,7 +6,7 @@
     },
     {
       "path": ".cache/viz/out/FrameworkUpdates.mp4",
-      "caption": "From a card highlight to a scroll frame. Follow the update paths and see the total CPU work measured on the laptop."
+      "caption": "Follow the same cards through view, layout, and draw. See what each client reuses as the feed scrolls and new cards come into range."
     },
     {
       "path": ".cache/viz/out/FirstFrameRealTime.mp4",

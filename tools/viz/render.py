@@ -379,9 +379,6 @@ def main():
     references["FrameworkUpdates"] = {
         "NativeTube update and scroll paths": ["apps/iced/src/scroller.rs", "apps/gpui/NOTES.md",
                                               "apps/rune/src/scroller.rs", "apps/rune/src/view.rs"],
-        "Matched laptop wheel counters": ["docs/media/fair.md", ".cache/media/out/fair/summary.json"],
-        "Rune Live publication microbenchmark": ["bench/rune-live-publication.rs",
-                                                 "bench/results/rune-live-publication.json"],
     }
     if "Cover" in wanted:
         obsidian.cover()

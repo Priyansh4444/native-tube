@@ -22,9 +22,18 @@ All three use the same Rust core for networking, image caching, scroll physics, 
 
 ### How each framework updates the UI
 
-[MEDIA: .cache/viz/out/FrameworkUpdates.mp4 — From a card highlight to a scroll frame. Follow the update paths and see the total CPU work measured on the laptop.]
+[MEDIA: .cache/viz/out/FrameworkUpdates.mp4 — Follow the same cards through view, layout, and draw. See what each client reuses as the feed scrolls and new cards come into range.]
 
-Think of selecting a video card. The handler changes a value, the toolkit decides which work that change invalidates, and eventually a new frame appears. A view describes what to draw. Layout computes sizes and positions. Paint produces drawing commands, which the renderer turns into pixels. Those are separate costs.
+Picture a feed at rest. Keep three snapshots in mind: **which cards are mounted**, **the sizes and positions layout computed for them**, and **the last frame you saw**. Now scroll a little. The frame has to change. The mounted card list can stay the same, and the renderer can shift cards using the geometry it already has. Scroll farther and the app needs a different group of cards. The view must describe that group, layout must place it, and draw must produce a new frame.
+
+Read the scroll handler as a state transition. The app starts with **(mounted cards, layout, scroll offset)**. If the new offset fits the existing group, iced and Rune keep its cards and layout and change the offset used by draw. If the offset crosses the group’s rebuild threshold, they update the mounted cards and compute layout for the new group. GPUI’s NativeTube handler takes the page rebuild path whenever the snapped offset changes, even if the same cards remain visible.
+
+| Scroll event in NativeTube | iced | GPUI | Rune |
+|---|---|---|---|
+| Offset changes within the mounted group | Reuse view and layout. Draw with a translation. | Rebuild the page view, run Taffy layout, draw. | Reuse view and layout. Sample the live offset, draw. |
+| Scroll reaches the next mounted group | Send a message, rebuild the group, lay it out, draw. | The page view and layout still run. Cached chrome can be reused. | Commit a view with the new group, lay it out, draw. |
+
+Here **rebuild** means running view code again. **Layout** resolves geometry, potentially using cached work. **Draw** emits a frame using the resulting geometry and transforms. A frame can be redrawn while the view and layout are reused. Likewise, running page view code can leave a cached sidebar untouched.
 
 **React on the web.** A state setter queues work. React runs the relevant components to produce element descriptions, reconciles them with the previous render, and commits the needed DOM changes. The DOM is the browser’s tree of page objects. What changed determines the subsequent browser work. Changing text can affect layout. A transform can sometimes be handled in compositing. Rendering a React component therefore tells you little by itself about the cost of the final frame. [React’s render and commit guide](https://react.dev/learn/render-and-commit)
 

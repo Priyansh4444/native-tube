@@ -12,7 +12,6 @@ import math
 import os
 import random
 import re
-from statistics import median
 
 import numpy as np
 from manim import (
@@ -1145,112 +1144,84 @@ class Hiccups(Page):
 
 
 class FrameworkUpdates(Page):
-    """Use the same thumbnail to compare how a small state change reaches the screen."""
+    """Explain invalidation by moving one feed through three cached representations."""
 
     def construct(self):
-        beats = (
-            ("React", MINT, ("Set state", "Run component", "Commit changes")),
-            ("iced", SKY, ("Widget message", "Update state", "Build view")),
-            ("GPUI", GOLD, ("Change entity", "Notify views", "Render view")),
-            ("Rune", LILAC, ("Change Live value", "Update binding")),
-        )
-        self.foot("Example: highlight a video card")
-        self.title("Click a video card")
-        example = self.card(0, .25).scale(1.55)
-        self.play(FadeIn(example), run_time=.25)
-        self.play(example[1].animate.set_fill(MINT, opacity=1), run_time=.35)
-        self.wait(.5)
-        self.clear_stage(run_time=.2)
+        stages = ("View", "Layout", "Draw")
+        colors = (SKY, GOLD, LILAC)
+        ys = (1.75, .05, -1.65)
+        names = VGroup(*(label(name, -6.85, y, VALUE, color, bold=True)
+                         for name, y, color in zip(stages, ys, colors, strict=True)))
+        strips = [self.strip(y, color) for y, color in zip(ys, colors, strict=True)]
+        self.title("What has to run again?")
+        self.play(FadeIn(names), *(FadeIn(group) for group in strips), run_time=.8)
+        self.foot("View chooses the cards. Layout places them. Draw produces the frame.")
 
-        for framework, color, steps in beats:
-            self.title(framework)
-            xs = (-5.2, -1.65, 1.75) if len(steps) == 3 else (-5.2, .15)
-            stages = VGroup(*(chip(step, x, .25, 2.95 if len(steps) == 3 else 3.55)
-                              for x, step in zip(xs, steps, strict=True)))
-            card = self.card(5.5, .25)
-            nodes = [*stages, card]
-            links = VGroup(*(right_arrow(a.get_right()[0] + .10, .25, b.get_left()[0] - .10, .25)
-                             for a, b in zip(nodes, nodes[1:])))
-            self.add(*links, *stages, card)
-            for stage, link in zip(stages, links, strict=True):
-                signal = Dot(link.get_start(), radius=.065, color=color)
-                self.add(signal)
-                self.play(MoveAlongPath(signal, link), stage[0].animate.set_stroke(color, width=3), run_time=.4)
-                self.remove(signal)
-            self.play(card[1].animate.set_fill(color, opacity=1), run_time=.45)
-            self.wait(1.5)
-            self.clear_stage(run_time=.25)
-
-        self.title("Rune Live")
-        publication = data.read("bench/results/rune-live-publication.json")
-        bound_ns = median(sample[2] for sample in publication["samples"])
-        self.foot(f"Bound publication: {bound_ns:.0f} ns median with a wake already pending")
-        actions = (("live_only()", 1.25, ("Set flag", "Skip view commit")),
-                   ("Live::set()", -.55, ("Atomic swap", "Wake → sample → draw")))
-        for name, y, steps in actions:
-            row = VGroup(
-                label(name, -6.65, y, LABEL, LILAC, bold=True),
-                right_arrow(-3.5, y, -2.55, y),
-                chip(steps[0], -.7, y, 3.3, LILAC),
-                right_arrow(1.13, y, 2.02, y),
-                chip(steps[1], 4.25, y, 4.2, LILAC),
-            )
-            self.play(FadeIn(row, shift=.12 * UP), run_time=.55)
+        self.title("Same cards, new offset")
+        self.foot("iced translates cached geometry. Rune samples a bound offset.")
+        draw_offset = .58
+        self.play(strips[2].animate.shift(draw_offset * LEFT), run_time=1)
+        self.play(pulse(names[2], 1.1), run_time=.45)
         self.wait(1.5)
-        self.clear_stage(run_time=.3)
 
-        self.title("Now scroll the feed")
-        self.foot("NativeTube's scroll paths")
-        labels = ("Translate + draw", "Taffy + draw", "Sample + draw")
-        rows = VGroup()
-        moving = []
-        operations = []
-        for index, (app, action) in enumerate(zip(APPS, labels, strict=True)):
-            y = 1.62 - 1.65 * index
-            color = COLOR[app]
-            cards = VGroup(self.card(2.25, y, color), self.card(5.35, y))
-            operation = chip(action, -2.0, y, 2.8, color)
-            rows.add(label(NAME[app], -6.65, y, VALUE, color, bold=True), operation,
-                     right_arrow(-.48, y, .87, y), cards)
-            moving.append(cards)
-            operations.append(operation)
-        self.play(FadeIn(rows), run_time=.4)
-        self.play(*(cards.animate.shift(.44 * UP) for cards in moving), run_time=.9)
-        self.wait(1)
-        self.title("When the card group changes")
-        self.play(FadeOut(operations[0]), FadeOut(operations[2]), run_time=.2)
-        self.play(
-            FadeIn(chip("Rebuild group", -2.0, 1.62, 2.8, SKY)),
-            FadeIn(chip("Commit new view", -2.0, -1.68, 2.8, LILAC)),
-            moving[0][1][1].animate.set_fill(SKY, opacity=1),
-            moving[2][1][1].animate.set_fill(LILAC, opacity=1),
-            run_time=.4,
-        )
+        self.title("Same gesture in GPUI")
+        self.foot("NativeTube invalidates PageView. Cached chrome can be reused.")
+        for name, strip in zip(names, strips, strict=True):
+            self.play(pulse(name, 1.1), pulse(strip, 1.045), run_time=.8)
         self.wait(1.5)
-        self.clear_stage(run_time=.35)
 
-        self.title("What the laptop measured")
-        self.foot("Million user-space CPU instructions per drawn frame · whole wheel phase")
-        metrics = data.read(".cache/media/out/fair/summary.json")
-        wheel = metrics["Laptop GPU"]["metrics"]["wheel_minstr_per_frame"]["off"]
-        for index, app in enumerate(APPS):
-            y = 1.72 - 1.45 * index
-            value = wheel[app]["warm"]["median"]
-            width = 7.9 * value / 20
+        self.title("Scroll far enough")
+        self.foot("A different group of cards must be mounted.")
+        for y, color, group in zip(ys, colors, strips, strict=True):
+            incoming_x = 5.1 - (draw_offset if group is strips[2] else 0)
             self.play(
-                FadeIn(label(NAME[app], -6.65, y, VALUE, COLOR[app], bold=True)),
-                GrowFromEdge(bar(-3.55, y, width, COLOR[app], height=.28), LEFT),
-                FadeIn(label(f"{value:.3g}", -3.25 + width, y, VALUE, bold=True)),
-                run_time=.45,
+                FadeOut(group[0], shift=.35 * LEFT),
+                FadeIn(self.tile(incoming_x, y, color, len(group)), shift=.35 * LEFT),
+                run_time=.7,
             )
         self.wait(1.5)
+        self.clear_stage(run_time=.45)
+
+        self.title("What runs again?")
+        self.foot("NativeTube feed paths · each row starts with a changed scroll offset")
+        xs = (-1.7, 1.55, 4.8)
+        header = VGroup(*(label(name, x, 1.95, VALUE, INK, align="center", bold=True)
+                          for name, x in zip(stages, xs, strict=True)))
+        self.play(FadeIn(header), run_time=.4)
+        rows = (
+            ("iced", SKY, (False, False, True)),
+            ("GPUI", GOLD, (True, True, True)),
+            ("Rune", LILAC, (False, False, True)),
+        )
+        markers = []
+        for index, (name, color, work) in enumerate(rows):
+            y = .8 - 1.24 * index
+            self.play(FadeIn(label(name, -6.5, y, VALUE, color, bold=True)), run_time=.25)
+            row = [Dot(point(x, y), radius=.19, color=color, fill_opacity=int(active),
+                       stroke_color=color, stroke_opacity=1, stroke_width=2)
+                   for x, active in zip(xs, work, strict=True)]
+            self.play(*(FadeIn(dot, scale=.5) for dot in row), run_time=.55)
+            markers.append(row)
+        key = label("Filled = runs     Outline = reuses", -6.5, -3.02, LABEL, MUTED)
+        self.play(FadeIn(key), run_time=.4)
+        self.wait(1.5)
+        self.title("When the mounted group changes")
+        self.play(*(dot.animate.set_fill(opacity=1) for row in (markers[0], markers[2])
+                    for dot in row[:2]), run_time=.75)
+        self.foot("The view and layout run again when iced or Rune mounts new cards.")
+        self.wait(1.5)
+
+    @classmethod
+    def strip(cls, y, color):
+        return VGroup(*(cls.tile(x, y, color, index) for index, x in enumerate((-2.7, -.1, 2.5))))
 
     @staticmethod
-    def card(x, y, accent=RING):
-        return VGroup(
-            box(x, y, 2.5, .97),
-            RoundedRectangle(corner_radius=.06, width=.67, height=.61, stroke_width=0,
-                             fill_color=accent, fill_opacity=1).move_to(point(x - .72, y)),
-            line(x - .18, y + .13, x + .85, y + .13, MUTED, 4),
-            line(x - .18, y - .13, x + .54, y - .13, RING, 4),
-        )
+    def tile(x, y, color, index):
+        shell = RoundedRectangle(width=1.95, height=.95, corner_radius=.12,
+                                 stroke_color=color, stroke_width=2.5, fill_color=color,
+                                 fill_opacity=.18 if y < 0 else .04).move_to(point(x, y))
+        glyphs = VGroup()
+        for i in range(1 + index % 4):
+            glyphs.add(Dot(point(x + .23 * (i - (index % 4) / 2), y),
+                           radius=.075, color=color))
+        return VGroup(shell, glyphs)
