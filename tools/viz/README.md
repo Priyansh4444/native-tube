@@ -37,7 +37,7 @@ nice -n 19 ionice -c3 .cache/viz/venv/bin/python -B tools/viz/render.py --only F
 
 ## Obsidian look and publication extras
 
-Everything renders on pure black. Glass (#121212 with sheen and an 8 % rim) is limited to small elements: chips, badges and the source tag. The text is Roboto, with Google Sans for `FrameworkUpdates.mp4`. Both are bundled in `assets/fonts`. Accent colour is used only on data: iced #4FD1FF, GPUI #FFB547, Rune #B98CFF, YouTube web #FF4B4B, and core or player #4FE3B0. Each explainer is a run of one-idea beats, and opens on a 2 s question and closes on a 2.5 s takeaway card. [callouts.py](callouts.py) derives every difference badge and end-card number from the receipts and only compares values from one machine, so a re-measurement needs only a rerender.
+Everything renders on pure black. Glass (#121212 with sheen and an 8 % rim) is limited to small elements: chips, badges and the source tag. The text is Roboto, with Google Sans for interface labels and CMU Serif for headings and numbers in `FrameworkUpdates.mp4`. The font files are bundled in `assets/fonts`. Accent colour is used only on data: iced #4FD1FF, GPUI #FFB547, Rune #B98CFF, YouTube web #FF4B4B, and core or player #4FE3B0. Each explainer is a run of one-idea beats, and opens on a 2 s question and closes on a 2.5 s takeaway card. [callouts.py](callouts.py) derives every difference badge and end-card number from the receipts and only compares values from one machine, so a re-measurement needs only a rerender.
 
 The side-by-sides use archived footage. A 2 × 2 grid shows the recordings, cut per step and aligned on each tile's own command. Native tiles have the app name, a running timer for timed steps, and the step label. The timer stops and the tile flashes when the app reaches its mark. The open step stops at the first visible video frame. The live-network YouTube web tile plays alongside the native race with a step label.
 
@@ -55,6 +55,8 @@ The renderer also writes `cover.png` (1600×900), `posters/<video>.png`,
 ### QA gates
 
 With `VIZ_AUDIT_TEXT=1`, which `render.py` sets, every 0.25 s sample of each explainer must pass these gates, and a failure aborts the render. (a) Everything visible stays within a 96 px safe frame after the camera transform. (b) Text is at least 22 px em for the footnote and 32 px for everything else. (c) At most 14 prose words are on screen at once; numbers, units, app names and the footnote don't count. (d) No glass container covers more than 35 % of the frame. (e) No text overlaps other text. Summaries are written to `.cache/viz/gates/`. `audit.py --gates` checks them, plus (f): background pixels outside the glass decode to pure #000 at every 0.25 s sample. `render.py` runs it last and fails if any gate fails.
+
+For `FrameworkUpdates.mp4`, the export check also scans the full outer margin in 4 × 4 pixel cells at each 0.25 s sample. It allows a single cell for antialiasing at the safe boundary and records the time and cell coordinates if visible content enters the protected margin.
 
 ```sh
 nice -n 19 ionice -c3 .cache/viz/venv/bin/python -B tools/viz/render.py --only Cover Demo FrameworkUpdates FirstFrameRealTime ScrollRealTime

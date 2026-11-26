@@ -45,6 +45,7 @@ ROSE = "#FF4B4B"
 LILAC = "#B98CFF"
 FONT = "Roboto"
 FRAMEWORK_FONT = "Google Sans"
+TEX_FONT = "CMU Serif"
 MONO = "Roboto"
 APPS, ALL, COLOR, NAME = data.APPS, data.ALL_APPS, data.APP_COLORS, data.NAMES
 SOFT, GPU = GOLD, MINT  # software-path and GPU-path series
@@ -176,6 +177,7 @@ class Readout(VGroup):
 
 class Page(MovingCameraScene):
     title_font = FONT
+    foot_font = None
     # ---------------------------------------------------------------- page furniture
     def setup(self):
         self.camera.background_color = BG
@@ -210,7 +212,7 @@ class Page(MovingCameraScene):
         self.heading = new
 
     def foot(self, text):
-        new = VGroup(*self.source_tag(text, font=self.title_font))
+        new = VGroup(*self.source_tag(text, font=self.foot_font or self.title_font))
         if self.footer is None:
             self.play(FadeIn(new), run_time=.3)
         else:
@@ -1146,291 +1148,338 @@ class Hiccups(Page):
 
 
 class FrameworkUpdates(Page):
-    """Compare iced, GPUI, and Rune update paths on the same YouTube feed wireframe."""
+    """Beginner-friendly walkthrough of iced, GPUI, and Rune scroll updates on a YouTube wireframe."""
 
-    title_font = FRAMEWORK_FONT
+    title_font = TEX_FONT
+    foot_font = FRAMEWORK_FONT
 
     def construct(self):
-        register_font(str(data.ROOT / "assets/fonts/GoogleSans-Variable.ttf"))
-        stages = ("View", "Layout", "Draw")
-        ys = (1.75, .05, -1.65)
+        for font_file in ("GoogleSans-Variable.ttf", "CMUSerif-Roman.ttf", "CMUSerif-Bold.ttf"):
+            register_font(str(data.ROOT / "assets/fonts" / font_file))
+        ui = FRAMEWORK_FONT
+        tex = TEX_FONT
 
-        # Shared YouTube feed wireframe on the right.
-        window = box(2.45, -.25, 8.7, 5.55, TRACK, RING)
+        # Shared YouTube feed wireframe on the right (area 43.68 = 30.3% of frame, well under 35%).
+        window = box(2.50, -.10, 8.40, 5.20, TRACK, RING)
         chrome = VGroup(
-            label("NativeTube", -1.55, 2.02, LABEL, INK, bold=True, font=self.title_font),
-            box(3.35, 2.03, 3.35, .49, PANEL, RING),
-            label("Search", 2.0, 2.02, LABEL, MUTED, font=self.title_font),
-            line(-1.8, 1.64, 6.68, 1.64),
-            line(-.12, 1.64, -.12, -2.93),
-            label("Home", -1.55, 1.13, LABEL, INK, font=self.title_font),
-            label("Library", -1.55, .60, LABEL, MUTED, font=self.title_font),
+            label("NativeTube", -1.42, 2.10, LABEL, INK, bold=True, font=ui),
+            box(3.10, 2.10, 3.40, .46, PANEL, RING),
+            label("Search", 1.66, 2.10, LABEL, MUTED, font=ui),
+            line(-1.68, 1.72, 6.68, 1.72),
+            line(-.05, 1.72, -.05, -2.68),
+            label("Home", -1.42, 1.22, LABEL, INK, font=ui),
+            label("Library", -1.42, .66, LABEL, MUTED, font=ui),
         )
-        cached_tag = label("cached", -1.55, -2.45, LABEL, MUTED, font=self.title_font)
+        cached_tag = label("cached", -1.42, -2.25, LABEL, MUTED, font=ui)
         viewport_rim = RoundedRectangle(
-            corner_radius=.08, width=6.36, height=4.30, stroke_color=RING, stroke_width=2.5,
+            corner_radius=.08, width=6.22, height=4.10, stroke_color=RING, stroke_width=2.5,
             fill_opacity=0,
-        ).move_to(point(3.23, -.62))
-        thumb_top = 1.24
-        thumb = line(6.57, thumb_top, 6.57, thumb_top - .72, MUTED, 5)
-        top = self.card_row(.42, SKY, GOLD)
-        bottom = self.card_row(-1.52, LILAC, MINT)
+        ).move_to(point(3.21, -.49))
+        track_line = line(6.50, 1.44, 6.50, -2.42, GRID, 3)
+        thumb_top = 1.30
+        thumb = line(6.50, thumb_top, 6.50, thumb_top - .72, MUTED, 5)
+        top = self.card_row(.48, SKY, GOLD)
+        bottom = self.card_row(-1.38, LILAC, MINT)
 
-        # -------------------------------------------------- Beat 1: View / Layout / Draw (~12.5 s)
-        self.title("A YouTube feed")
-        self.foot("NativeTube wireframe · Search and sidebar are chrome; cards are the feed")
-        self.play(FadeIn(window), FadeIn(chrome), run_time=.75)
+        # -------------------------------------------------- Beat 1: View / Layout / Draw (~10.5 s)
+        self.title("How one YouTube frame is drawn")
+        self.foot("Search and the sidebar are the chrome. The cards and scrollbar make up the feed.")
+        self.play(FadeIn(window), FadeIn(chrome), FadeIn(track_line), run_time=.65)
 
-        stage = label("View", -6.85, .95, 50, SKY, bold=True, font=self.title_font)
-        detail = label("Choose visible\nvideo cards", -6.85, -.05, LABEL, INK,
-                       limit=4.5, font=self.title_font)
-        self.play(FadeIn(stage), FadeIn(detail), FadeIn(top), FadeIn(bottom), run_time=.9)
-        self.wait(1.4)
-        self.play(FadeOut(stage), FadeOut(detail), run_time=.25)
-
-        stage = label("Layout", -6.85, .95, 50, GOLD, bold=True, font=self.title_font)
-        detail = label("Size and place\neach card", -6.85, -.05, LABEL, INK,
-                       limit=4.5, font=self.title_font)
-        bounds = self.layout_boxes((*top, *bottom), GOLD)
-        self.play(FadeIn(stage), FadeIn(detail), Create(bounds), run_time=.85)
-        self.wait(1.4)
-        self.play(FadeOut(stage), FadeOut(detail), FadeOut(bounds), run_time=.25)
-
-        stage = label("Draw", -6.85, .95, 50, LILAC, bold=True, font=self.title_font)
-        detail = label("Paint the\nvisible frame", -6.85, -.05, LABEL, INK,
-                       limit=4.5, font=self.title_font)
+        p_view = self.stage_node("1. View", -4.60, 1.55, 3.55, SKY, active=True)
+        p_lay = self.stage_node("2. Layout", -4.60, .10, 3.55, GOLD, active=False)
+        p_draw = self.stage_node("3. Draw", -4.60, -1.35, 3.55, LILAC, active=False)
+        pa1 = right_arrow(-4.60, 1.14, -4.60, .52, GRID)
+        pa2 = right_arrow(-4.60, -.31, -4.60, -.93, GRID)
+        note = label("Pick visible cards", -4.60, -2.35, LABEL, SKY, align="center", font=ui)
         self.play(
-            FadeIn(stage), FadeIn(detail), FadeIn(thumb),
-            *(card[0].animate.set_fill(opacity=.45) for card in (*top, *bottom)),
-            run_time=.9,
+            FadeIn(p_view), FadeIn(p_lay), FadeIn(p_draw), FadeIn(pa1), FadeIn(pa2),
+            FadeIn(note), FadeIn(top), FadeIn(bottom),
+            run_time=.85,
         )
-        self.wait(1.4)
-        self.play(FadeOut(stage), FadeOut(detail), run_time=.25)
+        self.wait(1.2)
 
-        # -------------------------------------------------- Beat 2: iced (~14.5 s)
-        self.title("iced: short scroll")
-        self.foot("Custom scroller translates existing layout; Search and sidebar stay cached")
-        iced_msg = self.stage_node("Message", -4.40, 1.65, 3.6, SKY, active=False)
-        iced_vl = self.stage_node("View + Layout", -4.40, .25, 3.6, SKY, active=False)
-        iced_draw = self.stage_node("Draw", -4.40, -1.15, 3.6, SKY, active=True)
-        iced_down1 = right_arrow(-4.40, 1.22, -4.40, .68, GRID)
-        iced_down2 = right_arrow(-4.40, -.18, -4.40, -.72, GRID)
-        bypass = VMobject(stroke_color=SKY, stroke_width=3.5).set_points_smoothly([
-            point(-6.75, 1.45), point(-6.95, .25), point(-6.75, -1.15), point(-6.34, -1.15),
-        ])
-        bypass_tip = Arrow(point(-6.48, -1.15), point(-6.26, -1.15), buff=0, color=SKY,
-                           stroke_width=3.5, tip_length=.18)
-        translate_tag = label("translate", -4.40, -2.05, LABEL, SKY, align="center", bold=True,
-                              font=self.title_font)
-        iced_diagram = VGroup(iced_msg, iced_vl, iced_draw, iced_down1, iced_down2,
-                              bypass, bypass_tip, translate_tag)
-        viewport_rim.set_stroke(SKY, 2.5, .85)
+        note_lay = label("Size & place boxes", -4.60, -2.35, LABEL, GOLD, align="center", font=ui)
+        bounds = self.layout_boxes((*top, *bottom), GOLD)
+        self.play(FadeOut(note), run_time=.2)
         self.play(
-            FadeIn(iced_diagram), FadeIn(viewport_rim), FadeIn(cached_tag),
-            chrome.animate.set_opacity(.42),
+            *self.activate_node(p_lay, GOLD),
+            pa1.animate.set_color(GOLD),
+            FadeIn(note_lay),
+            Create(bounds),
+            run_time=.85,
+        )
+        self.wait(1.2)
+
+        note_draw = label("Paint visible pixels", -4.60, -2.35, LABEL, LILAC, align="center", font=ui)
+        self.play(FadeOut(note_lay), FadeOut(bounds), run_time=.25)
+        self.play(
+            *self.activate_node(p_draw, LILAC),
+            pa2.animate.set_color(LILAC),
+            FadeIn(note_draw),
+            FadeIn(thumb),
+            *(card[0].animate.set_fill(opacity=.45) for card in (*top, *bottom)),
+            run_time=.85,
+        )
+        self.wait(1.1)
+        intro_pipe = VGroup(p_view, p_lay, p_draw, pa1, pa2, note_draw)
+
+        # -------------------------------------------------- Beat 2: Before & after input (~6.5 s)
+        self.play(FadeOut(intro_pipe), run_time=.35)
+        self.title("Before & after one scroll tick")
+        self.foot("The feed moves up and the scrollbar moves down. Search and the sidebar stay put.")
+
+        wheel_pill = self.stage_node("Wheel input", -4.60, 1.35, 3.55, INK, active=True)
+        in_arrow = right_arrow(-2.78, 1.35, -1.78, 1.35, INK)
+        before_lbl = label("Before: 4 cards", -4.60, .25, LABEL, MUTED, align="center", font=ui)
+        ba_arrow = right_arrow(-4.60, -.05, -4.60, -.52, MINT)
+        after_lbl = label("After: same cards", -4.60, -.88, LABEL, MINT, align="center", bold=True, font=ui)
+        ghost_cards = VGroup(*(
+            RoundedRectangle(
+                width=c[0].width, height=c[0].height, corner_radius=.10,
+                stroke_color=MUTED, stroke_width=1.6, stroke_opacity=.45, fill_opacity=0,
+            ).move_to(c[0])
+            for c in (*top, *bottom)
+        ))
+        self.play(
+            FadeIn(wheel_pill), Create(in_arrow), FadeIn(before_lbl),
+            FadeIn(viewport_rim), FadeIn(cached_tag), chrome.animate.set_opacity(.42),
             run_time=.65,
         )
+        self.add(ghost_cards)
+        self.play(
+            pulse(wheel_pill, 1.06),
+            Create(ba_arrow),
+            top.animate.shift(.28 * UP),
+            bottom.animate.shift(.28 * UP),
+            thumb.animate.shift(-.22 * UP),
+            FadeIn(after_lbl, shift=point(0, .1)),
+            run_time=.95,
+            rate_func=rate_functions.ease_out_cubic,
+        )
+        self.wait(1.3)
+        self.play(
+            FadeOut(VGroup(wheel_pill, in_arrow, before_lbl, ba_arrow, after_lbl, ghost_cards)),
+            top.animate.shift(-.28 * UP),
+            bottom.animate.shift(-.28 * UP),
+            thumb.animate.shift(.22 * UP),
+            run_time=.45,
+        )
 
-        # Two short scroll ticks: bypass Message/View/Layout, translate cards directly in Draw.
+        # -------------------------------------------------- Beat 3: iced (~11.0 s)
+        self.title("iced: skip to Draw")
+        self.foot("The custom scroller draws the same cards at a new offset using cached geometry.")
+        ys4 = (1.92, .70, -.52, -1.74)
+        iced_in = self.stage_node("Input", -4.50, ys4[0], 3.45, SKY, active=True)
+        iced_v = self.stage_node("View", -4.50, ys4[1], 3.45, SKY, active=False)
+        iced_l = self.stage_node("Layout", -4.50, ys4[2], 3.45, SKY, active=False)
+        iced_d = self.stage_node("Draw", -4.50, ys4[3], 3.45, SKY, active=True)
+        ia1 = right_arrow(-4.50, ys4[0] - .40, -4.50, ys4[1] + .40, GRID)
+        ia2 = right_arrow(-4.50, ys4[1] - .40, -4.50, ys4[2] + .40, GRID)
+        ia3 = right_arrow(-4.50, ys4[2] - .40, -4.50, ys4[3] + .40, GRID)
+        bypass = VMobject(stroke_color=SKY, stroke_width=3.5).set_points_smoothly([
+            point(-6.26, ys4[0]), point(-6.78, ys4[1]), point(-6.78, ys4[2]), point(-6.34, ys4[3]),
+        ])
+        bypass_tip = Arrow(point(-6.44, ys4[3]), point(-6.24, ys4[3]), buff=0, color=SKY,
+                           stroke_width=3.5, tip_length=.18)
+        iced_tag = label("translate", -4.50, -2.52, LABEL, SKY, align="center", bold=True, font=ui)
+        iced_diagram = VGroup(iced_in, iced_v, iced_l, iced_d, ia1, ia2, ia3, bypass, bypass_tip, iced_tag)
+        self.play(
+            FadeIn(iced_diagram),
+            viewport_rim.animate.set_stroke(SKY, 2.5, .85),
+            run_time=.55,
+        )
+
         for _ in range(2):
-            pkt = Dot(point(-6.75, 1.45), radius=.10, color=SKY)
+            pkt = Dot(point(-6.26, ys4[0]), radius=.095, color=SKY)
             self.add(pkt)
             self.play(MoveAlongPath(pkt, bypass), run_time=.55, rate_func=rate_functions.ease_in_out_cubic)
             self.remove(pkt)
             self.play(
-                pulse(iced_draw, 1.06),
-                top.animate.shift(.20 * UP),
-                bottom.animate.shift(.20 * UP),
+                pulse(iced_d, 1.06),
+                top.animate.shift(.18 * UP),
+                bottom.animate.shift(.18 * UP),
                 thumb.animate.shift(-.16 * UP),
-                run_time=.75,
+                run_time=.65,
                 rate_func=rate_functions.ease_out_cubic,
             )
-            self.wait(.55)
+            self.wait(.45)
 
-        # Band change in iced: Message -> View + Layout -> Draw mounts new cards.
+        # Band change in iced: Message triggers View -> Layout -> Draw.
         self.title("iced: new card band")
-        self.foot("Crossing the band threshold sends a Message to rebuild and lay out new cards")
+        self.foot("Crossing the band threshold sends a Message to rebuild View and Layout")
         self.play(
-            *self.activate_node(iced_msg, SKY),
-            iced_down1.animate.set_color(SKY),
-            run_time=.45,
-        )
-        pkt_m = Dot(point(-4.40, 1.22), radius=.10, color=SKY)
-        self.add(pkt_m)
-        self.play(
-            pkt_m.animate.move_to(point(-4.40, .68)),
-            *self.activate_node(iced_vl, SKY),
-            iced_down2.animate.set_color(SKY),
+            *self.activate_node(iced_v, SKY), ia1.animate.set_color(SKY),
+            *self.activate_node(iced_l, SKY), ia2.animate.set_color(SKY), ia3.animate.set_color(SKY),
             run_time=.5,
         )
-        self.remove(pkt_m)
-        arriving = self.card_row(-1.52, ROSE, SKY, filled=True)
+        arriving = self.card_row(-1.38, ROSE, SKY, filled=True)
         arriving_bounds = self.layout_boxes(arriving, GOLD)
         self.play(
-            FadeOut(top, shift=.42 * UP),
-            bottom.animate.move_to(point(3.25, .42)),
-            FadeIn(arriving, shift=.35 * UP),
+            FadeOut(top, shift=.38 * UP),
+            bottom.animate.move_to(point(3.21, .48)),
+            FadeIn(arriving, shift=.32 * UP),
             Create(arriving_bounds),
-            thumb.animate.shift(-.45 * UP),
-            pulse(iced_draw, 1.05),
-            run_time=1.05,
+            thumb.animate.shift(-.42 * UP),
+            pulse(iced_d, 1.05),
+            run_time=.95,
             rate_func=rate_functions.ease_in_out_cubic,
         )
-        self.play(FadeOut(arriving_bounds), run_time=.4)
-        self.wait(1.0)
+        self.play(FadeOut(arriving_bounds), run_time=.35)
+        self.wait(.85)
 
-        # -------------------------------------------------- Beat 3: GPUI (~12.0 s)
-        # Fade out iced diagram first so no text overlaps with GPUI's diagram during transition.
-        fresh_top = self.card_row(.42, SKY, GOLD, filled=True)
-        fresh_bottom = self.card_row(-1.52, LILAC, MINT, filled=True)
-        gpui_notify = self.stage_node("notify()", -4.65, 1.65, 3.9, GOLD, active=True)
-        gpui_taffy = self.stage_node("PageView + Taffy", -4.65, .25, 3.9, GOLD, active=True)
-        gpui_draw = self.stage_node("Draw", -4.65, -1.15, 3.9, GOLD, active=True)
-        gpui_a1 = right_arrow(-4.65, 1.22, -4.65, .68, GOLD)
-        gpui_a2 = right_arrow(-4.65, -.18, -4.65, -.72, GOLD)
-        gpui_diagram = VGroup(gpui_notify, gpui_taffy, gpui_draw, gpui_a1, gpui_a2)
+        # -------------------------------------------------- Beat 4: GPUI (~9.5 s)
+        fresh_top = self.card_row(.48, SKY, GOLD, filled=True)
+        fresh_bottom = self.card_row(-1.38, LILAC, MINT, filled=True)
+        gpui_n = self.stage_node("notify()", -4.55, ys4[0], 3.65, GOLD, active=True)
+        gpui_v = self.stage_node("View: PageView", -4.55, ys4[1], 3.65, GOLD, active=True)
+        gpui_l = self.stage_node("Layout: Taffy", -4.55, ys4[2], 3.65, GOLD, active=True)
+        gpui_d = self.stage_node("Draw", -4.55, ys4[3], 3.65, GOLD, active=True)
+        ga1 = right_arrow(-4.55, ys4[0] - .40, -4.55, ys4[1] + .40, GOLD)
+        ga2 = right_arrow(-4.55, ys4[1] - .40, -4.55, ys4[2] + .40, GOLD)
+        ga3 = right_arrow(-4.55, ys4[2] - .40, -4.55, ys4[3] + .40, GOLD)
+        gpui_diagram = VGroup(gpui_n, gpui_v, gpui_l, gpui_d, ga1, ga2, ga3)
         self.play(
             FadeOut(iced_diagram), FadeOut(bottom), FadeOut(arriving),
-            thumb.animate.move_to(point(6.57, thumb_top - .36)),
+            thumb.animate.move_to(point(6.50, thumb_top - .36)),
             viewport_rim.animate.set_stroke(GOLD, 2.5, .85),
             run_time=.35,
         )
-        self.title("GPUI: same short scroll")
-        self.foot("Scroll handler calls notify() on PageView; Taffy lays out the feed again · chrome cached")
+        self.title("GPUI: notify() rebuilds the feed")
+        self.foot("A changed offset notifies PageView. Taffy lays out the feed. Chrome stays cached.")
         self.play(FadeIn(gpui_diagram), FadeIn(fresh_top), FadeIn(fresh_bottom), run_time=.45)
         top, bottom = fresh_top, fresh_bottom
-        self.wait(.35)
+        self.wait(.3)
 
-        # Two identical short scroll ticks: notify() -> rebuild PageView + Taffy -> Draw every tick.
         for _ in range(2):
-            sig = Dot(point(-4.65, 1.65), radius=.10, color=GOLD)
+            sig = Dot(point(-4.55, ys4[0]), radius=.095, color=GOLD)
             self.add(sig)
             self.play(
-                pulse(gpui_notify, 1.07),
-                sig.animate.move_to(point(-4.65, .25)),
-                *(card[0].animate.set_fill(opacity=.08) for card in (*top, *bottom)),
-                run_time=.5,
+                pulse(gpui_n, 1.06),
+                sig.animate.move_to(point(-4.55, ys4[1])),
+                *(card[0].animate.set_fill(opacity=.10) for card in (*top, *bottom)),
+                run_time=.42,
             )
             taffy_boxes = self.layout_boxes((*top, *bottom), GOLD)
             self.play(
-                pulse(gpui_taffy, 1.06),
+                pulse(gpui_l, 1.06),
                 Create(taffy_boxes),
-                top.animate.shift(.20 * UP),
-                bottom.animate.shift(.20 * UP),
-                taffy_boxes.animate.shift(.20 * UP),
-                sig.animate.move_to(point(-4.65, -1.15)),
-                run_time=.75,
+                top.animate.shift(.18 * UP),
+                bottom.animate.shift(.18 * UP),
+                taffy_boxes.animate.shift(.18 * UP),
+                sig.animate.move_to(point(-4.55, ys4[3])),
+                run_time=.70,
                 rate_func=rate_functions.ease_in_out_cubic,
             )
             self.remove(sig)
             self.play(
-                pulse(gpui_draw, 1.06),
+                pulse(gpui_d, 1.06),
                 FadeOut(taffy_boxes),
                 *(card[0].animate.set_fill(opacity=.45) for card in (*top, *bottom)),
                 thumb.animate.shift(-.16 * UP),
-                run_time=.55,
+                run_time=.50,
             )
-            self.wait(.65)
+            self.wait(.55)
 
-        # -------------------------------------------------- Beat 4: Rune (~14.0 s)
-        fresh_top = self.card_row(.42, SKY, GOLD, filled=True)
-        fresh_bottom = self.card_row(-1.52, LILAC, MINT, filled=True)
-        rune_vl = self.stage_node("View + Layout", -4.75, 1.75, 3.7, LILAC, active=False)
-        rune_off = self.stage_node("Live offset", -4.75, .40, 3.7, LILAC, active=True)
-        rune_bar = self.stage_node("Live thumb", -4.75, -.75, 3.7, LILAC, active=True)
-        rune_draw = self.stage_node("Sample + Draw", -4.75, -1.95, 3.7, LILAC, active=True)
+        # -------------------------------------------------- Beat 5: Rune (~10.5 s)
+        fresh_top = self.card_row(.48, SKY, GOLD, filled=True)
+        fresh_bottom = self.card_row(-1.38, LILAC, MINT, filled=True)
+        rune_vl = self.stage_node("View + Layout", -4.60, ys4[0], 3.55, LILAC, active=False)
+        rune_off = self.stage_node("Live offset", -4.60, ys4[1], 3.55, LILAC, active=True)
+        rune_bar = self.stage_node("Live thumb", -4.60, ys4[2], 3.55, LILAC, active=True)
+        rune_draw = self.stage_node("Sample + Draw", -4.60, ys4[3], 3.55, LILAC, active=True)
+        rune_tag = label("live_only()", -4.60, -2.52, LABEL, LILAC, align="center", bold=True, font=ui)
         wire_off = VMobject(stroke_color=LILAC, stroke_width=3).set_points_as_corners([
-            point(-2.88, .40), point(.05, .40),
+            point(-2.80, ys4[1]), point(-2.15, ys4[1]), point(-2.15, .15), point(.10, .15),
         ])
         wire_bar = VMobject(stroke_color=LILAC, stroke_width=2.5).set_points_as_corners([
-            point(-2.88, -.75), point(-2.32, -.75), point(-2.32, -2.89),
-            point(6.57, -2.89), point(6.57, .52),
-        ]).set_stroke(opacity=.75)
-        rune_diagram = VGroup(rune_vl, rune_off, rune_bar, rune_draw, wire_off, wire_bar)
+            point(-2.80, ys4[2]), point(-2.15, ys4[2]), point(-2.15, -2.84),
+            point(6.50, -2.84), point(6.50, .58),
+        ]).set_stroke(opacity=.78)
+        rune_diagram = VGroup(rune_vl, rune_off, rune_bar, rune_draw, rune_tag, wire_off, wire_bar)
         self.play(
             FadeOut(gpui_diagram), FadeOut(top), FadeOut(bottom),
-            thumb.animate.move_to(point(6.57, thumb_top - .36)),
+            thumb.animate.move_to(point(6.50, thumb_top - .36)),
             viewport_rim.animate.set_stroke(LILAC, 2.5, .85),
             run_time=.35,
         )
-        self.title("Rune: Live bindings")
-        self.foot("tx.live_only() skips view and layout; frame sampling updates bound offset and thumb")
+        self.title("Rune: Live skips View & Layout")
+        self.foot("Rune samples the offset and scrollbar geometry from live bindings when it draws.")
         self.play(FadeIn(rune_diagram), FadeIn(fresh_top), FadeIn(fresh_bottom), run_time=.45)
         top, bottom = fresh_top, fresh_bottom
-        self.wait(.35)
+        self.wait(.3)
 
-        # Two short scroll ticks: Live signals pulse straight into feed & thumb; View + Layout stays dim.
         for _ in range(2):
-            p_off = Dot(point(-2.88, .40), radius=.09, color=LILAC)
-            p_bar = Dot(point(-2.88, -.75), radius=.08, color=LILAC)
+            p_off = Dot(point(-2.80, ys4[1]), radius=.09, color=LILAC)
+            p_bar = Dot(point(-2.80, ys4[2]), radius=.08, color=LILAC)
             self.add(p_off, p_bar)
             self.play(
                 pulse(rune_off, 1.05),
                 pulse(rune_bar, 1.05),
                 MoveAlongPath(p_off, wire_off),
                 MoveAlongPath(p_bar, wire_bar),
-                run_time=.6,
+                run_time=.55,
                 rate_func=rate_functions.ease_out_cubic,
             )
             self.remove(p_off, p_bar)
             self.play(
                 pulse(rune_draw, 1.05),
-                top.animate.shift(.20 * UP),
-                bottom.animate.shift(.20 * UP),
+                top.animate.shift(.18 * UP),
+                bottom.animate.shift(.18 * UP),
                 thumb.animate.shift(-.16 * UP),
-                run_time=.65,
+                run_time=.60,
                 rate_func=rate_functions.ease_out_cubic,
             )
-            self.wait(.55)
+            self.wait(.45)
 
-        # Band change in Rune: structural view commit mounts incoming cards.
         self.title("Rune: band commit")
-        self.foot("Crossing a band boundary commits a new view and layout for the incoming cards")
-        arriving = self.card_row(-1.52, ROSE, SKY, filled=True)
+        self.foot("Crossing a band boundary commits View and Layout for the incoming cards")
+        arriving = self.card_row(-1.38, ROSE, SKY, filled=True)
         arriving_bounds = self.layout_boxes(arriving, LILAC)
         self.play(
             *self.activate_node(rune_vl, LILAC),
-            FadeOut(top, shift=.42 * UP),
-            bottom.animate.move_to(point(3.25, .42)),
-            FadeIn(arriving, shift=.35 * UP),
+            FadeOut(top, shift=.38 * UP),
+            bottom.animate.move_to(point(3.21, .48)),
+            FadeIn(arriving, shift=.32 * UP),
             Create(arriving_bounds),
-            thumb.animate.shift(-.45 * UP),
+            thumb.animate.shift(-.42 * UP),
             pulse(rune_draw, 1.05),
-            run_time=1.05,
+            run_time=.95,
             rate_func=rate_functions.ease_in_out_cubic,
         )
-        self.play(FadeOut(arriving_bounds), run_time=.4)
-        self.wait(1.1)
-        self.clear_stage(run_time=.45)
+        self.play(FadeOut(arriving_bounds), run_time=.35)
+        self.wait(.8)
+        self.clear_stage(run_time=.4)
 
-        # -------------------------------------------------- Beat 5: Stage matrix (~7.0 s)
-        self.title("Same scroll, different stages")
-        self.foot("NativeTube feed paths · filled = runs · outline = reuses")
-        xs = (-1.7, 1.55, 4.8)
-        header = VGroup(*(label(name, x, 1.95, VALUE, INK, align="center", bold=True, font=self.title_font)
-                          for name, x in zip(stages, xs, strict=True)))
-        self.play(FadeIn(header), run_time=.4)
-        rows = (
+        # -------------------------------------------------- Beat 6: Recap stage matrix (~8.5 s)
+        self.title("What reruns on a short scroll?")
+        self.foot("NativeTube feed paths · filled circle = stage runs · hollow circle = stage reused")
+        stages = ("View", "Layout", "Draw")
+        m_xs = (-1.65, 1.60, 4.85)
+        m_head = VGroup(*(label(name, x, 1.95, VALUE, INK, align="center", bold=True, font=ui)
+                          for name, x in zip(stages, m_xs, strict=True)))
+        self.play(FadeIn(m_head), run_time=.4)
+        matrix_rows = (
             ("iced", SKY, (False, False, True)),
             ("GPUI", GOLD, (True, True, True)),
             ("Rune", LILAC, (False, False, True)),
         )
         markers = []
-        for index, (name, color, work) in enumerate(rows):
-            y = .75 - 1.22 * index
-            row = [Dot(point(x, y), radius=.20, color=color, fill_opacity=int(active),
+        for idx, (name, color, active_flags) in enumerate(matrix_rows):
+            y = .75 - 1.22 * idx
+            row = [Dot(point(x, y), radius=.20, color=color, fill_opacity=int(flag),
                        stroke_color=color, stroke_opacity=1, stroke_width=2.5)
-                   for x, active in zip(xs, work, strict=True)]
+                   for x, flag in zip(m_xs, active_flags, strict=True)]
             self.play(
-                FadeIn(label(name, -6.5, y, VALUE, color, bold=True, font=self.title_font)),
+                FadeIn(label(name, -6.5, y, VALUE, color, bold=True, font=ui)),
                 *(FadeIn(dot, scale=.5) for dot in row),
-                run_time=.5,
+                run_time=.48,
             )
             markers.append(row)
         self.wait(1.5)
 
-        self.title("New card band")
-        self.foot("All three run view and layout when the mounted card group changes")
+        self.title("When a new card band enters")
+        self.foot("Crossing a band boundary runs View and Layout in all three apps")
         self.play(
             *(dot.animate.set_fill(opacity=1) for row in (markers[0], markers[2]) for dot in row[:2]),
             run_time=.85,
@@ -1438,39 +1487,73 @@ class FrameworkUpdates(Page):
         self.wait(1.5)
         self.clear_stage(run_time=.45)
 
-        # -------------------------------------------------- Beat 6: Measured comparison (~10.5 s)
+        # -------------------------------------------------- Beat 7: Receipts charts (~12.0 s)
         results = data.read(".cache/media/out/fair/summary.json")
-        for machine, heading, note in (
-            ("Laptop GPU", "Laptop with GPU",
-             "Matched 27-notch wheel · M CPU instructions / drawn frame · lower is better"),
-            ("Fly no GPU", "Fly VM without GPU",
-             "CPU rasterization · M instructions / drawn frame · order flips (own scale)"),
-        ):
-            self.title(heading)
-            self.foot(note)
-            wheel = results[machine]["metrics"]["wheel_minstr_per_frame"]["off"]
-            values = [wheel[app]["warm"]["median"] for app in APPS]
-            peak = max(values)
+        self.dual_chart(
+            results,
+            metric="wheel_minstr_per_frame",
+            heading="Million CPU instructions per drawn scroll frame",
+            footnote="Matched 27-notch wheel · prewarm off · medians of 5 warm runs · Laptop GPU vs Fly CPU · own scale",
+            fmt=lambda v: f"{v:.3g} M",
+            ui_font=ui,
+            tex_font=tex,
+            hold=1.5,
+        )
+        self.dual_chart(
+            results,
+            metric="wheel_cores",
+            heading="Matched scroll CPU time (cores busy)",
+            footnote="Same 27-notch wheel · CPU-seconds per wall-second (cores) · Laptop GPU vs Fly CPU · own scale",
+            fmt=lambda v: f"{v:.2f} cores",
+            ui_font=ui,
+            tex_font=tex,
+            hold=1.5,
+        )
+
+    def dual_chart(self, results, *, metric, heading, footnote, fmt, ui_font, tex_font, hold):
+        """Side-by-side Laptop GPU vs Fly no-GPU bar chart with explicit lower-is-better cue."""
+        self.title(heading)
+        self.foot(footnote)
+        cue = label("Lower is better", -SAFE_X, 2.52, 24, MINT, bold=True, font=ui_font)
+        divider = line(-.15, 2.02, -.15, -2.25, GRID, 1.8)
+        panels = (
+            ("Laptop GPU", "Laptop", -SAFE_X, -5.50),
+            ("Fly no GPU", "Fly", .25, 1.88),
+        )
+        ys = (.82, -.38, -1.58)
+        max_w = 3.05
+        headers = VGroup(*(label(name, x, 1.78, 28, INK, bold=True, font=ui_font)
+                           for _, name, x, _ in panels))
+        self.play(FadeIn(cue), FadeIn(headers), FadeIn(divider), run_time=.4)
+
+        best_bars = []
+        for machine, _, name_x, bar_x in panels:
+            rows = results[machine]["metrics"][metric]["off"]
+            vals = [rows[app]["warm"]["median"] for app in APPS]
+            peak = max(vals)
             bars = []
-            for app, value, y in zip(APPS, values, ys, strict=True):
+            anims = []
+            for app, val, y in zip(APPS, vals, ys, strict=True):
                 color = COLOR[app]
-                width = 7.4 * value / peak
-                row_bar = bar(-3.7, y, width, color, height=.30)
+                w = max_w * val / peak
+                row_bar = bar(bar_x, y, w, color, height=.36)
                 bars.append(row_bar)
-                self.play(
-                    FadeIn(label(NAME[app], -6.85, y, VALUE, color, bold=True, font=self.title_font)),
+                anims.extend((
+                    FadeIn(label(NAME[app], name_x, y, 26, color, bold=True, font=ui_font)),
                     GrowFromEdge(row_bar, LEFT),
-                    FadeIn(label(f"{value:.3g} M", -3.4 + width, y, VALUE, font=self.title_font)),
-                    run_time=.6,
-                )
-            best = values.index(min(values))
-            self.play(pulse(bars[best], 1.04), run_time=.5)
-            self.wait(1.5)
-            self.clear_stage(run_time=.4)
+                    FadeIn(label(fmt(val), bar_x + w + .18, y, 26, color, bold=True,
+                                 role="value", font=tex_font)),
+                ))
+            self.play(*anims, run_time=.95, rate_func=rate_functions.ease_out_cubic)
+            best_bars.append(bars[vals.index(min(vals))])
+
+        self.play(*(pulse(b, 1.05) for b in best_bars), run_time=.55)
+        self.wait(hold)
+        self.clear_stage(run_time=.4)
 
     @classmethod
     def card_row(cls, y, left_color, right_color, *, filled=False):
-        row = VGroup(cls.video_card(1.65, y, left_color), cls.video_card(4.85, y, right_color))
+        row = VGroup(cls.video_card(1.68, y, left_color), cls.video_card(4.74, y, right_color))
         if filled:
             for card in row:
                 card[0].set_fill(opacity=.45)
@@ -1479,17 +1562,17 @@ class FrameworkUpdates(Page):
     @staticmethod
     def layout_boxes(cards, color):
         return VGroup(*(
-            Rectangle(width=card.width + .15, height=card.height + .16,
+            Rectangle(width=card.width + .14, height=card.height + .14,
                       color=color, stroke_width=2.2).move_to(card)
             for card in cards
         ))
 
     def stage_node(self, text, x, y, w, color, *, active=True):
         border = color if active else GRID
-        shell = box(x, y, w, .78, SURFACE_HI if active else PANEL, border)
+        shell = box(x, y, w, .72, SURFACE_HI if active else PANEL, border)
         shell.set_stroke(width=2.2 if active else 1.2)
         words = label(text, x, y, LABEL, INK if active else MUTED, align="center",
-                      limit=w - .3, bold=active, font=self.title_font)
+                      limit=w - .28, bold=active, font=FRAMEWORK_FONT)
         if not active:
             shell.set_opacity(.48)
             words.set_opacity(.48)
@@ -1505,10 +1588,10 @@ class FrameworkUpdates(Page):
 
     @staticmethod
     def video_card(x, y, color):
-        thumbnail = RoundedRectangle(width=2.85, height=1.06, corner_radius=.12,
-                                     stroke_color=color, stroke_width=2.5,
-                                     fill_color=color, fill_opacity=0).move_to(point(x, y + .18))
-        icon = Dot(point(x - 1.28, y - .53), radius=.10, color=color)
-        title = line(x - 1.05, y - .48, x + .98, y - .48, INK, 3)
-        channel = line(x - 1.05, y - .66, x + .38, y - .66, MUTED, 2)
+        thumbnail = RoundedRectangle(width=2.72, height=1.00, corner_radius=.10,
+                                     stroke_color=color, stroke_width=2.4,
+                                     fill_color=color, fill_opacity=0).move_to(point(x, y + .16))
+        icon = Dot(point(x - 1.22, y - .50), radius=.095, color=color)
+        title = line(x - .98, y - .46, x + .94, y - .46, INK, 3)
+        channel = line(x - .98, y - .64, x + .36, y - .64, MUTED, 2)
         return VGroup(thumbnail, icon, title, channel)

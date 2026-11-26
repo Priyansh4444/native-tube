@@ -22,37 +22,44 @@ All three use the same Rust core for networking, image caching, scroll physics, 
 
 ### How each framework updates the UI
 
-[MEDIA: .cache/viz/out/FrameworkUpdates.mp4 — Same YouTube feed scroll in iced, GPUI, and Rune: View, Layout, and Draw, cached chrome vs. active feed, and the matched laptop and Fly VM instruction counts.]
+[MEDIA: .cache/viz/out/FrameworkUpdates.mp4 — One YouTube scroll through iced, GPUI, and Rune. The charts compare CPU instructions per drawn scroll frame and CPU time used on the laptop and Fly VM.]
 
-Open the YouTube home feed in the animation above. Two regions behave differently when you scroll: the **chrome** (the Search bar and Home/Library sidebar) stays put, while the **feed** (the video cards and scrollbar thumb) moves. Every frame comes from three stages:
+Picture the YouTube Home feed in the animation above. The animation illustrates what runs during a scroll. The benchmark results come from timed runs of the apps. When you scroll, the screen splits into two regions:
 
-- **View** chooses which elements belong in the UI, such as the thumbnails, icons, and titles for the currently mounted cards.
-- **Layout** measures and places those elements, giving each thumbnail and wrapped title a concrete rectangle.
-- **Draw** turns those elements and rectangles into drawing commands, clipping cards to the viewport and applying the scroll offset.
+- The **chrome** is the Search bar and the Home/Library sidebar. It doesn't move.
+- The **feed** is the grid of video cards plus the scrollbar thumb. It moves.
 
-On a short scroll, the same group of cards stays mounted and only the scroll offset changes. Scroll farther, past the mounted band's threshold, and the app must swap in a new group of cards—running **View** and **Layout** for the incoming rows before drawing the next frame. (Other interactions touch different regions: typing updates the Search input, and submitting a query replaces the feed with results.)
+Every UI toolkit turns app state into pixels in three stages:
+
+- **View** decides *what* is on screen: which cards exist, and the thumbnail, title, and channel name inside each.
+- **Layout** decides *where* each thing goes: it measures text and gives every card a rectangle.
+- **Draw** turns those rectangles into GPU (or CPU) drawing commands, and clips the feed to its viewport. A scroller can apply its offset here or account for it during Layout.
+
+A few more terms:
+
+- **Dirty** means "this part is out of date and must be recomputed." In GPUI, the app calls **`notify()`** on an entity to tell the runtime that it changed. Views that read it may need to run again.
+- **Cached chrome** means the app can reuse the work from an earlier frame for the Search bar and sidebar.
+- A **message** is a value describing an event ("scrolled by 40 px") that the app handles in one central `update` function before rebuilding its view.
+- Rune's **`Live`** is signal-like. The app wires a value to a property such as the feed's offset. Rune can sample the new offset and redraw the feed using the existing view.
+
+NativeTube keeps a **band** of cards mounted, a few rows above and below the viewport. A short scroll only changes the offset: the same cards stay mounted, so in principle only Draw has to run. A longer scroll crosses the band's edge, and the app must mount the incoming rows, which means View and Layout for them, before drawing.
 
 | Scroll event in NativeTube | iced | GPUI | Rune |
 |---|---|---|---|
-| Offset changes within the mounted group | Reuse view and layout. Translate in Draw (`with_translation`). | `notify()` `PageView`, rebuild feed view, run Taffy layout, draw. | `tx.live_only()` skips view and layout. Sample `Live` offset/thumb, draw. |
-| Scroll reaches the next mounted group | Send a `Message`, run `update`/`view`, lay out new band, draw. | `PageView` and Taffy layout still run. Cached chrome can be reused. | Structural view commit for the new band, lay it out, draw. |
+| Offset changes inside the mounted band | No message. Custom scroller reuses view and layout and shifts children in Draw (`with_translation`). | `notify()` on `PageView` marks the feed dirty, so the feed view is rebuilt and Taffy lays it out, then Draw. Chrome stays cached. | `tx.live_only()` skips View and Layout. Draw samples the `Live` offset and thumb rectangle. |
+| Scroll crosses the band edge | Send a `Message`, run `update` and `view`, lay out the new band, draw. | Same as above: feed view and Taffy layout, now with new card IDs. Chrome stays cached. | Structural view commit mounts the new band, lays it out, draws. |
 
-If you come from the web, think of this along the **React-to-signals** spectrum:
+**iced** (`apps/iced/src/scroller.rs`) is message-driven: normally an event becomes a `Message`, `update` changes state, and `view` builds a new widget tree. NativeTube's custom scroller skips that loop for movement inside the band. It updates its own offset, asks for a redraw, and draws the visible children at their existing layout positions. Crossing the band edge sends a `Message` so the app rebuilds. Even on the fast path, iced still visits and draws the visible widgets.
 
-- **React on the web** queues a re-render on state updates, runs components to produce a new element description, reconciles it against the previous tree, and commits DOM changes. The downstream browser cost depends on *what* changed: text edits can trigger layout, while a transform can often stay in compositing, so component execution alone doesn't determine frame cost. ([React's render and commit guide](https://react.dev/learn/render-and-commit))
-- **Signals** (as in SolidJS) wire a reactive value directly to a property so scalar or transform updates bypass component tree re-execution altogether.
+**GPUI** (`apps/gpui/src/app.rs`, `apps/gpui/src/content.rs`) uses explicit invalidation. State lives in entities, and the app calls `cx.notify()` when one changes, which marks its views dirty. NativeTube's `PageView` computes each card's position from the scroll offset, so every pixel-snapped offset change notifies `PageView` (and the root that positions the player). As a result the feed's View and Layout run on every changed scroll tick, even when the same cards stay on screen. This repetition follows from splitting the work this way in NativeTube. A paint-time transform could reuse the geometry, as the iced and Rune examples show. We measured the GPUI build that uses the layout path.
 
-Each NativeTube client sits at a different point on that spectrum for feed scrolling:
+**Rune** (`apps/rune/src/view.rs`, `apps/rune/src/scroller.rs`) mixes both ideas. An event handler gets a `Tx` that collects its effects. `tx.live_only()` sets one Boolean telling the runtime nothing the view reads has changed, so View and Layout are skipped. The feed's translation (`live_offset`) and scrollbar thumb (`live_rect`) are bound to `Live` values. At the pinned revision, `Live::set` swaps a 128-bit word without allocating; an unchanged write returns without waking anyone. On a live frame Rune walks the retained nodes, samples the bound values, and paints. Crossing the band edge triggers a normal structural view commit. ([Rune's numeric `Live` source](https://github.com/anomalyco/rune/blob/4fbd2d6ac4dd12595dd8ed0b7849b28a309c7c00/crates/rune/src/live.rs) · [Rune's frame sampling](https://github.com/anomalyco/rune/blob/4fbd2d6ac4dd12595dd8ed0b7849b28a309c7c00/crates/rune/src/runtime/motion/live_latch.rs))
 
-- **iced (`apps/iced/src/scroller.rs`) — message loop vs. custom scroller translation.** Normally, an event emits a `Message`, `update(&mut self, Message)` mutates state, and `view` produces the next widget tree for iced to diff against retained state. For movement inside the already-mounted band, NativeTube's custom scroller widget bypasses `Message`, `view`, and `layout`: it updates its offset, requests a redraw, clips the viewport, applies `with_translation`, and draws the intersecting children from their existing layout while chrome stays cached. Crossing the band threshold sends a `Message` so the app rebuilds and lays out the new rows. Even on the fast path, iced still visits and draws widgets.
-- **GPUI (`apps/gpui/src/app.rs`, `apps/gpui/src/content.rs`) — explicit entity `notify()` + Taffy.** An entity is a state object with a stable identity; the app explicitly calls `cx.notify()` when it changes, and GPUI invalidates subscribed views. In NativeTube's GPUI feed, `PageView` computes each card's position from the scroll offset, so whenever the pixel-snapped offset changes, the scroll handler notifies `PageView` (and the root that positions the player). That rebuilds the visible feed description and runs Taffy layout on every changed scroll tick even when the visible card IDs haven't changed, while the cached Search bar and sidebar can reuse their view work. This behavior follows from how NativeTube wires its GPUI feed.
-- **Rune (`apps/rune/src/view.rs`, `apps/rune/src/scroller.rs`) — fine-grained `Live` bindings vs. structural view commit.** `Tx` collects effects from an event handler. Calling `tx.live_only()` sets one Boolean telling the runtime that nothing the view reads changed, so View and Layout do not run. Separately, NativeTube binds the feed's translation (`live_offset`) and scrollbar thumb rectangle (`live_rect`) to numeric `Live` values. At the pinned revision (`4fbd2d6`), `Live::set` encodes the value and atomically swaps a 128-bit word without allocating; an unchanged write returns without notifying, and a changed write coalesces wakes on subscribed runtimes. On a live frame, Rune walks retained nodes, samples the bound properties into the scene, and paints updated GPU draw instances and hit-test data. Crossing a band boundary triggers a structural view commit to mount and lay out the incoming cards. ([Rune's numeric `Live` source](https://github.com/anomalyco/rune/blob/4fbd2d6ac4dd12595dd8ed0b7849b28a309c7c00/crates/rune/src/live.rs) · [Rune's frame sampling](https://github.com/anomalyco/rune/blob/4fbd2d6ac4dd12595dd8ed0b7849b28a309c7c00/crates/rune/src/runtime/motion/live_latch.rs))
+If you know React, iced’s normal path may feel familiar. A state change can run the view function again and reconcile its output with the existing UI. GPUI’s `notify()` explicitly tells the runtime which entity changed, so views that depend on it can rerun. Rune’s `Live` binding takes the updated value straight to a property during frame processing. [React’s render and commit guide](https://react.dev/learn/render-and-commit)
 
-Skipping View and Layout can save CPU. The renderer and submitted draw work also contribute to the total. In the matched 27-notch wheel benchmark (Section 4), Rune retired the fewest CPU instructions per drawn frame on the GPU laptop (**8.25 million**), with iced close behind (**8.56 million**) and GPUI at **17.5 million**; Rune and iced overlapped on laptop CPU time. On the software-rendered Fly VM, the order changed. iced led decisively at **175 million**, ahead of Rune (**442 million**) and GPUI (**481 million**).
+**Reading the charts.** CPU instructions retired counts the individual user-space instructions the processor completed. The video divides that count by the number of UI frames the app drew during the scroll. The second chart reports CPU-seconds used per wall-clock second. One full core would read 1.0. Both charts cover the whole app during the same 27-notch scroll. Section 4 includes the frame counts, thumbnail data and CPU milliseconds per drawn frame.
 
-**Measurement scope and caveats.**
-- *Rune `Live` publication microbenchmark:* On my laptop on battery (release build, nine tight-loop batches of 4 million calls pinned to one logical CPU), `Live<[f32; 2]>::set` took a median **12 ns/call** for an unchanged value without listeners, **21 ns/call** for a changing value without listeners, and **40 ns/call** for a changing value bound to one runtime with a wake already pending. These timings include loop overhead and exclude platform wake delivery, frame sampling, and paint. `tx.live_only()` is a single Boolean assignment and has no separately measured timing here. ([Benchmark source](../../bench/rune-live-publication.rs) · [Raw samples](../../bench/results/rune-live-publication.json))
-- *Whole-frame scroll cost:* The matched laptop run yielded median CPU time per drawn frame of **3.44 ms** for iced (observed range 3.13–3.91), **5.75 ms** for GPUI (5.69–6.10), and **3.21 ms** for Rune (3.01–3.87). These are whole-process ratios across the scroll window—they include thumbnail decoding and renderer work. The viewports mount different numbers of cards and use different antialiasing settings. The benchmark measures aggregate CPU work across the scroll window. Section 4 has the full ranges and instruction counts.
+*Rune `Live` microbenchmark.* On the laptop on battery (release build, nine batches of 4 million calls on one logical CPU), `Live<[f32; 2]>::set` took a median **12 ns** per call for an unchanged value with no listeners, **21 ns** for a changing value with no listeners, and **40 ns** for a changing value bound to one runtime with a wake already pending. These include loop overhead and exclude wake delivery, sampling, and paint. ([Benchmark source](../../bench/rune-live-publication.rs) · [Raw samples](../../bench/results/rune-live-publication.json))
 
 ---
 
@@ -111,10 +118,13 @@ For the measured workload, I replayed 27 wheel notches with prewarm off and coun
 |---|---:|---:|---:|
 | Laptop cores | 0.203 | 0.340 | 0.192 |
 | Laptop CPU ms / drawn frame (observed range) | 3.44 (3.13–3.91) | 5.75 (5.69–6.10) | 3.21 (3.01–3.87) |
-| Laptop million instructions / drawn frame | 8.56 | 17.5 | 8.25 |
+| Laptop million user-space CPU instructions / drawn frame | 8.56 | 17.5 | 8.25 |
+| Laptop UI frames drawn (observed range) | 160 (160–161) | 160 (159–162) | 163 (162–163) |
 | Laptop million user-space cycles / drawn frame | 4.13 | 8.02 | 3.77 |
 | Fly cores | 1.60 | 3.06 | 3.02 |
-| Fly million instructions / drawn frame | 175 | 481 | 442 |
+| Fly million user-space CPU instructions / drawn frame | 175 | 481 | 442 |
+| Fly UI frames drawn (observed range) | 165 (165–166) | 148 (145–151) | 124 (123–125) |
+| Thumbnail data decoded during the scroll (MiB, both machines) | 4.93 | 5.93 | 4.95 |
 
 On the laptop, iced and Rune overlap on CPU cores, and GPUI burns more CPU than both; Rune retires the fewest instructions per drawn frame, closely followed by iced. On the CPU-rendered Fly VM, iced wins both metrics decisively. Because the apps drew different frame counts on Fly, per-frame cost sits right next to total CPU time.
 

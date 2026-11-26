@@ -9,6 +9,7 @@ import argparse
 from pathlib import Path
 import subprocess
 
+import numpy as np
 from PIL import Image, ImageDraw
 
 import data
@@ -58,6 +59,8 @@ EXPLAINERS = ("FramePath", "FirstFrame", "ScrollCost", "Memory", "Hiccups", "Fra
 # Background points along the outer margin. The grid has a narrower border than the cards.
 MARGIN_POINTS = ((20, 20), (1900, 20), (20, 1060), (1900, 1060), (960, 12), (960, 1068), (12, 540), (1908, 540))
 GRID_POINTS = ((8, 8), (1911, 8), (8, 1071), (1911, 1071), (8, 300), (1911, 820))
+PIXEL_CELL = 4
+SAFE_MARGIN = 96
 
 
 def full_frames(video):
@@ -70,6 +73,33 @@ def full_frames(video):
             yield raw
         if process.wait():
             raise subprocess.CalledProcessError(process.returncode, args)
+
+
+def pixel_grid(video):
+    """Scan decoded pixels outside the safe area in 4 × 4 cells."""
+    # Leave one cell for anti-aliasing and encoding near the edge of the safe area.
+    guard = SAFE_MARGIN - PIXEL_CELL
+    worst = 0
+    first_violation = None
+    count = 0
+    for index, raw in enumerate(full_frames(video)):
+        image = np.frombuffer(raw, dtype=np.uint8).reshape(1080, 1920, 3)
+        edges = (image[:guard], image[-guard:], image[guard:-guard, :guard],
+                 image[guard:-guard, -guard:])
+        peak = max(int(edge.max()) for edge in edges)
+        if peak > 8 and first_violation is None:
+            offset = ((0, 0), (0, 1080 - guard), (0, guard), (1920 - guard, guard))
+            for edge, (x, y) in zip(edges, offset, strict=True):
+                row, column, _ = np.unravel_index(edge.argmax(), edge.shape)
+                if edge[row, column].max() > 8:
+                    first_violation = {"time_s": index / 4,
+                                       "cell_x": (x + int(column)) // PIXEL_CELL,
+                                       "cell_y": (y + int(row)) // PIXEL_CELL}
+                    break
+        worst = max(worst, peak)
+        count += 1
+    return {"cell_px": PIXEL_CELL, "sampled_frames": count, "margin_px": guard,
+            "margin_max": worst, "first_violation": first_violation}
 
 
 def gates(names=None):
@@ -105,6 +135,11 @@ def gates(names=None):
         report.setdefault(video.stem, {})["background_max"] = worst
         if worst > 1:
             failures.append(f"{video.stem}: background not pure #000 (max channel {worst} at {worst_at:.2f} s)")
+        if video.stem == "FrameworkUpdates":
+            grid = pixel_grid(video)
+            report[video.stem]["pixel_grid"] = grid
+            if not grid["sampled_frames"] or grid["first_violation"] is not None:
+                failures.append(f"{video.stem}: 4 px margin scan failed: {grid}")
     gate_dir.mkdir(parents=True, exist_ok=True)
     (gate_dir / "audit.json").write_text(json.dumps(
         {"failures": failures, "report": report}, indent=1) + "\n")

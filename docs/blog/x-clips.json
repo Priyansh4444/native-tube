@@ -6,7 +6,7 @@
     },
     {
       "path": ".cache/viz/out/FrameworkUpdates.mp4",
-      "caption": "Same YouTube feed scroll in iced, GPUI, and Rune: View, Layout, and Draw, cached chrome vs. active feed, and the matched laptop and Fly VM instruction counts."
+      "caption": "One YouTube scroll through iced, GPUI, and Rune. The charts compare CPU instructions per drawn scroll frame and CPU time used on the laptop and Fly VM."
     },
     {
       "path": ".cache/viz/out/FirstFrameRealTime.mp4",
