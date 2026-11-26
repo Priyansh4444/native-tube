@@ -1166,6 +1166,7 @@ class FrameworkUpdates(Page):
         )
         top = VGroup(self.video_card(1.65, .45, SKY), self.video_card(4.85, .45, GOLD))
         bottom = VGroup(self.video_card(1.65, -1.54, LILAC), self.video_card(4.85, -1.54, MINT))
+        thumb = line(6.57, 1.24, 6.57, .52, MUTED, 5)
         self.title("A YouTube feed")
         self.play(FadeIn(window), FadeIn(chrome), run_time=.65)
         self.foot("NativeTube feed wireframe")
@@ -1187,26 +1188,36 @@ class FrameworkUpdates(Page):
         stage = label("Draw", -6.85, .95, 50, LILAC, bold=True, font=self.title_font)
         detail = label("Render the\nvisible feed", -6.85, -.05, LABEL, INK,
                        limit=4.65, font=self.title_font)
-        self.play(FadeIn(stage), FadeIn(detail),
+        self.play(FadeIn(stage), FadeIn(detail), FadeIn(thumb),
                   *(card[0].animate.set_fill(opacity=.45) for card in (*top, *bottom)), run_time=.8)
         self.wait(1.5)
         self.play(FadeOut(stage), FadeOut(detail), run_time=.25)
 
         self.title("A short scroll")
-        self.foot("iced and Rune reuse the card list and geometry. Search and sidebar stay put.")
-        self.play(top.animate.shift(.24 * UP), bottom.animate.shift(.24 * UP), run_time=.9)
+        self.foot("The feed and scrollbar move. Search and sidebar stay put.")
+        route = label("iced: translate\nRune: bound offset", -6.85, .6, LABEL, INK,
+                      font=self.title_font)
+        self.play(FadeIn(route), top.animate.shift(.24 * UP), bottom.animate.shift(.24 * UP),
+                  thumb.animate.shift(-.18 * UP), run_time=.9)
         self.wait(1.5)
+        self.play(FadeOut(route), run_time=.25)
         self.title("The same scroll in GPUI")
-        self.foot("NativeTube rebuilds the feed view and runs layout. Cached chrome can be reused.")
-        self.play(pulse(top, 1.04), pulse(bottom, 1.04), run_time=.75)
+        self.foot("NativeTube computes card positions in PageView. Offset changes call notify().")
+        route = label("Offset → notify()\nRebuild the feed", -6.85, .6, LABEL, INK, font=self.title_font)
+        self.play(FadeIn(route), pulse(top, 1.04), pulse(bottom, 1.04), run_time=.75)
         self.wait(1.5)
+        self.play(FadeOut(route), run_time=.25)
         self.title("Scroll farther")
         self.foot("iced and Rune also run view and layout when the mounted cards change.")
         arriving = VGroup(self.video_card(1.65, -1.54, ROSE), self.video_card(4.85, -1.54, SKY))
         for card in arriving:
             card[0].set_fill(opacity=.45)
         self.play(FadeOut(top, shift=.38 * UP), bottom.animate.shift(1.75 * UP),
-                  FadeIn(arriving, shift=.35 * UP), run_time=1)
+                  FadeIn(arriving, shift=.35 * UP), thumb.animate.shift(-.5 * UP), run_time=1)
+        self.wait(1.5)
+        self.title("Type into Search")
+        self.foot("Typing changes the input. Submitting a query can replace the feed with results.")
+        self.play(pulse(chrome[1], 1.08), pulse(chrome[2], 1.09), run_time=.8)
         self.wait(1.5)
         self.clear_stage(run_time=.45)
 
