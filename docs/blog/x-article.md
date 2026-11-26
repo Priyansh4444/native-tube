@@ -2,7 +2,7 @@
 
 For a Rust desktop app on Linux, I'd start with **iced**, reach for **GPUI** if layered controls are central to the design, and try **Rune** if I wanted reactive bindings for a custom UI and could pin a pre-1.0 toolkit.
 
-- **iced** had the lowest idle memory on both test machines with the video player prewarmed. It used the least CPU for scrolling and opened video fastest on the CPU-rendered VM. Its message-driven architecture made floating controls more work to wire up.
+- **iced** had the lowest idle memory on both test machines with the video player prewarmed. On the CPU-rendered VM, it used the least CPU for scrolling and opened video fastest. Its message-driven architecture made floating controls more work to wire up.
 - **GPUI** made floating menus, video overlays, and a custom seek bar easiest to build. It used the most idle memory and spent the most CPU time scrolling on the laptop. Two video opens timed out with prewarm disabled.
 - **Rune** used the fewest CPU instructions per drawn scroll frame on the laptop and had the lowest peak memory in the short playback test. This build required a git pin and two crate forks.
 
@@ -22,7 +22,9 @@ All three use the same Rust core for networking, image caching, scroll physics, 
 
 ### How each framework updates the UI
 
-**iced** follows an Elm-style loop. Widgets emit messages, `update(&mut self, Message)` changes state and can return a task, and `view` describes the UI. The mutable borrow keeps updates from re-entering. In NativeTube, a custom scroller uses `with_translation` to shift already-laid-out children until the visible range changes. Floating controls need more explicit state and message wiring.
+[MEDIA: .cache/viz/out/FrameworkUpdates.mp4 — How state reaches the screen in each framework, followed by an animated diagram of what changes during a NativeTube scroll.]
+
+**iced** follows an Elm-style loop. Widgets emit messages, `update(&mut self, Message)` changes state and can return a task, and `view` describes the UI. The mutable borrow keeps updates from re-entering. In NativeTube, a custom scroller uses `with_translation` to shift already-laid-out children. Once the scroll offset crosses a threshold, the scroller sends a message to rebuild the band of mounted cards. Floating controls need more explicit state and message wiring.
 
 **GPUI** keeps state in entities and renders views from that state. It checks entity borrows at runtime, so a callback that re-enters an entity update can panic. GPUI's `anchored()` and `deferred()` primitives make it easy to position and layer floating UI. In our client, scrolling still invalidates the page view and runs Taffy layout even with the page split into five cached views.
 
@@ -42,13 +44,13 @@ That single architectural change dwarfed every toolkit difference:
 
 - **Intel GPU laptop (shipped defaults, matched rerun):** the native apps used **0.087–0.100 cores** on the subsurface path vs. **0.418–0.422 cores** on forced software. The CPU retired **1.16–1.41 million instructions per rendered video frame** on the GPU path vs. **22.1–22.4 million** on forced software—a **16–19× reduction** across all three clients.
 - **GPU-less Fly VM (the flip):** Mesa's `llvmpipe` emulated OpenGL on the CPU, so the default EGL path burned **about 3.27 cores** and rendered roughly **150–154 frames in six seconds**, whereas forced software used **1.20–2.11 cores** and rendered **about 180 frames**.
-- **No energy claim:** System-wide Intel RAPL counters were too noisy to separate playback from idle (70–84 J idle vs. 62–96 J playing; GPU 1.27–1.75 vs. 1.54–1.56 J). Those readings leave the battery-life effect unresolved.
+- **Battery life remains an open question.** In the earlier AC counter study, package energy varied enough that the idle and playback readings overlapped.
 
 ---
 
 ## 3. Startup and Time to First Frame
 
-[MEDIA: .cache/viz/out/FirstFrameRealTime.mp4 — One open per app at normal speed. Each timer stops on the first visible fixture frame. These archived captures use approximate clock alignment.]
+[MEDIA: .cache/viz/out/FirstFrameRealTime.mp4 — One video open per app at normal speed, recorded before the matched benchmark below.]
 
 I matched the comment loading, prewarm timing, and first-frame markers. I also fixed double thumbnail decoding in Rune at 2× scale and sent iced’s scripted wheel events through its normal scroller.
 
@@ -96,7 +98,7 @@ The scroll paths in section 1 explain part of the spread. The viewports also mou
 
 ## 5. Memory: Idle and Playback Peaks Tell Different Stories
 
-The bottom row of the matched chart in Section 3 shows a clean split: with full prewarm, iced had the lowest Home idle memory on both machines, while Rune had the lowest peak across the short scenario (Home, open a video, six seconds of playback, then switch).
+With full prewarm, iced had the lowest Home idle memory on both machines. Rune had the lowest peak in the short playback scenario (Home, open a video, play for six seconds, then switch). The table includes both machines, and the chart in Section 3 shows the laptop results.
 
 | Full prewarm, process-tree PSS | iced | GPUI | Rune |
 |---|---:|---:|---:|
@@ -222,6 +224,8 @@ On Arrow Lake-P, `GT0` hosts render (`RCS`), copy (`BCS`), and compute (`CCS`); 
 
 - **GPU playback (10 s):** all three converged tightly—RCS **69.63** (iced) / **74.71** (GPUI) / **75.06** (Rune) Mcycles; VCS **16.19 / 9.12 / 8.70** Mcycles; BCS and CCS 0.00; RC6 sleep residency **7.75–7.82 s** out of 10 s.
 - **Wheel scroll (~2.7 s, 161–163 frames at 60 fps):** GPUI logged **35.56 Mcycles** RCS (runs: 28.4, 46.7, 35.6; 0.00 VCS) vs. Rune's **68.33 Mcycles** (runs: 77.4, 68.3, 67.8; 0.00 VCS). Rune also logged 1–2 long frames per run (max 29–64 ms), while iced and GPUI had zero. iced's wheel runs 1–2 were contaminated by other system activity, source unrecorded (RCS 348.0 / 123.6, VCS 18.1 / 14.3, package 48.1 / 48.8 J); clean run 3 dropped to **38.5 Mcycles** RCS and **0.46** VCS (23.2 J).
+
+In the earlier AC counter study, Intel RAPL measured **70–84 J** of package energy over 10 seconds at idle and **62–96 J** over 10 seconds of playback. During playback, GPU-domain energy was **1.27–1.75 J** on the software path and **1.54–1.56 J** on the GPU subsurface path.
 
 ### Subsurface, EGL vendor selection, and playback pipeline details
 

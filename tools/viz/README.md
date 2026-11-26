@@ -41,8 +41,9 @@ Everything renders on pure black. Glass (#121212 with sheen and an 8 % rim) is l
 
 The side-by-sides use archived footage. A 2 × 2 grid shows the recordings, cut per step and aligned on each tile's own command. Native tiles have the app name, a running timer for timed steps, and the step label. The timer stops and the tile flashes when the app reaches its mark. The open step stops at the first visible video frame. The live-network YouTube web tile plays alongside the native race with a step label.
 
-The article uses three short exports. `Demo.mp4` has one shot per feature.
-`FirstFrameRealTime.mp4` shows one archived open per app with the timer beneath its footage.
+The article uses four short exports. `Demo.mp4` has one shot per feature.
+`FrameworkUpdates.mp4` diagrams the three UI update paths and how scrolling works within and across card bands.
+`FirstFrameRealTime.mp4` shows one archived open per app at normal speed and labels the footage as predating the matched benchmark.
 `ScrollRealTime.mp4` uses a continuous 60 fps recording from a private Sway output. Its source
 and unretimed trim are in `.cache/viz/scroll-capture/`. The [matched benchmark](../../docs/media/fair.md)
 provides the measured comparisons, including the separate wheel workload. The Manim explainers
@@ -56,8 +57,8 @@ The renderer also writes `cover.png` (1600×900), `posters/<video>.png`,
 With `VIZ_AUDIT_TEXT=1`, which `render.py` sets, every 0.25 s sample of each explainer must pass these gates, and a failure aborts the render. (a) Everything visible stays within a 96 px safe frame after the camera transform. (b) Text is at least 22 px em for the footnote and 32 px for everything else. (c) At most 14 prose words are on screen at once; numbers, units, app names and the footnote don't count. (d) No glass container covers more than 35 % of the frame. (e) No text overlaps other text. Summaries are written to `.cache/viz/gates/`. `audit.py --gates` checks them, plus (f): background pixels outside the glass decode to pure #000 at every 0.25 s sample. `render.py` runs it last and fails if any gate fails.
 
 ```sh
-nice -n 19 ionice -c3 .cache/viz/venv/bin/python -B tools/viz/render.py --only Cover Demo FirstFrameRealTime ScrollRealTime
-nice -n 19 ionice -c3 .cache/viz/venv/bin/python -B tools/viz/audit.py --gates Demo FirstFrameRealTime ScrollRealTime
+nice -n 19 ionice -c3 .cache/viz/venv/bin/python -B tools/viz/render.py --only Cover Demo FrameworkUpdates FirstFrameRealTime ScrollRealTime
+nice -n 19 ionice -c3 .cache/viz/venv/bin/python -B tools/viz/audit.py --gates Demo FrameworkUpdates FirstFrameRealTime ScrollRealTime
 ```
 
 ## Measurement choices

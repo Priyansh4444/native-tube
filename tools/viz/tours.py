@@ -360,15 +360,14 @@ def variant_name(replay, fly_cut):
 
 
 def first_frame_clip():
-    """One click per app at original speed, with the timer directly below its footage."""
+    """Show one archived video open per app at original speed."""
     WORK.mkdir(parents=True, exist_ok=True)
     lead, seconds = .75, 4.25
-    panel_w, panel_h, top = 568, 356, 354
+    panel_w, panel_h, top = 568, 356, 432
     overlay = Overlay()
-    overlay.text("Click to first frame", 84, 122, 0, seconds, size=78, bold=True)
-    overlay.text("Laptop fixture recordings · one open per app", 84, 204, 0, seconds, size=36, color=MUTED)
-    overlay.text("Timers start at each open command. Capture clocks are aligned approximately.",
-                 84, 959, 0, seconds, color=MUTED)
+    overlay.text("Opening a video", 84, 222, 0, seconds, size=78, bold=True)
+    overlay.text("Laptop footage recorded before the benchmark rerun",
+                 84, 304, 0, seconds, size=36, color=MUTED)
     args = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-filter_complex_threads", "2",
             "-f", "lavfi", "-i", f"color=black:s={W}x{H}:r={FPS}:d={seconds}"]
     graph, current, sources = [], "0:v", {}
@@ -381,17 +380,8 @@ def first_frame_clip():
         graph.append(f"[{i}:v]fps={FPS},scale={panel_w}:{panel_h},setsar=1[v{i}]")
         graph.append(f"[{current}][v{i}]overlay={x}:{top}[m{i}]")
         current = f"m{i}"
-        color = data.APP_COLORS[app]
-        overlay.text(data.NAMES[app], x, 310, 0, seconds, size=54, bold=True)
-        elapsed = tour.visible_frame - tour.opened
-        stop = lead + elapsed
-        for tick in range(math.ceil(elapsed * 30)):
-            start = lead + tick / 30
-            overlay.text(f"{round(tick * 100 / 30) * 10} ms", x, 795, start, min(stop, start + 1 / 30),
-                         size=70, mono=True, color=MUTED)
-        overlay.text(f"≈ {round(elapsed * 100) * 10} ms", x, 795, stop, seconds,
-                     size=70, mono=True, bold=True, color=color)
-        sources[f"{app} capture and clock"] = tour.sources
+        overlay.text(data.NAMES[app], x, top - 44, 0, seconds, size=54, bold=True)
+        sources[f"{app} archived capture and edit alignment"] = tour.sources
     ass = WORK / "FirstFrameRealTime.ass"
     overlay.write(ass)
     graph.append(f"[{current}]ass={ass.relative_to(data.ROOT)}:fontsdir=assets/fonts[out]")

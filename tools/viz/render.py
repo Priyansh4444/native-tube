@@ -35,7 +35,7 @@ STILLS = (
     "FramePathStill", "EGLStill", "InstructionsStill", "PerCoreStill",
     "GPUStill", "SizesStill", "UpstreamStill", "CostStill",
 )
-PUBLICATION_VIDEOS = ("Demo", "FirstFrameRealTime", "ScrollRealTime")
+PUBLICATION_VIDEOS = ("Demo", "FrameworkUpdates", "FirstFrameRealTime", "ScrollRealTime")
 
 
 def scene_set(file, names, resolution, *, still, fly):
@@ -380,6 +380,7 @@ def main():
     existing = data.read(".cache/viz/out/sources.json") if (data.OUT / "sources.json").is_file() else {}
     for name, build in {
         "Demo": obsidian.demo,
+        "FrameworkUpdates": obsidian.framework_updates,
         "FirstFrameRealTime": tours.first_frame_clip,
         "ScrollRealTime": obsidian.scroll_clip,
     }.items():

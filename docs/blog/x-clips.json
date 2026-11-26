@@ -5,8 +5,12 @@
       "caption": "NativeTube in ten seconds. Home in iced, search in GPUI, and related playback and captions in Rune."
     },
     {
+      "path": ".cache/viz/out/FrameworkUpdates.mp4",
+      "caption": "How state reaches the screen in each framework, followed by an animated diagram of what changes during a NativeTube scroll."
+    },
+    {
       "path": ".cache/viz/out/FirstFrameRealTime.mp4",
-      "caption": "One open per app at normal speed. Each timer stops on the first visible fixture frame. These archived captures use approximate clock alignment."
+      "caption": "One video open per app at normal speed, recorded before the matched benchmark below."
     },
     {
       "path": ".cache/viz/out/ScrollRealTime.mp4",
